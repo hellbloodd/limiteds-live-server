@@ -1,29 +1,32 @@
 // live-limiteds-server.mjs
-// Fast Roblox Limiteds backend.
-// Fast list loading + live RAP/details on item click.
+// Fast backend with real RAP snapshots for 24h / 7d / 30d / 1y profit-loss.
 
 const { createServer } = await import("node:http");
+const fs = await import("node:fs/promises");
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "fast-live-details-2026-06-10";
+const SERVER_VERSION = "fast-real-rap-history-2026-06-10";
 
+const SNAPSHOT_FILE = process.env.SNAPSHOT_FILE || "./rap-snapshots.json";
+const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 15 * 60 * 1000);
 const PAGE_CACHE_MS = Number(process.env.PAGE_CACHE_MS || 30_000);
 const ROLIMONS_CACHE_MS = Number(process.env.ROLIMONS_CACHE_MS || 120_000);
-const DETAILS_CACHE_MS = Number(process.env.DETAILS_CACHE_MS || 45_000);
+const DETAIL_CACHE_MS = Number(process.env.DETAIL_CACHE_MS || 45_000);
 
-const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
-const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
+const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_ECONOMY_DETAILS_URL = "https://economy.roblox.com/v2/assets";
-const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
+const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 
 const pageCache = new Map();
 const detailCache = new Map();
 const resaleCache = new Map();
-const catalogBatchCache = new Map();
+const catalogCache = new Map();
 
 let rolimonsCache = null;
 let robloxCsrfToken = "";
+let snapshotsByAssetId = new Map();
+let snapshotRunning = false;
 
 function sendJson(res, status, body) {
   res.writeHead(status, {
@@ -40,14 +43,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function positive(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function numberOrZero(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
 }
 
 function firstPositive(...values) {
@@ -66,15 +69,8 @@ function firstNumber(...values) {
   return 0;
 }
 
-function parseNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
 function normalizeLimit(value) {
-  const n = Number(value) || 30;
-  return Math.max(10, Math.min(30, Math.floor(n)));
+  return Math.max(10, Math.min(30, Math.floor(Number(value) || 30)));
 }
 
 function normalizeMarketType(value) {
@@ -100,14 +96,18 @@ function normalizeSort(value) {
     "profit_1y",
     "profit_all",
   ]);
-
   return allowed.has(sort) ? sort : "updated";
+}
+
+function parseOptionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function offsetFromCursor(cursor) {
   const text = String(cursor || "");
   if (!text.startsWith("offset:")) return 0;
-
   const offset = Number(text.slice("offset:".length));
   return Number.isFinite(offset) && offset >= 0 ? offset : 0;
 }
@@ -130,7 +130,7 @@ async function fetchJson(url, options = {}) {
         signal: controller.signal,
         headers: {
           Accept: "application/json",
-          "User-Agent": "LimitedsLiveFast/1.0",
+          "User-Agent": "LimitedsLiveRealHistory/1.0",
           ...(options.headers || {}),
         },
       });
@@ -176,7 +176,7 @@ async function fetchRolimonsItems() {
       marketType: "roblox",
       thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
     }))
-    .filter((item) => item.assetId > 0);
+    .filter((item) => item.assetId > 0 && item.rap);
 
   rolimonsCache = {
     fetchedAt: Date.now(),
@@ -186,96 +186,11 @@ async function fetchRolimonsItems() {
   return items;
 }
 
-async function fetchCatalogDetailsChunk(assetIds) {
-  const body = JSON.stringify({
-    items: assetIds.map((id) => ({
-      itemType: "Asset",
-      id,
-    })),
-  });
-
-  let response;
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const headers = {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": "LimitedsLiveFast/1.0",
-    };
-
-    if (robloxCsrfToken) {
-      headers["x-csrf-token"] = robloxCsrfToken;
-    }
-
-    response = await fetch(ROBLOX_CATALOG_BATCH_URL, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    const token = response.headers.get("x-csrf-token");
-    if (token) robloxCsrfToken = token;
-
-    if (response.status === 403 && token) continue;
-    if (response.status !== 429) break;
-
-    await sleep(700 + attempt * 500);
-  }
-
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText} for catalog batch`);
-  }
-
-  return response.json();
-}
-
-async function fetchCatalogDetailsBatch(assetIds) {
-  const result = new Map();
-  const missing = [];
-
-  for (const rawId of assetIds) {
-    const id = Number(rawId);
-    if (!id || id <= 0) continue;
-
-    const cached = catalogBatchCache.get(id);
-    if (cached && Date.now() - cached.fetchedAt < PAGE_CACHE_MS) {
-      result.set(id, cached.data);
-    } else {
-      missing.push(id);
-    }
-  }
-
-  for (let i = 0; i < missing.length; i += 100) {
-    const chunk = missing.slice(i, i + 100);
-
-    try {
-      const data = await fetchCatalogDetailsChunk(chunk);
-      const rows = Array.isArray(data.data) ? data.data : [];
-
-      for (const row of rows) {
-        const id = Number(row.id);
-        if (!id || id <= 0) continue;
-
-        catalogBatchCache.set(id, {
-          fetchedAt: Date.now(),
-          data: row,
-        });
-
-        result.set(id, row);
-      }
-    } catch {
-      break;
-    }
-  }
-
-  return result;
-}
-
 async function fetchResaleData(assetId) {
   assetId = Number(assetId);
 
   const cached = resaleCache.get(assetId);
-  if (cached && Date.now() - cached.fetchedAt < DETAILS_CACHE_MS) {
+  if (cached && Date.now() - cached.fetchedAt < DETAIL_CACHE_MS) {
     return cached.data;
   }
 
@@ -307,21 +222,208 @@ async function fetchEconomyDetails(assetId) {
   }
 }
 
-function normalizeHistory(points) {
-  if (!Array.isArray(points)) return [];
+async function fetchCatalogDetailsChunk(assetIds) {
+  const body = JSON.stringify({
+    items: assetIds.map((id) => ({
+      itemType: "Asset",
+      id,
+    })),
+  });
 
-  return points
-    .map((point) => ({
-      value: Number(point.value),
-      date: String(point.date || ""),
-    }))
-    .filter((point) => point.value > 0 && Number.isFinite(Date.parse(point.date)))
-    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  let response;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const headers = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": "LimitedsLiveRealHistory/1.0",
+    };
+
+    if (robloxCsrfToken) headers["x-csrf-token"] = robloxCsrfToken;
+
+    response = await fetch(ROBLOX_CATALOG_BATCH_URL, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const token = response.headers.get("x-csrf-token");
+    if (token) robloxCsrfToken = token;
+
+    if (response.status === 403 && token) continue;
+    if (response.status !== 429) break;
+
+    await sleep(700 + attempt * 500);
+  }
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText} for catalog batch`);
+  }
+
+  return response.json();
 }
 
-function percentChange(fromValue, toValue) {
-  if (!fromValue || !toValue || fromValue <= 0 || toValue <= 0) return null;
-  return Math.round(((toValue - fromValue) / fromValue) * 10000) / 100;
+async function fetchCatalogDetailsBatch(assetIds) {
+  const result = new Map();
+  const missing = [];
+
+  for (const rawId of assetIds) {
+    const id = Number(rawId);
+    if (!id || id <= 0) continue;
+
+    const cached = catalogCache.get(id);
+    if (cached && Date.now() - cached.fetchedAt < PAGE_CACHE_MS) {
+      result.set(id, cached.data);
+    } else {
+      missing.push(id);
+    }
+  }
+
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100);
+
+    try {
+      const data = await fetchCatalogDetailsChunk(chunk);
+      const rows = Array.isArray(data.data) ? data.data : [];
+
+      for (const row of rows) {
+        const id = Number(row.id);
+        if (!id || id <= 0) continue;
+
+        catalogCache.set(id, {
+          fetchedAt: Date.now(),
+          data: row,
+        });
+
+        result.set(id, row);
+      }
+    } catch {
+      break;
+    }
+  }
+
+  return result;
+}
+
+async function loadSnapshots() {
+  try {
+    const text = await fs.readFile(SNAPSHOT_FILE, "utf8");
+    const raw = JSON.parse(text);
+
+    snapshotsByAssetId = new Map();
+
+    for (const row of Array.isArray(raw) ? raw : []) {
+      const assetId = Number(row.assetId);
+      const rap = Number(row.rap);
+      const time = Number(row.time);
+
+      if (!assetId || !rap || !time) continue;
+
+      if (!snapshotsByAssetId.has(assetId)) {
+        snapshotsByAssetId.set(assetId, []);
+      }
+
+      snapshotsByAssetId.get(assetId).push({ time, rap });
+    }
+
+    for (const list of snapshotsByAssetId.values()) {
+      list.sort((a, b) => a.time - b.time);
+    }
+
+    console.log(`Loaded RAP snapshots for ${snapshotsByAssetId.size} items.`);
+  } catch {
+    snapshotsByAssetId = new Map();
+    console.log("No RAP snapshot file found yet.");
+  }
+}
+
+async function saveSnapshots() {
+  const rows = [];
+
+  for (const [assetId, list] of snapshotsByAssetId.entries()) {
+    for (const point of list) {
+      rows.push({
+        assetId,
+        rap: point.rap,
+        time: point.time,
+      });
+    }
+  }
+
+  await fs.writeFile(SNAPSHOT_FILE, JSON.stringify(rows), "utf8");
+}
+
+function addSnapshot(assetId, rap, time) {
+  assetId = Number(assetId);
+  rap = Number(rap);
+
+  if (!assetId || !rap || rap <= 0) return;
+
+  if (!snapshotsByAssetId.has(assetId)) {
+    snapshotsByAssetId.set(assetId, []);
+  }
+
+  const list = snapshotsByAssetId.get(assetId);
+  const last = list[list.length - 1];
+
+  if (last && Math.abs(last.time - time) < 10 * 60 * 1000) {
+    last.rap = rap;
+    last.time = time;
+  } else {
+    list.push({ time, rap });
+  }
+
+  const cutoff = Date.now() - 400 * 24 * 60 * 60 * 1000;
+  while (list.length > 0 && list[0].time < cutoff) {
+    list.shift();
+  }
+}
+
+async function runSnapshotJob() {
+  if (snapshotRunning) return;
+  snapshotRunning = true;
+
+  try {
+    const items = await fetchRolimonsItems();
+    const now = Date.now();
+
+    for (const item of items) {
+      addSnapshot(item.assetId, item.rap, now);
+    }
+
+    await saveSnapshots();
+
+    console.log(`Saved RAP snapshot for ${items.length} limiteds.`);
+  } catch (error) {
+    console.warn(`Snapshot failed: ${error.message}`);
+  } finally {
+    snapshotRunning = false;
+  }
+}
+
+function findSnapshotAtOrBefore(assetId, targetTime) {
+  const list = snapshotsByAssetId.get(Number(assetId)) || [];
+  let best = null;
+
+  for (const point of list) {
+    if (point.time <= targetTime) {
+      best = point;
+    } else {
+      break;
+    }
+  }
+
+  return best;
+}
+
+function findOldestSnapshot(assetId) {
+  const list = snapshotsByAssetId.get(Number(assetId)) || [];
+  return list.length > 0 ? list[0] : null;
+}
+
+function percentChange(oldRap, currentRap) {
+  if (!oldRap || !currentRap || oldRap <= 0 || currentRap <= 0) return null;
+  return Math.round(((currentRap - oldRap) / oldRap) * 10000) / 100;
 }
 
 function splitChange(change) {
@@ -331,42 +433,20 @@ function splitChange(change) {
   return { profit: null, loss: null };
 }
 
-function baseline(history, days) {
-  const points = normalizeHistory(history);
+function buildSnapshotMetrics(assetId, currentRap) {
+  const now = Date.now();
 
-  if (points.length === 0) return null;
-  if (!days) return points[0].value;
+  const point24h = findSnapshotAtOrBefore(assetId, now - 1 * 24 * 60 * 60 * 1000);
+  const point7d = findSnapshotAtOrBefore(assetId, now - 7 * 24 * 60 * 60 * 1000);
+  const point30d = findSnapshotAtOrBefore(assetId, now - 30 * 24 * 60 * 60 * 1000);
+  const point1y = findSnapshotAtOrBefore(assetId, now - 365 * 24 * 60 * 60 * 1000);
+  const pointAll = findOldestSnapshot(assetId);
 
-  const target = Date.now() - days * 24 * 60 * 60 * 1000;
-  let best = null;
-
-  for (const point of points) {
-    const time = Date.parse(point.date);
-    if (time <= target) {
-      best = point;
-    } else {
-      break;
-    }
-  }
-
-  return best ? best.value : null;
-}
-
-function buildMetrics(history, currentRap) {
-  const cleanHistory = normalizeHistory(history);
-
-  if (currentRap && currentRap > 0) {
-    cleanHistory.push({
-      value: Math.round(currentRap),
-      date: new Date().toISOString(),
-    });
-  }
-
-  const change24h = percentChange(baseline(cleanHistory, 1), currentRap);
-  const change7d = percentChange(baseline(cleanHistory, 7), currentRap);
-  const change30d = percentChange(baseline(cleanHistory, 30), currentRap);
-  const change1y = percentChange(baseline(cleanHistory, 365), currentRap);
-  const changeAll = percentChange(baseline(cleanHistory, null), currentRap);
+  const change24h = percentChange(point24h?.rap, currentRap);
+  const change7d = percentChange(point7d?.rap, currentRap);
+  const change30d = percentChange(point30d?.rap, currentRap);
+  const change1y = percentChange(point1y?.rap, currentRap);
+  const changeAll = percentChange(pointAll?.rap, currentRap);
 
   const p24h = splitChange(change24h);
   const p7d = splitChange(change7d);
@@ -392,9 +472,24 @@ function buildMetrics(history, currentRap) {
     loss30d: p30d.loss,
     loss1y: p1y.loss,
     lossAllTime: pAll.loss,
-
-    history: cleanHistory.slice(-1000),
   };
+}
+
+function buildHistoryForClient(assetId, currentRap) {
+  const list = snapshotsByAssetId.get(Number(assetId)) || [];
+  const history = list.map((point) => ({
+    value: point.rap,
+    date: new Date(point.time).toISOString(),
+  }));
+
+  if (currentRap && currentRap > 0) {
+    history.push({
+      value: Math.round(currentRap),
+      date: new Date().toISOString(),
+    });
+  }
+
+  return history.slice(-1000);
 }
 
 function tokenize(text) {
@@ -407,9 +502,8 @@ function tokenize(text) {
 
 function matchesTokens(item, tokens) {
   if (tokens.length === 0) return true;
-
-  const haystack = `${item.name || item.itemName || ""} ${item.acronym || ""}`.toLowerCase();
-  return tokens.every((token) => haystack.includes(token));
+  const text = `${item.name || ""} ${item.acronym || ""}`.toLowerCase();
+  return tokens.every((token) => text.includes(token));
 }
 
 function applyFilters(items, filters) {
@@ -437,34 +531,27 @@ function sortItems(items, sort) {
   };
 
   if (sort === "rap_desc") {
-    items.sort((a, b) => numberOrZero(b.rap) - numberOrZero(a.rap));
+    items.sort((a, b) => num(b.rap) - num(a.rap));
   } else if (sort === "price_asc") {
-    items.sort((a, b) => numberOrZero(a.lowestPrice || Infinity) - numberOrZero(b.lowestPrice || Infinity));
+    items.sort((a, b) => num(a.lowestPrice || Infinity) - num(b.lowestPrice || Infinity));
   } else if (sort === "price_desc") {
-    items.sort((a, b) => numberOrZero(b.lowestPrice) - numberOrZero(a.lowestPrice));
+    items.sort((a, b) => num(b.lowestPrice) - num(a.lowestPrice));
   } else if (sort === "deal_desc") {
-    items.sort((a, b) => numberOrZero(b.dealPercent) - numberOrZero(a.dealPercent));
+    items.sort((a, b) => num(b.dealPercent) - num(a.dealPercent));
   } else if (metricKeys[sort]) {
     const key = metricKeys[sort];
-    items.sort((a, b) => numberOrZero(b[key]) - numberOrZero(a[key]));
+    items = items.filter((item) => item[key] !== null && item[key] !== undefined);
+    items.sort((a, b) => num(b[key]) - num(a[key]));
   } else {
-    items.sort((a, b) => numberOrZero(b.assetId) - numberOrZero(a.assetId));
+    items.sort((a, b) => num(b.assetId) - num(a.assetId));
   }
 
   return items;
 }
 
-function buildFastListItem(base, catalog) {
-  const assetId = Number(base.assetId || base.id);
-  const itemType = String(catalog.itemType || base.itemType || "Asset");
-  const thumbnailType = itemType === "Bundle" ? "BundleThumbnail" : "Asset";
-
-  const liveCatalogRap = firstPositive(
-    catalog.recentAveragePrice,
-    catalog.rap,
-    base.rap
-  );
-
+function buildListItem(base, catalog = {}) {
+  const assetId = Number(base.assetId);
+  const rap = firstPositive(catalog.recentAveragePrice, catalog.rap, base.rap);
   const lowestPrice = firstNumber(
     catalog.lowestResalePrice,
     catalog.lowestPrice,
@@ -472,167 +559,85 @@ function buildFastListItem(base, catalog) {
     base.lowestPrice
   );
 
-  const rap = firstPositive(liveCatalogRap, base.rap);
+  const metrics = buildSnapshotMetrics(assetId, rap);
 
   const dealPercent =
     rap && lowestPrice > 0 && lowestPrice < rap
       ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
       : null;
 
-  const cachedResale = resaleCache.get(assetId);
-  const cachedMetrics =
-    cachedResale && Date.now() - cachedResale.fetchedAt < DETAILS_CACHE_MS
-      ? buildMetrics(cachedResale.data.priceDataPoints || [], firstPositive(cachedResale.data.recentAveragePrice, rap))
-      : {};
-
   return {
     assetId,
-    name: String(catalog.name || base.name || base.itemName || "Unknown Limited"),
+    name: String(catalog.name || base.name || "Unknown Limited"),
     acronym: String(base.acronym || ""),
     rap,
-    rolimonsRap: base.rap || null,
+    rolimonsRap: base.rap,
     lowestPrice,
     availableCopies: firstNumber(catalog.unitsAvailableForConsumption, base.availableCopies),
     totalCopies: firstPositive(catalog.totalQuantity, base.totalCopies),
-    thumbnail: `rbxthumb://type=${thumbnailType}&id=${assetId}&w=420&h=420`,
-    creatorName: String(catalog.creatorName || base.creatorName || ""),
-    itemType,
-    marketType: base.marketType || "roblox",
+    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    creatorName: String(catalog.creatorName || base.creatorName || "Roblox"),
+    itemType: String(catalog.itemType || base.itemType || "Asset"),
+    marketType: "roblox",
     dealPercent,
-    ...cachedMetrics,
-  };
-}
-
-async function fetchRobloxLimitedsFast(params) {
-  const offset = offsetFromCursor(params.cursor);
-  const tokens = tokenize(params.keyword);
-  const sort = params.sort;
-
-  let items = await fetchRolimonsItems();
-  items = items.filter((item) => matchesTokens(item, tokens));
-
-  if (params.minRap !== null) {
-    items = items.filter((item) => item.rap && item.rap >= params.minRap);
-  }
-
-  if (params.maxRap !== null) {
-    items = items.filter((item) => item.rap && item.rap <= params.maxRap);
-  }
-
-  if (sort === "updated") {
-    items.sort((a, b) => b.assetId - a.assetId);
-  } else {
-    items.sort((a, b) => numberOrZero(b.rap) - numberOrZero(a.rap));
-  }
-
-  const scanSize =
-    sort === "updated" && params.keyword === "" && params.minPrice === null && params.maxPrice === null
-      ? offset + params.limit
-      : Math.min(items.length, Math.max(offset + params.limit * 4, 120));
-
-  const scanWindow = items.slice(0, scanSize);
-  const details = await fetchCatalogDetailsBatch(scanWindow.map((item) => item.assetId));
-
-  let enriched = scanWindow.map((item) => {
-    return buildFastListItem(item, details.get(item.assetId) || {});
-  });
-
-  enriched = applyFilters(enriched, params);
-  enriched = sortItems(enriched, sort);
-
-  return {
-    items: enriched.slice(offset, offset + params.limit),
-    nextPageCursor: cursorFromOffset(offset + params.limit, enriched.length),
-    previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - params.limit), enriched.length) : "",
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function buildCatalogUrl(params) {
-  const url = new URL(ROBLOX_CATALOG_URL);
-
-  url.searchParams.set("category", "All");
-  url.searchParams.set("salesTypeFilter", "2");
-  url.searchParams.set("limit", String(params.limit));
-
-  if (params.sort === "price_asc") {
-    url.searchParams.set("sortType", "4");
-  } else {
-    url.searchParams.set("sortType", "3");
-  }
-
-  if (params.cursor) {
-    url.searchParams.set("cursor", params.cursor);
-  }
-
-  if (params.keyword) {
-    url.searchParams.set("keyword", params.keyword);
-  }
-
-  return url;
-}
-
-async function fetchUgcLimitedsFast(params) {
-  const catalog = await fetchJson(buildCatalogUrl(params), {
-    retries: 1,
-    timeoutMs: 6000,
-  });
-
-  const rows = Array.isArray(catalog.data) ? catalog.data : [];
-
-  let items = rows
-    .filter((item) => Number(item.id || item.assetId) > 0)
-    .filter((item) => item.creatorTargetId !== 1 || item.creatorName !== "Roblox")
-    .map((item) => {
-      return buildFastListItem(
-        {
-          assetId: Number(item.id || item.assetId),
-          name: item.name || item.itemName,
-          rap: item.recentAveragePrice || item.rap,
-          lowestPrice: item.lowestResalePrice || item.lowestPrice || item.price,
-          creatorName: item.creatorName || "",
-          itemType: item.itemType || "Asset",
-          marketType: "ugc",
-        },
-        item
-      );
-    });
-
-  items = applyFilters(items, params);
-  items = sortItems(items, params.sort);
-
-  return {
-    items: items.slice(0, params.limit),
-    nextPageCursor: catalog.nextPageCursor || "",
-    previousPageCursor: catalog.previousPageCursor || "",
-    updatedAt: new Date().toISOString(),
+    ...metrics,
   };
 }
 
 async function fetchLimiteds(params) {
-  const safeParams = {
+  const safe = {
     cursor: String(params.cursor || ""),
     limit: normalizeLimit(params.limit),
     keyword: String(params.keyword || "").slice(0, 80),
     marketType: normalizeMarketType(params.marketType),
     sort: normalizeSort(params.sort),
-    minPrice: parseNumber(params.minPrice),
-    maxPrice: parseNumber(params.maxPrice),
-    minRap: parseNumber(params.minRap),
-    maxRap: parseNumber(params.maxRap),
+    minPrice: parseOptionalNumber(params.minPrice),
+    maxPrice: parseOptionalNumber(params.maxPrice),
+    minRap: parseOptionalNumber(params.minRap),
+    maxRap: parseOptionalNumber(params.maxRap),
   };
 
-  const cacheKey = JSON.stringify(safeParams);
+  const cacheKey = JSON.stringify(safe);
   const cached = pageCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < PAGE_CACHE_MS) {
     return cached.data;
   }
 
-  const data =
-    safeParams.marketType === "roblox"
-      ? await fetchRobloxLimitedsFast(safeParams)
-      : await fetchUgcLimitedsFast(safeParams);
+  const offset = offsetFromCursor(safe.cursor);
+  const tokens = tokenize(safe.keyword);
+
+  let items = await fetchRolimonsItems();
+  items = items.filter((item) => matchesTokens(item, tokens));
+
+  if (safe.minRap !== null) items = items.filter((item) => item.rap >= safe.minRap);
+  if (safe.maxRap !== null) items = items.filter((item) => item.rap <= safe.maxRap);
+
+  if (safe.sort === "updated") {
+    items.sort((a, b) => b.assetId - a.assetId);
+  } else {
+    items.sort((a, b) => num(b.rap) - num(a.rap));
+  }
+
+  const scanSize =
+    safe.sort === "updated" && safe.keyword === "" && safe.minPrice === null && safe.maxPrice === null
+      ? offset + safe.limit
+      : Math.min(items.length, Math.max(offset + safe.limit * 4, 120));
+
+  const scanWindow = items.slice(0, scanSize);
+  const catalogMap = await fetchCatalogDetailsBatch(scanWindow.map((item) => item.assetId));
+
+  let enriched = scanWindow.map((item) => buildListItem(item, catalogMap.get(item.assetId) || {}));
+
+  enriched = applyFilters(enriched, safe);
+  enriched = sortItems(enriched, safe.sort);
+
+  const data = {
+    items: enriched.slice(offset, offset + safe.limit),
+    nextPageCursor: cursorFromOffset(offset + safe.limit, enriched.length),
+    previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - safe.limit), enriched.length) : "",
+    updatedAt: new Date().toISOString(),
+  };
 
   pageCache.set(cacheKey, {
     fetchedAt: Date.now(),
@@ -644,40 +649,26 @@ async function fetchLimiteds(params) {
 
 async function fetchItemDetails(assetId, marketType) {
   assetId = Number(assetId);
-
-  if (!assetId || assetId <= 0) {
-    return {
-      error: "Invalid assetId.",
-    };
-  }
+  if (!assetId || assetId <= 0) return { error: "Invalid assetId." };
 
   const safeMarketType = normalizeMarketType(marketType);
   const cacheKey = `${safeMarketType}:${assetId}`;
   const cached = detailCache.get(cacheKey);
 
-  if (cached && Date.now() - cached.fetchedAt < DETAILS_CACHE_MS) {
+  if (cached && Date.now() - cached.fetchedAt < DETAIL_CACHE_MS) {
     return cached.data;
   }
 
-  const [resale, economy, catalogMap] = await Promise.all([
+  const [resale, economy, catalogMap, rolimonsItems] = await Promise.all([
     fetchResaleData(assetId),
     fetchEconomyDetails(assetId),
     fetchCatalogDetailsBatch([assetId]),
+    fetchRolimonsItems().catch(() => []),
   ]);
 
   const catalog = catalogMap.get(assetId) || {};
+  const rolimonsItem = rolimonsItems.find((item) => item.assetId === assetId) || null;
   const collectible = economy.CollectiblesItemDetails || {};
-
-  let rolimonsItem = null;
-
-  if (safeMarketType === "roblox") {
-    try {
-      const rolimonsItems = await fetchRolimonsItems();
-      rolimonsItem = rolimonsItems.find((item) => item.assetId === assetId) || null;
-    } catch {
-      rolimonsItem = null;
-    }
-  }
 
   const rap = firstPositive(
     resale.recentAveragePrice,
@@ -688,6 +679,11 @@ async function fetchItemDetails(assetId, marketType) {
     rolimonsItem?.rap
   );
 
+  if (rap) {
+    addSnapshot(assetId, rap, Date.now());
+    saveSnapshots().catch(() => {});
+  }
+
   const lowestPrice = firstNumber(
     resale.lowestResalePrice,
     collectible.CollectibleLowestResalePrice,
@@ -697,10 +693,7 @@ async function fetchItemDetails(assetId, marketType) {
     catalog.price
   );
 
-  const itemType = String(catalog.itemType || rolimonsItem?.itemType || "Asset");
-  const thumbnailType = itemType === "Bundle" ? "BundleThumbnail" : "Asset";
-
-  const metrics = buildMetrics(resale.priceDataPoints || [], rap);
+  const metrics = buildSnapshotMetrics(assetId, rap);
 
   const dealPercent =
     rap && lowestPrice > 0 && lowestPrice < rap
@@ -716,11 +709,12 @@ async function fetchItemDetails(assetId, marketType) {
     lowestPrice,
     availableCopies: firstNumber(resale.numberRemaining, catalog.unitsAvailableForConsumption),
     totalCopies: firstPositive(collectible.TotalQuantity, catalog.totalQuantity, resale.assetStock),
-    thumbnail: `rbxthumb://type=${thumbnailType}&id=${assetId}&w=420&h=420`,
-    creatorName: String(catalog.creatorName || rolimonsItem?.creatorName || ""),
-    itemType,
+    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    creatorName: String(catalog.creatorName || rolimonsItem?.creatorName || "Roblox"),
+    itemType: String(catalog.itemType || rolimonsItem?.itemType || "Asset"),
     marketType: safeMarketType,
     dealPercent,
+    history: buildHistoryForClient(assetId, rap),
     updatedAt: new Date().toISOString(),
     ...metrics,
   };
@@ -745,6 +739,7 @@ async function handleRequest(req, res) {
     sendJson(res, 200, {
       ok: true,
       version: SERVER_VERSION,
+      snapshotItems: snapshotsByAssetId.size,
     });
     return;
   }
@@ -755,7 +750,7 @@ async function handleRequest(req, res) {
         cursor: url.searchParams.get("cursor") || "",
         limit: url.searchParams.get("limit") || "30",
         keyword: url.searchParams.get("keyword") || "",
-        marketType: url.searchParams.get("type") || "ugc",
+        marketType: url.searchParams.get("type") || "roblox",
         sort: url.searchParams.get("sort") || "updated",
         minPrice: url.searchParams.get("minPrice"),
         maxPrice: url.searchParams.get("maxPrice"),
@@ -784,7 +779,7 @@ async function handleRequest(req, res) {
     try {
       const data = await fetchItemDetails(
         url.searchParams.get("assetId") || "0",
-        url.searchParams.get("type") || "ugc"
+        url.searchParams.get("type") || "roblox"
       );
 
       sendJson(res, 200, {
@@ -807,6 +802,10 @@ async function handleRequest(req, res) {
     error: "Not found.",
   });
 }
+
+await loadSnapshots();
+runSnapshotJob();
+setInterval(runSnapshotJob, SNAPSHOT_INTERVAL_MS);
 
 createServer((req, res) => {
   handleRequest(req, res).catch((error) => {
