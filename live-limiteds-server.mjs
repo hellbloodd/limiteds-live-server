@@ -573,6 +573,21 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
   };
 }
 
+function compareChangeMetric(a, b, metricKey, isLossSort) {
+  const leftRaw = a[metricKey];
+  const rightRaw = b[metricKey];
+  const leftHasMetric = typeof leftRaw === "number" && Number.isFinite(leftRaw);
+  const rightHasMetric = typeof rightRaw === "number" && Number.isFinite(rightRaw);
+  const left = leftHasMetric ? leftRaw : 0;
+  const right = rightHasMetric ? rightRaw : 0;
+
+  if (leftHasMetric !== rightHasMetric) {
+    return rightHasMetric ? 1 : -1;
+  }
+
+  return isLossSort ? left - right : right - left;
+}
+
 async function fetchStoredSnapshots(assetId) {
   const safeAssetId = normalizeNumber(Number(assetId));
 
@@ -978,20 +993,7 @@ async function fetchRolimonsCatalogPage({
 
     if (metricKey) {
       enriched = await addHistoryMetricsBatch(enriched);
-      enriched.sort((a, b) => {
-        const leftRaw = Number(a[metricKey]);
-        const rightRaw = Number(b[metricKey]);
-        const leftHasMetric = Number.isFinite(leftRaw);
-        const rightHasMetric = Number.isFinite(rightRaw);
-        const left = leftHasMetric ? leftRaw : 0;
-        const right = rightHasMetric ? rightRaw : 0;
-
-        if (leftHasMetric !== rightHasMetric) {
-          return rightHasMetric ? 1 : -1;
-        }
-
-        return isLossSort ? left - right : right - left;
-      });
+      enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => item.dealPercent && item.dealPercent > 0);
       enriched.sort((a, b) => b.dealPercent - a.dealPercent);
@@ -1454,20 +1456,7 @@ async function fetchCatalogPage({
     const isLossSort = String(safeSort).startsWith("loss_");
 
     if (metricKey) {
-      collectedItems.sort((a, b) => {
-        const leftRaw = Number(a[metricKey]);
-        const rightRaw = Number(b[metricKey]);
-        const leftHasMetric = Number.isFinite(leftRaw);
-        const rightHasMetric = Number.isFinite(rightRaw);
-        const left = leftHasMetric ? leftRaw : 0;
-        const right = rightHasMetric ? rightRaw : 0;
-
-        if (leftHasMetric !== rightHasMetric) {
-          return rightHasMetric ? 1 : -1;
-        }
-
-        return isLossSort ? left - right : right - left;
-      });
+      collectedItems.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     }
   }
 
