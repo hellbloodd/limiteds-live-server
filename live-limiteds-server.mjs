@@ -4,6 +4,7 @@
 // The Roblox client calls this server, not Roblox marketplace APIs directly.
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
+const SERVER_VERSION = "snapshot-debug-2026-06-10-1";
 const PORT = Number(process.env.PORT || 8787);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
