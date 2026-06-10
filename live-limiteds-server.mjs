@@ -1134,6 +1134,10 @@ function buildItemFromCatalog(item, resale, marketType) {
   };
 }
 
+function isBuyableCollectibleItem(item) {
+  return Number(item.rap) > 0 && Number(item.lowestPrice) > 0;
+}
+
 async function fetchItemDetails(assetId, marketType = "ugc") {
   const safeAssetId = normalizeNumber(Number(assetId));
   const cacheKey = `${safeAssetId}:${marketType}`;
@@ -1292,10 +1296,10 @@ async function fetchCatalogPage({
   const isRobloxPriceSort = safeMarketType === "roblox"
     && (safeSort === "price_asc" || safeSort === "price_desc");
   const isRobloxDealSort = safeMarketType === "roblox" && safeSort === "deal_desc";
-  const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0;
+  const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc";
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
+    : safeMarketType === "ugc" ? 8 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
@@ -1376,8 +1380,8 @@ async function fetchCatalogPage({
 
       for (const item of matchingItems) {
         const assetId = normalizeNumber(item.id || item.assetId);
-        const shouldFetchClassicResaleData = isChangeSort && safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000;
-        const resale = shouldFetchClassicResaleData ? await fetchResaleData(assetId) : {};
+        const shouldFetchResaleData = safeMarketType === "ugc" || (isChangeSort && safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000);
+        const resale = shouldFetchResaleData ? await fetchResaleData(assetId) : {};
         const builtItem = buildItemFromCatalog(item, resale, safeMarketType);
         const classicItem = classicItemByAssetId?.get(assetId);
 
@@ -1386,9 +1390,11 @@ async function fetchCatalogPage({
           builtItem.name = builtItem.name || classicItem.name;
         }
 
-        pageItems.push(builtItem);
+        if (safeMarketType !== "ugc" || isBuyableCollectibleItem(builtItem)) {
+          pageItems.push(builtItem);
+        }
 
-        if (shouldFetchClassicResaleData) {
+        if (shouldFetchResaleData) {
           await sleep(35);
         }
       }
@@ -1422,6 +1428,7 @@ async function fetchCatalogPage({
   }
 
   collectedItems = collectedItems.filter((item) => {
+    if (safeMarketType === "ugc" && !isBuyableCollectibleItem(item)) return false;
     if (safeMinPrice !== null && (!item.lowestPrice || item.lowestPrice < safeMinPrice)) return false;
     if (safeMaxPrice !== null && (!item.lowestPrice || item.lowestPrice > safeMaxPrice)) return false;
     if (safeMinRap !== null && (!item.rap || item.rap < safeMinRap)) return false;
