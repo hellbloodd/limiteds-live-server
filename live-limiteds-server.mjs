@@ -111,6 +111,8 @@ async function fetchJson(url, options = {}) {
           "User-Agent": "LimitedsLiveMarketViewer/1.0",
         },
       });
+    } catch (error) {
+      throw new Error(`Network error for ${url}: ${error.cause?.message || error.message}`);
     } finally {
       clearTimeout(timeout);
     }
@@ -396,20 +398,27 @@ async function supabaseRequest(path, options = {}) {
     return null;
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-      ...(options.headers || {}),
-    },
-  });
+  const requestUrl = `${SUPABASE_URL}/rest/v1/${path}`;
+  let response;
+
+  try {
+    response = await fetch(requestUrl, {
+      ...options,
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    throw new Error(`Supabase network error for ${requestUrl}: ${error.cause?.message || error.message}`);
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Supabase ${response.status}: ${text.slice(0, 180)}`);
+    throw new Error(`Supabase ${response.status} for ${requestUrl}: ${text.slice(0, 180)}`);
   }
 
   if (response.status === 204) {
@@ -527,7 +536,15 @@ async function runSnapshotJob() {
   snapshotRunning = true;
 
   try {
-    const items = await fetchRolimonsItems();
+    console.log("Snapshot started.");
+    let items;
+
+    try {
+      items = await fetchRolimonsItems();
+    } catch (error) {
+      throw new Error(`Rolimons snapshot fetch failed: ${error.message}`);
+    }
+
     const savedAt = new Date().toISOString();
     const rows = items
       .filter((item) => item.assetId > 0 && item.rap > 0)
@@ -538,9 +555,16 @@ async function runSnapshotJob() {
         lowest_price: item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null,
         saved_at: savedAt,
       }));
-    const saved = await saveSnapshotRows(rows);
+    let saved;
+
+    try {
+      saved = await saveSnapshotRows(rows);
+    } catch (error) {
+      throw new Error(`Snapshot database save failed: ${error.message}`);
+    }
 
     lastSnapshotRunAt = Date.now();
+    console.log(`Snapshot saved ${saved} rows to ${snapshotStorageEnabled() ? "supabase" : "memory"}.`);
     return {
       ok: true,
       saved,
@@ -563,6 +587,9 @@ function maybeRunSnapshotInBackground() {
 
   runSnapshotJob().catch((error) => {
     console.warn(`Snapshot failed: ${error.message}`);
+    if (error.stack) {
+      console.warn(error.stack);
+    }
   });
 }
 
