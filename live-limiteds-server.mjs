@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 120_000);
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ALLOWED_LIMITS = [10, 28, 30];
@@ -91,7 +91,7 @@ async function fetchJson(url) {
       break;
     }
 
-    await sleep(350 + attempt * 500);
+    await sleep(750 + attempt * 1000);
   }
 
   if (!response.ok) {
@@ -112,11 +112,11 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "loss_30d",
     "loss_1y",
     "loss_all",
-    "up_24h",
-    "up_7d",
-    "up_30d",
-    "up_1y",
-    "up_all",
+    "profit_24h",
+    "profit_7d",
+    "profit_30d",
+    "profit_1y",
+    "profit_all",
   ];
   const sortType = sort === "price_asc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
@@ -269,11 +269,11 @@ function buildItemFromCatalog(item, resale, marketType) {
   const loss7d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 7), rap);
   const loss30d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 30), rap);
   const loss1y = percentDrop(findHistoryValueAtLeastDaysAgo(history, 365), rap);
-  const upAllTime = percentGain(firstHistoryValue, rap);
-  const up24h = percentGain(findHistoryValueAtLeastDaysAgo(history, 1), rap);
-  const up7d = percentGain(findHistoryValueAtLeastDaysAgo(history, 7), rap);
-  const up30d = percentGain(findHistoryValueAtLeastDaysAgo(history, 30), rap);
-  const up1y = percentGain(findHistoryValueAtLeastDaysAgo(history, 365), rap);
+  const profitAllTime = percentGain(firstHistoryValue, rap);
+  const profit24h = percentGain(findHistoryValueAtLeastDaysAgo(history, 1), rap);
+  const profit7d = percentGain(findHistoryValueAtLeastDaysAgo(history, 7), rap);
+  const profit30d = percentGain(findHistoryValueAtLeastDaysAgo(history, 30), rap);
+  const profit1y = percentGain(findHistoryValueAtLeastDaysAgo(history, 365), rap);
   const availableCopies = firstNonNegativeNumber(
     item.unitsAvailableForConsumption,
     resale.numberRemaining
@@ -301,11 +301,11 @@ function buildItemFromCatalog(item, resale, marketType) {
     loss30d,
     loss1y,
     lossAllTime,
-    up24h,
-    up7d,
-    up30d,
-    up1y,
-    upAllTime,
+    profit24h,
+    profit7d,
+    profit30d,
+    profit1y,
+    profitAllTime,
     marketType,
   };
 }
@@ -380,11 +380,11 @@ async function fetchCatalogPage({
     "loss_30d",
     "loss_1y",
     "loss_all",
-    "up_24h",
-    "up_7d",
-    "up_30d",
-    "up_1y",
-    "up_all",
+    "profit_24h",
+    "profit_7d",
+    "profit_30d",
+    "profit_1y",
+    "profit_all",
     "updated",
   ].includes(sort) ? sort : "updated";
   const safeMinPrice = parseOptionalNumber(minPrice);
@@ -412,7 +412,7 @@ async function fetchCatalogPage({
   let previousPageCursor = "";
   let collectedItems = [];
 
-  const needsMetricScan = [
+  const isMetricSort = [
     "rap_desc",
     "deal_desc",
     "loss_24h",
@@ -420,12 +420,13 @@ async function fetchCatalogPage({
     "loss_30d",
     "loss_1y",
     "loss_all",
-    "up_24h",
-    "up_7d",
-    "up_30d",
-    "up_1y",
-    "up_all",
-  ].includes(safeSort)
+    "profit_24h",
+    "profit_7d",
+    "profit_30d",
+    "profit_1y",
+    "profit_all",
+  ].includes(safeSort);
+  const needsMetricScan = isMetricSort
     || safeMinRap !== null
     || safeMaxRap !== null;
   const hasRangeFilter = safeMinPrice !== null
@@ -433,7 +434,7 @@ async function fetchCatalogPage({
     || safeMinRap !== null
     || safeMaxRap !== null;
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0;
-  const maxPages = keywordTokens.length > 0 ? 8 : needsMetricScan || hasRangeFilter ? 8 : 3;
+  const maxPages = keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
 
   for (let page = 0; page < maxPages && (shouldScanFullWindow || collectedItems.length < safeLimit); page += 1) {
     const catalog = await fetchJson(buildCatalogUrl({
@@ -478,7 +479,7 @@ async function fetchCatalogPage({
     }
 
     collectedItems = collectedItems.concat(
-      pageItems.filter((item) => item.assetId > 0 && item.lowestPrice > 0)
+      pageItems.filter((item) => item.assetId > 0)
     );
 
     if (!nextPageCursor) {
@@ -487,8 +488,8 @@ async function fetchCatalogPage({
   }
 
   collectedItems = collectedItems.filter((item) => {
-    if (safeMinPrice !== null && item.lowestPrice < safeMinPrice) return false;
-    if (safeMaxPrice !== null && item.lowestPrice > safeMaxPrice) return false;
+    if (safeMinPrice !== null && (!item.lowestPrice || item.lowestPrice < safeMinPrice)) return false;
+    if (safeMaxPrice !== null && (!item.lowestPrice || item.lowestPrice > safeMaxPrice)) return false;
     if (safeMinRap !== null && (!item.rap || item.rap < safeMinRap)) return false;
     if (safeMaxRap !== null && (!item.rap || item.rap > safeMaxRap)) return false;
     return true;
@@ -511,11 +512,11 @@ async function fetchCatalogPage({
       loss_30d: "loss30d",
       loss_1y: "loss1y",
       loss_all: "lossAllTime",
-      up_24h: "up24h",
-      up_7d: "up7d",
-      up_30d: "up30d",
-      up_1y: "up1y",
-      up_all: "upAllTime",
+      profit_24h: "profit24h",
+      profit_7d: "profit7d",
+      profit_30d: "profit30d",
+      profit_1y: "profit1y",
+      profit_all: "profitAllTime",
     };
     const metricKey = metricKeyBySort[safeSort];
 
@@ -525,7 +526,7 @@ async function fetchCatalogPage({
     }
   }
 
-  if (collectedItems.length === 0 && needsMetricScan && safeSort !== "updated" && safeSort !== "price_desc") {
+  if (collectedItems.length === 0 && hasRangeFilter && !isMetricSort && safeSort !== "updated" && safeSort !== "price_desc") {
     return fetchCatalogPage({
       cursor,
       limit,
