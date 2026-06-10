@@ -61,7 +61,7 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function buildCatalogUrl({ cursor, limit, keyword }) {
+function buildCatalogUrl({ cursor, limit, keyword, marketType }) {
   const url = new URL(ROBLOX_CATALOG_URL);
 
   // The details endpoint does not accept Category=Collectibles.
@@ -70,6 +70,11 @@ function buildCatalogUrl({ cursor, limit, keyword }) {
   url.searchParams.set("salesTypeFilter", "2");
   url.searchParams.set("sortType", "3");
   url.searchParams.set("limit", String(limit));
+
+  if (marketType === "roblox") {
+    url.searchParams.set("creatorTargetId", "1");
+    url.searchParams.set("creatorType", "User");
+  }
 
   if (cursor) {
     url.searchParams.set("cursor", cursor);
@@ -98,10 +103,11 @@ async function fetchResaleData(assetId) {
   }
 }
 
-async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "" }) {
+async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc" }) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
-  const cacheKey = `${safeKeyword}:${cursor}:${safeLimit}`;
+  const safeMarketType = marketType === "roblox" ? "roblox" : "ugc";
+  const cacheKey = `${safeMarketType}:${safeKeyword}:${cursor}:${safeLimit}`;
   const cached = pageCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
@@ -112,11 +118,20 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "" }) {
     cursor,
     limit: safeLimit,
     keyword: safeKeyword,
+    marketType: safeMarketType,
   }));
   const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
 
   const items = await Promise.all(
-    rawItems.map(async (item) => {
+    rawItems
+      .filter((item) => {
+        if (safeMarketType === "ugc") {
+          return item.creatorTargetId !== 1 || item.creatorName !== "Roblox";
+        }
+
+        return item.creatorTargetId === 1 && item.creatorName === "Roblox";
+      })
+      .map(async (item) => {
       const assetId = normalizeNumber(item.id || item.assetId);
       const resale = assetId > 0 ? await fetchResaleData(assetId) : {};
       const lowestPrice = firstNumber(
@@ -138,6 +153,8 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "" }) {
         rap,
         lowestPrice,
         thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+        creatorName: String(item.creatorName || ""),
+        marketType: safeMarketType,
       };
     })
   );
@@ -172,6 +189,7 @@ async function handleRequest(req, res) {
         cursor: url.searchParams.get("cursor") || "",
         limit: url.searchParams.get("limit") || "30",
         keyword: url.searchParams.get("keyword") || "",
+        marketType: url.searchParams.get("type") || "ugc",
       });
 
       sendJson(res, 200, data);
