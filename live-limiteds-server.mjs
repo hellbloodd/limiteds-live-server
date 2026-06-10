@@ -39,6 +39,16 @@ function firstNumber(...values) {
   return 0;
 }
 
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 function normalizeLimit(limit) {
   const requested = Number(limit) || 30;
   return ALLOWED_LIMITS.reduce((best, current) => {
@@ -61,14 +71,15 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function buildCatalogUrl({ cursor, limit, keyword, marketType }) {
+function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
+  const sortType = sort === "price_asc" ? "4" : sort === "price_desc" ? "5" : "3";
 
   // The details endpoint does not accept Category=Collectibles.
   // Accessories + salesTypeFilter=2 returns collectible/resellable catalog items.
   url.searchParams.set("category", "Accessories");
   url.searchParams.set("salesTypeFilter", "2");
-  url.searchParams.set("sortType", "3");
+  url.searchParams.set("sortType", sortType);
   url.searchParams.set("limit", String(limit));
 
   if (marketType === "roblox") {
@@ -103,66 +114,96 @@ async function fetchResaleData(assetId) {
   }
 }
 
-async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc" }) {
+async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc", sort = "updated" }) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
   const safeMarketType = marketType === "roblox" ? "roblox" : "ugc";
-  const cacheKey = `${safeMarketType}:${safeKeyword}:${cursor}:${safeLimit}`;
+  const safeSort = ["price_asc", "price_desc", "updated"].includes(sort) ? sort : "updated";
+  const cacheKey = `${safeMarketType}:${safeSort}:${safeKeyword}:${cursor}:${safeLimit}`;
   const cached = pageCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.data;
   }
 
-  const catalog = await fetchJson(buildCatalogUrl({
-    cursor,
-    limit: safeLimit,
-    keyword: safeKeyword,
-    marketType: safeMarketType,
-  }));
-  const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
+  let nextPageCursor = cursor;
+  let previousPageCursor = "";
+  let collectedItems = [];
 
-  const items = await Promise.all(
-    rawItems
-      .filter((item) => {
+  for (let page = 0; page < 10 && collectedItems.length < safeLimit; page += 1) {
+    const catalog = await fetchJson(buildCatalogUrl({
+      cursor: page === 0 ? cursor : nextPageCursor,
+      limit: safeLimit,
+      keyword: safeKeyword,
+      marketType: safeMarketType,
+      sort: safeSort,
+    }));
+
+    const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
+
+    if (!previousPageCursor) {
+      previousPageCursor = catalog.previousPageCursor || "";
+    }
+
+    nextPageCursor = catalog.nextPageCursor || "";
+
+    const pageItems = await Promise.all(
+      rawItems
+        .filter((item) => {
         if (safeMarketType === "ugc") {
           return item.creatorTargetId !== 1 || item.creatorName !== "Roblox";
         }
 
         return item.creatorTargetId === 1 && item.creatorName === "Roblox";
-      })
-      .map(async (item) => {
-      const assetId = normalizeNumber(item.id || item.assetId);
-      const resale = assetId > 0 ? await fetchResaleData(assetId) : {};
-      const lowestPrice = firstNumber(
-        item.lowestPrice,
-        item.lowestResalePrice,
-        item.price,
-        resale.lowestResalePrice,
-        item.priceStatus === "Off Sale" ? 0 : undefined
-      );
-      const rap = firstNumber(
-        item.recentAveragePrice,
-        item.rap,
-        resale.recentAveragePrice
-      );
+        })
+        .map(async (item) => {
+        const assetId = normalizeNumber(item.id || item.assetId);
+        const shouldFetchClassicResaleData = assetId > 0 && assetId < 10000000000;
+        const resale = shouldFetchClassicResaleData ? await fetchResaleData(assetId) : {};
+        const lowestPrice = firstNumber(
+          item.lowestResalePrice,
+          item.lowestPrice,
+          item.price,
+          resale.lowestResalePrice,
+          item.priceStatus === "Off Sale" ? 0 : undefined
+        );
+        const rap = firstPositiveNumber(
+          item.recentAveragePrice,
+          item.rap,
+          resale.recentAveragePrice
+        );
 
-      return {
-        assetId,
-        name: String(item.name || item.itemName || "Unknown Limited"),
-        rap,
-        lowestPrice,
-        thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
-        creatorName: String(item.creatorName || ""),
-        marketType: safeMarketType,
-      };
-    })
-  );
+        return {
+          assetId,
+          name: String(item.name || item.itemName || "Unknown Limited"),
+          rap,
+          lowestPrice,
+          thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+          creatorName: String(item.creatorName || ""),
+          marketType: safeMarketType,
+        };
+      })
+    );
+
+    collectedItems = collectedItems.concat(
+      pageItems.filter((item) => item.assetId > 0 && item.lowestPrice > 0)
+    );
+
+    if (!nextPageCursor) {
+      break;
+    }
+  }
+
+  if (safeSort === "price_asc") {
+    collectedItems.sort((a, b) => a.lowestPrice - b.lowestPrice);
+  } else if (safeSort === "price_desc") {
+    collectedItems.sort((a, b) => b.lowestPrice - a.lowestPrice);
+  }
 
   const data = {
-    items: items.filter((item) => item.assetId > 0),
-    nextPageCursor: catalog.nextPageCursor || "",
-    previousPageCursor: catalog.previousPageCursor || "",
+    items: collectedItems.slice(0, safeLimit),
+    nextPageCursor,
+    previousPageCursor,
     updatedAt: new Date().toISOString(),
   };
 
@@ -190,6 +231,7 @@ async function handleRequest(req, res) {
         limit: url.searchParams.get("limit") || "30",
         keyword: url.searchParams.get("keyword") || "",
         marketType: url.searchParams.get("type") || "ugc",
+        sort: url.searchParams.get("sort") || "updated",
       });
 
       sendJson(res, 200, data);
