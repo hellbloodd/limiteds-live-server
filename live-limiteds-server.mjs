@@ -77,10 +77,19 @@ function percentChange(oldRap, currentRap) {
 }
 
 function splitChange(change) {
-  if (change === null || change === undefined) return { profit: null, loss: null };
-  if (change > 0) return { profit: change, loss: null };
-  if (change < 0) return { profit: null, loss: Math.abs(change) };
-  return { profit: null, loss: null };
+  if (change === null || change === undefined) {
+    return { profit: 0, loss: 0 };
+  }
+
+  if (change > 0) {
+    return { profit: change, loss: 0 };
+  }
+
+  if (change < 0) {
+    return { profit: 0, loss: Math.abs(change) };
+  }
+
+  return { profit: 0, loss: 0 };
 }
 
 function normalizeLimit(value) {
@@ -583,7 +592,6 @@ function sortItems(items, sort) {
     items.sort((a, b) => num(b.dealPercent) - num(a.dealPercent));
   } else if (metricKeys[sort]) {
     const key = metricKeys[sort];
-    items = items.filter((item) => item[key] !== null && item[key] !== undefined);
     items.sort((a, b) => num(b[key]) - num(a[key]));
   } else {
     items.sort((a, b) => num(b.assetId) - num(a.assetId));
