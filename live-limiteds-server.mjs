@@ -7,6 +7,10 @@
 const PORT = Number(process.env.PORT || 8787);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
+const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
@@ -20,6 +24,9 @@ const catalogDetailCache = new Map();
 const detailCache = new Map();
 let rolimonsCache = null;
 let robloxCsrfToken = "";
+let lastSnapshotRunAt = 0;
+let snapshotRunning = false;
+let memorySnapshots = [];
 
 function sendJson(res, status, body) {
   const json = JSON.stringify(body);
@@ -380,6 +387,185 @@ function percentGain(fromValue, toValue) {
   return change;
 }
 
+function snapshotStorageEnabled() {
+  return SUPABASE_URL !== "" && SUPABASE_SERVICE_ROLE_KEY !== "";
+}
+
+async function supabaseRequest(path, options = {}) {
+  if (!snapshotStorageEnabled()) {
+    return null;
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Supabase ${response.status}: ${text.slice(0, 180)}`);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
+
+function normalizeSnapshotRows(rows) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows
+    .map((row) => ({
+      value: Number(row.rap),
+      lowestPrice: Number(row.lowest_price) || null,
+      date: String(row.saved_at || row.date || ""),
+      source: "own",
+    }))
+    .filter((point) => point.value > 0 && Number.isFinite(Date.parse(point.date)));
+}
+
+function mergeHistoryPoints(...histories) {
+  return histories
+    .flat()
+    .filter((point) => Number(point.value) > 0 && Number.isFinite(Date.parse(point.date || "")))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+    .slice(-1000);
+}
+
+async function fetchStoredSnapshots(assetId) {
+  const safeAssetId = normalizeNumber(Number(assetId));
+
+  if (safeAssetId <= 0) {
+    return [];
+  }
+
+  if (snapshotStorageEnabled()) {
+    const rows = await supabaseRequest(
+      `limited_snapshots?asset_id=eq.${safeAssetId}&select=rap,lowest_price,saved_at&order=saved_at.asc&limit=5000`,
+      { headers: { Prefer: "" } }
+    );
+    return normalizeSnapshotRows(rows);
+  }
+
+  return normalizeSnapshotRows(
+    memorySnapshots.filter((row) => row.asset_id === safeAssetId)
+  );
+}
+
+async function fetchStoredSnapshotsForAssets(assetIds) {
+  const ids = [...new Set(assetIds.map((id) => normalizeNumber(Number(id))).filter((id) => id > 0))];
+  const byAssetId = new Map(ids.map((id) => [id, []]));
+
+  if (ids.length === 0) {
+    return byAssetId;
+  }
+
+  if (snapshotStorageEnabled()) {
+    for (let index = 0; index < ids.length; index += 80) {
+      const chunk = ids.slice(index, index + 80);
+      const rows = await supabaseRequest(
+        `limited_snapshots?asset_id=in.(${chunk.join(",")})&select=asset_id,rap,lowest_price,saved_at&order=saved_at.asc&limit=20000`,
+        { headers: { Prefer: "" } }
+      );
+
+      for (const row of rows || []) {
+        const assetId = normalizeNumber(row.asset_id);
+        const list = byAssetId.get(assetId);
+
+        if (list) {
+          list.push(...normalizeSnapshotRows([row]));
+        }
+      }
+    }
+  } else {
+    for (const row of memorySnapshots) {
+      const list = byAssetId.get(row.asset_id);
+
+      if (list) {
+        list.push(...normalizeSnapshotRows([row]));
+      }
+    }
+  }
+
+  return byAssetId;
+}
+
+async function saveSnapshotRows(rows) {
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  if (snapshotStorageEnabled()) {
+    for (let index = 0; index < rows.length; index += 500) {
+      await supabaseRequest("limited_snapshots", {
+        method: "POST",
+        body: JSON.stringify(rows.slice(index, index + 500)),
+      });
+    }
+  } else {
+    memorySnapshots = memorySnapshots.concat(rows).slice(-100_000);
+  }
+
+  return rows.length;
+}
+
+async function runSnapshotJob() {
+  if (snapshotRunning) {
+    return { ok: true, skipped: true, reason: "Snapshot already running." };
+  }
+
+  snapshotRunning = true;
+
+  try {
+    const items = await fetchRolimonsItems();
+    const savedAt = new Date().toISOString();
+    const rows = items
+      .filter((item) => item.assetId > 0 && item.rap > 0)
+      .map((item) => ({
+        asset_id: item.assetId,
+        name: item.name,
+        rap: Math.round(item.rap),
+        lowest_price: item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null,
+        saved_at: savedAt,
+      }));
+    const saved = await saveSnapshotRows(rows);
+
+    lastSnapshotRunAt = Date.now();
+    return {
+      ok: true,
+      saved,
+      storedIn: snapshotStorageEnabled() ? "supabase" : "memory",
+      savedAt,
+    };
+  } finally {
+    snapshotRunning = false;
+  }
+}
+
+function maybeRunSnapshotInBackground() {
+  if (SNAPSHOT_INTERVAL_MS <= 0 || snapshotRunning) {
+    return;
+  }
+
+  if (Date.now() - lastSnapshotRunAt < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  runSnapshotJob().catch((error) => {
+    console.warn(`Snapshot failed: ${error.message}`);
+  });
+}
+
 function tokenizeKeyword(keyword) {
   return String(keyword || "")
     .toLowerCase()
@@ -523,7 +709,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items) {
 
 async function addHistoryMetrics(item) {
   const resale = await fetchResaleData(item.assetId);
-  const history = normalizeHistoryPoints(resale.priceDataPoints);
+  const ownHistory = await fetchStoredSnapshots(item.assetId);
+  const history = mergeHistoryPoints(normalizeHistoryPoints(resale.priceDataPoints), ownHistory);
   const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
   const baselineAll = findHistoryBaselineValue(history, null);
   const baseline24h = findHistoryBaselineValue(history, 1);
@@ -547,6 +734,39 @@ async function addHistoryMetrics(item) {
     profit30d: percentGain(baseline30d, rap),
     profit1y: percentGain(baseline1y, rap),
   };
+}
+
+async function addHistoryMetricsBatch(items) {
+  const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
+
+  return mapWithConcurrency(items, 4, async (item) => {
+    const resale = await fetchResaleData(item.assetId);
+    const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+    const history = mergeHistoryPoints(normalizeHistoryPoints(resale.priceDataPoints), ownHistory);
+    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+    const baselineAll = findHistoryBaselineValue(history, null);
+    const baseline24h = findHistoryBaselineValue(history, 1);
+    const baseline7d = findHistoryBaselineValue(history, 7);
+    const baseline30d = findHistoryBaselineValue(history, 30);
+    const baseline1y = findHistoryBaselineValue(history, 365);
+
+    return {
+      ...item,
+      rap,
+      lowestPrice: firstNumber(resale.lowestResalePrice, item.lowestPrice),
+      availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
+      lossAllTime: percentDrop(baselineAll, rap),
+      loss24h: percentDrop(baseline24h, rap),
+      loss7d: percentDrop(baseline7d, rap),
+      loss30d: percentDrop(baseline30d, rap),
+      loss1y: percentDrop(baseline1y, rap),
+      profitAllTime: percentGain(baselineAll, rap),
+      profit24h: percentGain(baseline24h, rap),
+      profit7d: percentGain(baseline7d, rap),
+      profit30d: percentGain(baseline30d, rap),
+      profit1y: percentGain(baseline1y, rap),
+    };
+  });
 }
 
 async function fetchRolimonsCatalogPage({
@@ -610,10 +830,10 @@ async function fetchRolimonsCatalogPage({
         scanWindow,
         8,
         (item) => enrichRolimonsItem(item, false, true)
-      );
+    );
 
     if (metricKey) {
-      enriched = await mapWithConcurrency(enriched, 4, addHistoryMetrics);
+      enriched = await addHistoryMetricsBatch(enriched);
       enriched = enriched.filter((item) => item[metricKey] && item[metricKey] > 0);
       enriched.sort((a, b) => b[metricKey] - a[metricKey]);
     } else if (sort === "deal_desc") {
@@ -816,7 +1036,8 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     resale.recentAveragePrice
   );
 
-  const history = normalizeHistoryPoints(resale.priceDataPoints);
+  const ownHistory = await fetchStoredSnapshots(safeAssetId);
+  const history = mergeHistoryPoints(normalizeHistoryPoints(resale.priceDataPoints), ownHistory);
 
   const data = {
     assetId: safeAssetId,
@@ -1135,9 +1356,37 @@ async function handleRequest(req, res) {
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
+  maybeRunSnapshotInBackground();
 
   if (url.pathname === "/health") {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      snapshots: {
+        enabled: snapshotStorageEnabled(),
+        running: snapshotRunning,
+        lastRunAt: lastSnapshotRunAt ? new Date(lastSnapshotRunAt).toISOString() : "",
+        storedIn: snapshotStorageEnabled() ? "supabase" : "memory",
+      },
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/snapshot") {
+    if (SNAPSHOT_SECRET && url.searchParams.get("secret") !== SNAPSHOT_SECRET) {
+      sendJson(res, 403, { error: "Bad snapshot secret." });
+      return;
+    }
+
+    try {
+      const data = await runSnapshotJob();
+      sendJson(res, 200, data);
+    } catch (error) {
+      sendJson(res, 500, {
+        error: "Could not save limited snapshots.",
+        detail: error.message,
+      });
+    }
+
     return;
   }
 
