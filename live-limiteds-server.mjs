@@ -953,8 +953,18 @@ async function fetchRolimonsCatalogPage({
 
     if (metricKey) {
       enriched = await addHistoryMetricsBatch(enriched);
-      enriched = enriched.filter((item) => item[metricKey] && item[metricKey] > 0);
-      enriched.sort((a, b) => b[metricKey] - a[metricKey]);
+      enriched.sort((a, b) => {
+        const left = Number(a[metricKey]) || 0;
+        const right = Number(b[metricKey]) || 0;
+        const leftHasMetric = left > 0;
+        const rightHasMetric = right > 0;
+
+        if (leftHasMetric !== rightHasMetric) {
+          return rightHasMetric ? 1 : -1;
+        }
+
+        return right - left;
+      });
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => item.dealPercent && item.dealPercent > 0);
       enriched.sort((a, b) => b.dealPercent - a.dealPercent);
@@ -1416,8 +1426,18 @@ async function fetchCatalogPage({
     const metricKey = metricKeyBySort[safeSort];
 
     if (metricKey) {
-      collectedItems = collectedItems.filter((item) => item[metricKey] && item[metricKey] > 0);
-      collectedItems.sort((a, b) => b[metricKey] - a[metricKey]);
+      collectedItems.sort((a, b) => {
+        const left = Number(a[metricKey]) || 0;
+        const right = Number(b[metricKey]) || 0;
+        const leftHasMetric = left > 0;
+        const rightHasMetric = right > 0;
+
+        if (leftHasMetric !== rightHasMetric) {
+          return rightHasMetric ? 1 : -1;
+        }
+
+        return right - left;
+      });
     }
   }
 
