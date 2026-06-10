@@ -314,27 +314,6 @@ function normalizeHistoryPoints(points) {
     .slice(-365);
 }
 
-function appendCurrentRapPoint(history, rap) {
-  const currentRap = Number(rap);
-
-  if (!Number.isFinite(currentRap) || currentRap <= 0) {
-    return history;
-  }
-
-  const today = new Date().toISOString();
-  const lastPoint = history[history.length - 1];
-
-  if (lastPoint && Date.parse(lastPoint.date) > Date.now() - 60 * 60 * 1000) {
-    return history;
-  }
-
-  return history.concat({
-    value: currentRap,
-    date: today,
-    live: true,
-  }).slice(-365);
-}
-
 function findHistoryBaselineValue(history, days) {
   if (!Array.isArray(history) || history.length === 0) {
     return null;
@@ -837,7 +816,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     resale.recentAveragePrice
   );
 
-  const history = appendCurrentRapPoint(normalizeHistoryPoints(resale.priceDataPoints), rap);
+  const history = normalizeHistoryPoints(resale.priceDataPoints);
 
   const data = {
     assetId: safeAssetId,
