@@ -60,6 +60,11 @@ function firstNonNegativeNumber(...values) {
   return null;
 }
 
+function parseOptionalNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function normalizeLimit(limit) {
   const requested = Number(limit) || 30;
   return ALLOWED_LIMITS.reduce((best, current) => {
@@ -98,7 +103,8 @@ async function fetchJson(url) {
 
 function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
-  const sortType = sort === "price_asc" ? "4" : sort === "price_desc" || sort === "rap_desc" ? "5" : "3";
+  const metricSorts = ["price_desc", "rap_desc", "deal_desc", "loss_24h", "loss_7d", "loss_30d", "loss_all"];
+  const sortType = sort === "price_asc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // All + salesTypeFilter=2 covers accessories, faces/heads, and bundle-like collectible results.
   url.searchParams.set("category", "All");
@@ -160,6 +166,38 @@ function normalizeHistoryPoints(points) {
     }));
 }
 
+function findHistoryValueAtLeastDaysAgo(history, days) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return null;
+  }
+
+  const targetTime = Date.now() - days * 24 * 60 * 60 * 1000;
+  let best = null;
+
+  for (const point of history) {
+    const value = Number(point.value);
+    const time = Date.parse(point.date || "");
+
+    if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(time)) {
+      continue;
+    }
+
+    if (time <= targetTime) {
+      best = value;
+    }
+  }
+
+  return best ?? Number(history[0]?.value) ?? null;
+}
+
+function percentDrop(fromValue, toValue) {
+  if (!fromValue || !toValue || fromValue <= 0 || toValue <= 0 || toValue >= fromValue) {
+    return null;
+  }
+
+  return Math.round(((fromValue - toValue) / fromValue) * 10000) / 100;
+}
+
 function tokenizeKeyword(keyword) {
   return String(keyword || "")
     .toLowerCase()
@@ -199,6 +237,15 @@ function buildItemFromCatalog(item, resale, marketType) {
     item.rap,
     resale.recentAveragePrice
   );
+  const history = normalizeHistoryPoints(resale.priceDataPoints);
+  const dealPercent = rap && lowestPrice > 0 && lowestPrice < rap
+    ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
+    : null;
+  const firstHistoryValue = history.length > 0 ? Number(history[0].value) : null;
+  const lossAllTime = percentDrop(firstHistoryValue, rap);
+  const loss24h = percentDrop(findHistoryValueAtLeastDaysAgo(history, 1), rap);
+  const loss7d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 7), rap);
+  const loss30d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 30), rap);
   const availableCopies = firstNonNegativeNumber(
     item.unitsAvailableForConsumption,
     resale.numberRemaining
@@ -220,6 +267,11 @@ function buildItemFromCatalog(item, resale, marketType) {
     thumbnail: `rbxthumb://type=${thumbnailType}&id=${assetId}&w=420&h=420`,
     creatorName: String(item.creatorName || ""),
     itemType,
+    dealPercent,
+    loss24h,
+    loss7d,
+    loss30d,
+    lossAllTime,
     marketType,
   };
 }
@@ -268,14 +320,48 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   return data;
 }
 
-async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc", sort = "updated" }) {
+async function fetchCatalogPage({
+  cursor = "",
+  limit = 30,
+  keyword = "",
+  marketType = "ugc",
+  sort = "updated",
+  minPrice = null,
+  maxPrice = null,
+  minRap = null,
+  maxRap = null,
+}) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
   const keywordTokens = tokenizeKeyword(safeKeyword);
   const catalogKeyword = chooseCatalogKeyword(keywordTokens, safeKeyword);
   const safeMarketType = marketType === "roblox" ? "roblox" : "ugc";
-  const safeSort = ["price_asc", "price_desc", "rap_desc", "updated"].includes(sort) ? sort : "updated";
-  const cacheKey = `${safeMarketType}:${safeSort}:${safeKeyword}:${cursor}:${safeLimit}`;
+  const safeSort = [
+    "price_asc",
+    "price_desc",
+    "rap_desc",
+    "deal_desc",
+    "loss_24h",
+    "loss_7d",
+    "loss_30d",
+    "loss_all",
+    "updated",
+  ].includes(sort) ? sort : "updated";
+  const safeMinPrice = parseOptionalNumber(minPrice);
+  const safeMaxPrice = parseOptionalNumber(maxPrice);
+  const safeMinRap = parseOptionalNumber(minRap);
+  const safeMaxRap = parseOptionalNumber(maxRap);
+  const cacheKey = [
+    safeMarketType,
+    safeSort,
+    safeKeyword,
+    cursor,
+    safeLimit,
+    safeMinPrice ?? "",
+    safeMaxPrice ?? "",
+    safeMinRap ?? "",
+    safeMaxRap ?? "",
+  ].join(":");
   const cached = pageCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
@@ -286,9 +372,17 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
   let previousPageCursor = "";
   let collectedItems = [];
 
-  const maxPages = keywordTokens.length > 0 ? 6 : safeSort === "rap_desc" ? 6 : 3;
+  const needsMetricScan = ["rap_desc", "deal_desc", "loss_24h", "loss_7d", "loss_30d", "loss_all"].includes(safeSort)
+    || safeMinRap !== null
+    || safeMaxRap !== null;
+  const hasRangeFilter = safeMinPrice !== null
+    || safeMaxPrice !== null
+    || safeMinRap !== null
+    || safeMaxRap !== null;
+  const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0;
+  const maxPages = keywordTokens.length > 0 ? 8 : needsMetricScan || hasRangeFilter ? 8 : 3;
 
-  for (let page = 0; page < maxPages && collectedItems.length < safeLimit; page += 1) {
+  for (let page = 0; page < maxPages && (shouldScanFullWindow || collectedItems.length < safeLimit); page += 1) {
     const catalog = await fetchJson(buildCatalogUrl({
       cursor: page === 0 ? cursor : nextPageCursor,
       limit: safeLimit,
@@ -339,6 +433,14 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
     }
   }
 
+  collectedItems = collectedItems.filter((item) => {
+    if (safeMinPrice !== null && item.lowestPrice < safeMinPrice) return false;
+    if (safeMaxPrice !== null && item.lowestPrice > safeMaxPrice) return false;
+    if (safeMinRap !== null && (!item.rap || item.rap < safeMinRap)) return false;
+    if (safeMaxRap !== null && (!item.rap || item.rap > safeMaxRap)) return false;
+    return true;
+  });
+
   if (safeSort === "price_asc") {
     collectedItems.sort((a, b) => a.lowestPrice - b.lowestPrice);
   } else if (safeSort === "price_desc") {
@@ -346,6 +448,21 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
   } else if (safeSort === "rap_desc") {
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
     collectedItems.sort((a, b) => b.rap - a.rap);
+  } else if (safeSort === "deal_desc") {
+    collectedItems = collectedItems.filter((item) => item.dealPercent && item.dealPercent > 0);
+    collectedItems.sort((a, b) => b.dealPercent - a.dealPercent);
+  } else if (safeSort === "loss_24h") {
+    collectedItems = collectedItems.filter((item) => item.loss24h && item.loss24h > 0);
+    collectedItems.sort((a, b) => b.loss24h - a.loss24h);
+  } else if (safeSort === "loss_7d") {
+    collectedItems = collectedItems.filter((item) => item.loss7d && item.loss7d > 0);
+    collectedItems.sort((a, b) => b.loss7d - a.loss7d);
+  } else if (safeSort === "loss_30d") {
+    collectedItems = collectedItems.filter((item) => item.loss30d && item.loss30d > 0);
+    collectedItems.sort((a, b) => b.loss30d - a.loss30d);
+  } else if (safeSort === "loss_all") {
+    collectedItems = collectedItems.filter((item) => item.lossAllTime && item.lossAllTime > 0);
+    collectedItems.sort((a, b) => b.lossAllTime - a.lossAllTime);
   }
 
   const data = {
@@ -380,6 +497,10 @@ async function handleRequest(req, res) {
         keyword: url.searchParams.get("keyword") || "",
         marketType: url.searchParams.get("type") || "ugc",
         sort: url.searchParams.get("sort") || "updated",
+        minPrice: url.searchParams.get("minPrice"),
+        maxPrice: url.searchParams.get("maxPrice"),
+        minRap: url.searchParams.get("minRap"),
+        maxRap: url.searchParams.get("maxRap"),
       });
 
       sendJson(res, 200, data);
