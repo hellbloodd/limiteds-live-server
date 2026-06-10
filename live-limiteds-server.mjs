@@ -888,17 +888,14 @@ async function addHistoryMetrics(item) {
 async function addHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
-  return mapWithConcurrency(items, 4, async (item) => {
-    const resale = await fetchResaleData(item.assetId);
+  return items.map((item) => {
     const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
-    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+    const rap = firstPositiveNumber(item.rap);
     const metrics = buildRapChangeMetrics(ownHistory, rap);
 
     return {
       ...item,
       rap,
-      lowestPrice: firstNumber(resale.lowestResalePrice, item.lowestPrice),
-      availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
       lossAllTime: metrics.lossAllTime,
       loss24h: metrics.loss24h,
       loss7d: metrics.loss7d,
@@ -968,8 +965,10 @@ async function fetchRolimonsCatalogPage({
     const scanWindow = sort === "deal_desc"
       ? interleaveForCoverage(items).slice(0, scanSize)
       : items.slice(0, scanSize);
-    const needsLiveResalePrice = sort === "price_asc" || sort === "price_desc" || sort === "deal_desc";
-    let enriched = needsLiveResalePrice
+    const needsLiveResalePrice = !metricKey && (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc");
+    let enriched = metricKey
+      ? scanWindow
+      : needsLiveResalePrice
       ? await enrichRolimonsItemsWithCatalogDetails(scanWindow)
       : await mapWithConcurrency(
         scanWindow,
