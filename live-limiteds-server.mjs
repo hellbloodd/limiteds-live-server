@@ -487,10 +487,10 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
   ]);
   const collectibleDetails = details.CollectiblesItemDetails || {};
   const rap = firstPositiveNumber(
-    resale.recentAveragePrice,
+    item.rap,
     details.RecentAveragePrice,
     collectibleDetails.RecentAveragePrice,
-    item.rap
+    resale.recentAveragePrice
   );
   const lowestPrice = firstNumber(
     collectibleDetails.CollectibleLowestResalePrice,
@@ -523,8 +523,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items) {
       item.lowestPrice
     );
     const rap = firstPositiveNumber(
-      details.recentAveragePrice,
-      item.rap
+      item.rap,
+      details.recentAveragePrice
     );
 
     return {
@@ -545,7 +545,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items) {
 async function addHistoryMetrics(item) {
   const resale = await fetchResaleData(item.assetId);
   const history = normalizeHistoryPoints(resale.priceDataPoints);
-  const rap = firstPositiveNumber(resale.recentAveragePrice, item.rap);
+  const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
   const baselineAll = findHistoryBaselineValue(history, null);
   const baseline24h = findHistoryBaselineValue(history, 1);
   const baseline7d = findHistoryBaselineValue(history, 7);
@@ -806,6 +806,9 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     ? await fetchResaleData(safeAssetId)
     : {};
   const details = safeAssetId > 0 ? await fetchEconomyDetails(safeAssetId) : {};
+  const catalogDetails = marketType === "roblox" && safeAssetId > 0
+    ? (await fetchCatalogDetailsBatch([safeAssetId])).get(safeAssetId) || {}
+    : {};
   let rolimonsItem = null;
 
   if (marketType === "roblox" && safeAssetId > 0) {
@@ -820,27 +823,30 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   const collectibleDetails = details.CollectiblesItemDetails || {};
   const creator = details.Creator || {};
   const lowestPrice = firstNumber(
+    catalogDetails.lowestResalePrice,
+    catalogDetails.lowestPrice,
     collectibleDetails.CollectibleLowestResalePrice,
     details.PriceInRobux,
     resale.lowestResalePrice
   );
   const rap = firstPositiveNumber(
-    resale.recentAveragePrice,
+    rolimonsItem?.rap,
+    catalogDetails.recentAveragePrice,
     details.RecentAveragePrice,
     collectibleDetails.RecentAveragePrice,
-    rolimonsItem?.rap
+    resale.recentAveragePrice
   );
 
   const history = appendCurrentRapPoint(normalizeHistoryPoints(resale.priceDataPoints), rap);
 
   const data = {
     assetId: safeAssetId,
-    name: String(details.Name || rolimonsItem?.name || "Unknown Limited"),
+    name: String(catalogDetails.name || details.Name || rolimonsItem?.name || "Unknown Limited"),
     rap,
     lowestPrice,
-    availableCopies: firstNonNegativeNumber(resale.numberRemaining),
-    totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, resale.assetStock),
-    creatorName: String(creator.Name || ""),
+    availableCopies: firstNonNegativeNumber(catalogDetails.unitsAvailableForConsumption, resale.numberRemaining),
+    totalCopies: firstPositiveNumber(catalogDetails.totalQuantity, collectibleDetails.TotalQuantity, resale.assetStock),
+    creatorName: String(catalogDetails.creatorName || creator.Name || ""),
     thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
     history,
     volumeHistory: normalizeHistoryPoints(resale.volumeDataPoints),
