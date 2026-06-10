@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 30_000);
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 120_000);
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ALLOWED_LIMITS = [10, 28, 30];
@@ -72,12 +72,22 @@ function sleep(ms) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "LimitedsLiveMarketViewer/1.0",
-    },
-  });
+  let response;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "LimitedsLiveMarketViewer/1.0",
+      },
+    });
+
+    if (response.status !== 429) {
+      break;
+    }
+
+    await sleep(350 + attempt * 500);
+  }
 
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
@@ -90,9 +100,8 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
   const sortType = sort === "price_asc" ? "4" : sort === "price_desc" || sort === "rap_desc" ? "5" : "3";
 
-  // The details endpoint does not accept Category=Collectibles.
-  // Accessories + salesTypeFilter=2 returns collectible/resellable catalog items.
-  url.searchParams.set("category", "Accessories");
+  // All + salesTypeFilter=2 covers accessories, faces/heads, and bundle-like collectible results.
+  url.searchParams.set("category", "All");
   url.searchParams.set("salesTypeFilter", "2");
   url.searchParams.set("sortType", sortType);
   url.searchParams.set("limit", String(limit));
@@ -151,6 +160,31 @@ function normalizeHistoryPoints(points) {
     }));
 }
 
+function tokenizeKeyword(keyword) {
+  return String(keyword || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function matchesAllKeywordTokens(item, tokens) {
+  if (tokens.length === 0) {
+    return true;
+  }
+
+  const haystack = String(item.name || item.itemName || "").toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
+function chooseCatalogKeyword(tokens, fallback) {
+  if (tokens.length === 0) {
+    return fallback;
+  }
+
+  return tokens.reduce((best, token) => token.length > best.length ? token : best, tokens[0]);
+}
+
 function buildItemFromCatalog(item, resale, marketType) {
   const assetId = normalizeNumber(item.id || item.assetId);
   const lowestPrice = firstNumber(
@@ -173,6 +207,8 @@ function buildItemFromCatalog(item, resale, marketType) {
     item.totalQuantity,
     resale.assetStock
   );
+  const itemType = String(item.itemType || "Asset");
+  const thumbnailType = itemType === "Bundle" ? "BundleThumbnail" : "Asset";
 
   return {
     assetId,
@@ -181,8 +217,9 @@ function buildItemFromCatalog(item, resale, marketType) {
     lowestPrice,
     availableCopies,
     totalCopies,
-    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    thumbnail: `rbxthumb://type=${thumbnailType}&id=${assetId}&w=420&h=420`,
     creatorName: String(item.creatorName || ""),
+    itemType,
     marketType,
   };
 }
@@ -234,6 +271,8 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
 async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc", sort = "updated" }) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
+  const keywordTokens = tokenizeKeyword(safeKeyword);
+  const catalogKeyword = chooseCatalogKeyword(keywordTokens, safeKeyword);
   const safeMarketType = marketType === "roblox" ? "roblox" : "ugc";
   const safeSort = ["price_asc", "price_desc", "rap_desc", "updated"].includes(sort) ? sort : "updated";
   const cacheKey = `${safeMarketType}:${safeSort}:${safeKeyword}:${cursor}:${safeLimit}`;
@@ -247,11 +286,13 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
   let previousPageCursor = "";
   let collectedItems = [];
 
-  for (let page = 0; page < 10 && collectedItems.length < safeLimit; page += 1) {
+  const maxPages = keywordTokens.length > 0 ? 6 : safeSort === "rap_desc" ? 6 : 3;
+
+  for (let page = 0; page < maxPages && collectedItems.length < safeLimit; page += 1) {
     const catalog = await fetchJson(buildCatalogUrl({
       cursor: page === 0 ? cursor : nextPageCursor,
       limit: safeLimit,
-      keyword: safeKeyword,
+      keyword: catalogKeyword,
       marketType: safeMarketType,
       sort: safeSort,
     }));
@@ -265,6 +306,10 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
     nextPageCursor = catalog.nextPageCursor || "";
 
     const matchingItems = rawItems.filter((item) => {
+        if (!matchesAllKeywordTokens(item, keywordTokens)) {
+          return false;
+        }
+
         if (safeMarketType === "ugc") {
           return item.creatorTargetId !== 1 || item.creatorName !== "Roblox";
         }
