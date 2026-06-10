@@ -507,10 +507,29 @@ function buildComparableRapHistory(ownHistory, currentRap) {
     .slice(-1000);
 }
 
-function buildRapChangeMetrics(ownHistory, currentRap) {
-  const history = buildComparableRapHistory(ownHistory, currentRap);
+function buildRawComparableRapHistory(ownHistory, currentRap) {
+  const points = Array.isArray(ownHistory) ? ownHistory.slice() : [];
+  const rap = Number(currentRap);
 
-  if (history.length < 2) {
+  if (Number.isFinite(rap) && rap > 0) {
+    points.push({
+      value: rap,
+      date: new Date().toISOString(),
+      source: "current",
+    });
+  }
+
+  return points
+    .filter((point) => Number(point.value) > 0 && Number.isFinite(Date.parse(point.date || "")))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+    .slice(-5000);
+}
+
+function buildRapChangeMetrics(ownHistory, currentRap) {
+  const rawHistory = buildRawComparableRapHistory(ownHistory, currentRap);
+  const history = compactHistoryByDay(rawHistory).slice(-1000);
+
+  if (rawHistory.length < 2) {
     return {
       history,
       lossAllTime: null,
@@ -527,24 +546,29 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
   }
 
   const rap = Number(currentRap);
-  const baselineAll = findHistoryBaselineValue(history, null);
-  const baseline24h = findHistoryBaselineValue(history, 1);
-  const baseline7d = findHistoryBaselineValue(history, 7);
-  const baseline30d = findHistoryBaselineValue(history, 30);
-  const baseline1y = findHistoryBaselineValue(history, 365);
+  const baselineAll = findHistoryBaselineValue(rawHistory, null);
+  const baseline24h = findHistoryBaselineValue(rawHistory, 1);
+  const baseline7d = findHistoryBaselineValue(rawHistory, 7);
+  const baseline30d = findHistoryBaselineValue(rawHistory, 30);
+  const baseline1y = findHistoryBaselineValue(rawHistory, 365);
+  const changeAll = percentChange(baselineAll, rap);
+  const change24h = percentChange(baseline24h, rap);
+  const change7d = percentChange(baseline7d, rap);
+  const change30d = percentChange(baseline30d, rap);
+  const change1y = percentChange(baseline1y, rap);
 
   return {
     history,
-    lossAllTime: percentDrop(baselineAll, rap),
-    loss24h: percentDrop(baseline24h, rap),
-    loss7d: percentDrop(baseline7d, rap),
-    loss30d: percentDrop(baseline30d, rap),
-    loss1y: percentDrop(baseline1y, rap),
-    profitAllTime: percentGain(baselineAll, rap),
-    profit24h: percentGain(baseline24h, rap),
-    profit7d: percentGain(baseline7d, rap),
-    profit30d: percentGain(baseline30d, rap),
-    profit1y: percentGain(baseline1y, rap),
+    lossAllTime: changeAll,
+    loss24h: change24h,
+    loss7d: change7d,
+    loss30d: change30d,
+    loss1y: change1y,
+    profitAllTime: changeAll,
+    profit24h: change24h,
+    profit7d: change7d,
+    profit30d: change30d,
+    profit1y: change1y,
   };
 }
 
@@ -921,6 +945,7 @@ async function fetchRolimonsCatalogPage({
     profit_all: "profitAllTime",
   };
   const metricKey = metricKeyBySort[sort];
+  const isLossSort = String(sort).startsWith("loss_");
 
   if (sort === "rap_desc" || sort === "deal_desc" || metricKey) {
     items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
@@ -954,16 +979,18 @@ async function fetchRolimonsCatalogPage({
     if (metricKey) {
       enriched = await addHistoryMetricsBatch(enriched);
       enriched.sort((a, b) => {
-        const left = Number(a[metricKey]) || 0;
-        const right = Number(b[metricKey]) || 0;
-        const leftHasMetric = left > 0;
-        const rightHasMetric = right > 0;
+        const leftRaw = Number(a[metricKey]);
+        const rightRaw = Number(b[metricKey]);
+        const leftHasMetric = Number.isFinite(leftRaw);
+        const rightHasMetric = Number.isFinite(rightRaw);
+        const left = leftHasMetric ? leftRaw : 0;
+        const right = rightHasMetric ? rightRaw : 0;
 
         if (leftHasMetric !== rightHasMetric) {
           return rightHasMetric ? 1 : -1;
         }
 
-        return right - left;
+        return isLossSort ? left - right : right - left;
       });
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => item.dealPercent && item.dealPercent > 0);
@@ -1424,19 +1451,22 @@ async function fetchCatalogPage({
       profit_all: "profitAllTime",
     };
     const metricKey = metricKeyBySort[safeSort];
+    const isLossSort = String(safeSort).startsWith("loss_");
 
     if (metricKey) {
       collectedItems.sort((a, b) => {
-        const left = Number(a[metricKey]) || 0;
-        const right = Number(b[metricKey]) || 0;
-        const leftHasMetric = left > 0;
-        const rightHasMetric = right > 0;
+        const leftRaw = Number(a[metricKey]);
+        const rightRaw = Number(b[metricKey]);
+        const leftHasMetric = Number.isFinite(leftRaw);
+        const rightHasMetric = Number.isFinite(rightRaw);
+        const left = leftHasMetric ? leftRaw : 0;
+        const right = rightHasMetric ? rightRaw : 0;
 
         if (leftHasMetric !== rightHasMetric) {
           return rightHasMetric ? 1 : -1;
         }
 
-        return right - left;
+        return isLossSort ? left - right : right - left;
       });
     }
   }
