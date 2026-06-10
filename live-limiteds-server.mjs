@@ -1,3 +1,53 @@
+// Local/prod backend for the Roblox Limiteds Live UI.
+// Run with: node live-limiteds-server.mjs
+//
+// The Roblox client calls this server, not Roblox marketplace APIs directly.
+// Deploy it to a public HTTPS host before using it in a published Roblox game.
+
+const PORT = Number(process.env.PORT || 8787);
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 30_000);
+const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
+const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
+const ALLOWED_LIMITS = [10, 28, 30];
+
+const pageCache = new Map();
+const resaleCache = new Map();
+
+function sendJson(res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(json);
+}
+
+function normalizeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return 0;
+}
+
+function normalizeLimit(limit) {
+  const requested = Number(limit) || 30;
+  return ALLOWED_LIMITS.reduce((best, current) => {
+    return Math.abs(current - requested) < Math.abs(best - requested) ? current : best;
+  }, 30);
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
     headers: {
       Accept: "application/json",
       "User-Agent": "LimitedsLiveMarketViewer/1.0",
