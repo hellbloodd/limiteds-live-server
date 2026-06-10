@@ -4,8 +4,8 @@
 // The Roblox client calls this server, not Roblox marketplace APIs directly.
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
-const SERVER_VERSION = "snapshot-debug-2026-06-10-1";
 const PORT = Number(process.env.PORT || 8787);
+const SERVER_VERSION = "snapshot-debug-2026-06-10-1";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -26,6 +26,7 @@ const detailCache = new Map();
 let rolimonsCache = null;
 let robloxCsrfToken = "";
 let lastSnapshotRunAt = 0;
+let lastSnapshotAttemptAt = 0;
 let snapshotRunning = false;
 let memorySnapshots = [];
 
@@ -444,11 +445,47 @@ function normalizeSnapshotRows(rows) {
     .filter((point) => point.value > 0 && Number.isFinite(Date.parse(point.date)));
 }
 
+function dateKeyFromPoint(point) {
+  const time = Date.parse(point.date || "");
+
+  if (!Number.isFinite(time)) {
+    return "";
+  }
+
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+function compactHistoryByDay(points) {
+  const latestPointByDay = new Map();
+
+  for (const point of points) {
+    const key = dateKeyFromPoint(point);
+
+    if (!key) {
+      continue;
+    }
+
+    const current = latestPointByDay.get(key);
+    const currentTime = current ? Date.parse(current.date || "") : 0;
+    const pointTime = Date.parse(point.date || "");
+
+    if (!current || pointTime >= currentTime) {
+      latestPointByDay.set(key, {
+        ...point,
+        date: key,
+      });
+    }
+  }
+
+  return [...latestPointByDay.values()]
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+}
+
 function mergeHistoryPoints(...histories) {
-  return histories
+  return compactHistoryByDay(histories
     .flat()
     .filter((point) => Number(point.value) > 0 && Number.isFinite(Date.parse(point.date || "")))
-    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date)))
     .slice(-1000);
 }
 
@@ -535,6 +572,7 @@ async function runSnapshotJob() {
   }
 
   snapshotRunning = true;
+  lastSnapshotAttemptAt = Date.now();
 
   try {
     console.log("Snapshot started.");
@@ -583,6 +621,10 @@ function maybeRunSnapshotInBackground() {
   }
 
   if (Date.now() - lastSnapshotRunAt < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  if (Date.now() - lastSnapshotAttemptAt < 5 * 60 * 1000) {
     return;
   }
 
@@ -1389,10 +1431,12 @@ async function handleRequest(req, res) {
   if (url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
+      version: SERVER_VERSION,
       snapshots: {
         enabled: snapshotStorageEnabled(),
         running: snapshotRunning,
         lastRunAt: lastSnapshotRunAt ? new Date(lastSnapshotRunAt).toISOString() : "",
+        lastAttemptAt: lastSnapshotAttemptAt ? new Date(lastSnapshotAttemptAt).toISOString() : "",
         storedIn: snapshotStorageEnabled() ? "supabase" : "memory",
       },
     });
@@ -1471,5 +1515,5 @@ createServer((req, res) => {
     sendJson(res, 500, { error: "Server error", detail: error.message });
   });
 }).listen(PORT, () => {
-  console.log(`Limiteds Live server running on http://localhost:${PORT}`);
+  console.log(`Limiteds Live server ${SERVER_VERSION} running on http://localhost:${PORT}`);
 });
