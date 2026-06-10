@@ -12,6 +12,7 @@ const ALLOWED_LIMITS = [10, 28, 30];
 
 const pageCache = new Map();
 const resaleCache = new Map();
+const detailCache = new Map();
 
 function sendJson(res, status, body) {
   const json = JSON.stringify(body);
@@ -49,11 +50,25 @@ function firstPositiveNumber(...values) {
   return null;
 }
 
+function firstNonNegativeNumber(...values) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 function normalizeLimit(limit) {
   const requested = Number(limit) || 30;
   return ALLOWED_LIMITS.reduce((best, current) => {
     return Math.abs(current - requested) < Math.abs(best - requested) ? current : best;
   }, 30);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchJson(url) {
@@ -73,7 +88,7 @@ async function fetchJson(url) {
 
 function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
-  const sortType = sort === "price_asc" ? "4" : sort === "price_desc" ? "5" : "3";
+  const sortType = sort === "price_asc" ? "4" : sort === "price_desc" || sort === "rap_desc" ? "5" : "3";
 
   // The details endpoint does not accept Category=Collectibles.
   // Accessories + salesTypeFilter=2 returns collectible/resellable catalog items.
@@ -114,11 +129,113 @@ async function fetchResaleData(assetId) {
   }
 }
 
+async function fetchEconomyDetails(assetId) {
+  try {
+    return await fetchJson(`https://economy.roblox.com/v2/assets/${assetId}/details`);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeHistoryPoints(points) {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+
+  return points
+    .filter((point) => typeof point.value === "number" && point.value > 0)
+    .slice(-180)
+    .map((point) => ({
+      value: point.value,
+      date: String(point.date || ""),
+    }));
+}
+
+function buildItemFromCatalog(item, resale, marketType) {
+  const assetId = normalizeNumber(item.id || item.assetId);
+  const lowestPrice = firstNumber(
+    item.lowestResalePrice,
+    item.lowestPrice,
+    item.price,
+    resale.lowestResalePrice,
+    item.priceStatus === "Off Sale" ? 0 : undefined
+  );
+  const rap = firstPositiveNumber(
+    item.recentAveragePrice,
+    item.rap,
+    resale.recentAveragePrice
+  );
+  const availableCopies = firstNonNegativeNumber(
+    item.unitsAvailableForConsumption,
+    resale.numberRemaining
+  );
+  const totalCopies = firstPositiveNumber(
+    item.totalQuantity,
+    resale.assetStock
+  );
+
+  return {
+    assetId,
+    name: String(item.name || item.itemName || "Unknown Limited"),
+    rap,
+    lowestPrice,
+    availableCopies,
+    totalCopies,
+    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    creatorName: String(item.creatorName || ""),
+    marketType,
+  };
+}
+
+async function fetchItemDetails(assetId, marketType = "ugc") {
+  const safeAssetId = normalizeNumber(Number(assetId));
+  const cacheKey = `${safeAssetId}:${marketType}`;
+  const cached = detailCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const resale = safeAssetId > 0 && safeAssetId < 10000000000
+    ? await fetchResaleData(safeAssetId)
+    : {};
+  const details = safeAssetId > 0 ? await fetchEconomyDetails(safeAssetId) : {};
+  const collectibleDetails = details.CollectiblesItemDetails || {};
+  const creator = details.Creator || {};
+  const lowestPrice = firstNumber(
+    collectibleDetails.CollectibleLowestResalePrice,
+    details.PriceInRobux,
+    resale.lowestResalePrice
+  );
+  const rap = firstPositiveNumber(
+    resale.recentAveragePrice,
+    details.RecentAveragePrice,
+    collectibleDetails.RecentAveragePrice
+  );
+
+  const data = {
+    assetId: safeAssetId,
+    name: String(details.Name || "Unknown Limited"),
+    rap,
+    lowestPrice,
+    availableCopies: firstNonNegativeNumber(resale.numberRemaining),
+    totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, resale.assetStock),
+    creatorName: String(creator.Name || ""),
+    thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
+    history: normalizeHistoryPoints(resale.priceDataPoints),
+    volumeHistory: normalizeHistoryPoints(resale.volumeDataPoints),
+    marketType,
+  };
+
+  detailCache.set(cacheKey, { fetchedAt: Date.now(), data });
+  return data;
+}
+
 async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketType = "ugc", sort = "updated" }) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
   const safeMarketType = marketType === "roblox" ? "roblox" : "ugc";
-  const safeSort = ["price_asc", "price_desc", "updated"].includes(sort) ? sort : "updated";
+  const safeSort = ["price_asc", "price_desc", "rap_desc", "updated"].includes(sort) ? sort : "updated";
   const cacheKey = `${safeMarketType}:${safeSort}:${safeKeyword}:${cursor}:${safeLimit}`;
   const cached = pageCache.get(cacheKey);
 
@@ -147,43 +264,26 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
 
     nextPageCursor = catalog.nextPageCursor || "";
 
-    const pageItems = await Promise.all(
-      rawItems
-        .filter((item) => {
+    const matchingItems = rawItems.filter((item) => {
         if (safeMarketType === "ugc") {
           return item.creatorTargetId !== 1 || item.creatorName !== "Roblox";
         }
 
         return item.creatorTargetId === 1 && item.creatorName === "Roblox";
-        })
-        .map(async (item) => {
-        const assetId = normalizeNumber(item.id || item.assetId);
-        const shouldFetchClassicResaleData = assetId > 0 && assetId < 10000000000;
-        const resale = shouldFetchClassicResaleData ? await fetchResaleData(assetId) : {};
-        const lowestPrice = firstNumber(
-          item.lowestResalePrice,
-          item.lowestPrice,
-          item.price,
-          resale.lowestResalePrice,
-          item.priceStatus === "Off Sale" ? 0 : undefined
-        );
-        const rap = firstPositiveNumber(
-          item.recentAveragePrice,
-          item.rap,
-          resale.recentAveragePrice
-        );
+    });
 
-        return {
-          assetId,
-          name: String(item.name || item.itemName || "Unknown Limited"),
-          rap,
-          lowestPrice,
-          thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
-          creatorName: String(item.creatorName || ""),
-          marketType: safeMarketType,
-        };
-      })
-    );
+    const pageItems = [];
+
+    for (const item of matchingItems) {
+      const assetId = normalizeNumber(item.id || item.assetId);
+      const shouldFetchClassicResaleData = safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000;
+      const resale = shouldFetchClassicResaleData ? await fetchResaleData(assetId) : {};
+      pageItems.push(buildItemFromCatalog(item, resale, safeMarketType));
+
+      if (shouldFetchClassicResaleData) {
+        await sleep(35);
+      }
+    }
 
     collectedItems = collectedItems.concat(
       pageItems.filter((item) => item.assetId > 0 && item.lowestPrice > 0)
@@ -198,6 +298,9 @@ async function fetchCatalogPage({ cursor = "", limit = 30, keyword = "", marketT
     collectedItems.sort((a, b) => a.lowestPrice - b.lowestPrice);
   } else if (safeSort === "price_desc") {
     collectedItems.sort((a, b) => b.lowestPrice - a.lowestPrice);
+  } else if (safeSort === "rap_desc") {
+    collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
+    collectedItems.sort((a, b) => b.rap - a.rap);
   }
 
   const data = {
@@ -238,6 +341,24 @@ async function handleRequest(req, res) {
     } catch (error) {
       sendJson(res, 502, {
         error: "Could not load Roblox limiteds right now.",
+        detail: error.message,
+      });
+    }
+
+    return;
+  }
+
+  if (url.pathname === "/api/item") {
+    try {
+      const data = await fetchItemDetails(
+        url.searchParams.get("assetId") || "0",
+        url.searchParams.get("type") || "ugc"
+      );
+
+      sendJson(res, 200, data);
+    } catch (error) {
+      sendJson(res, 502, {
+        error: "Could not load item details right now.",
         detail: error.message,
       });
     }
