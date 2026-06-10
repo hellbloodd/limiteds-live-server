@@ -8,6 +8,7 @@ const PORT = Number(process.env.PORT || 8787);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
+const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
@@ -15,8 +16,10 @@ const ALLOWED_LIMITS = [10, 28, 30];
 const pageCache = new Map();
 const resaleCache = new Map();
 const economyCache = new Map();
+const catalogDetailCache = new Map();
 const detailCache = new Map();
 let rolimonsCache = null;
+let robloxCsrfToken = "";
 
 function sendJson(res, status, body) {
   const json = JSON.stringify(body);
@@ -119,6 +122,103 @@ async function fetchJson(url, options = {}) {
   return response.json();
 }
 
+async function fetchCatalogDetailsChunk(assetIds) {
+  const body = JSON.stringify({
+    items: assetIds.map((assetId) => ({
+      itemType: "Asset",
+      id: assetId,
+    })),
+  });
+  let response;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const headers = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": "LimitedsLiveMarketViewer/1.0",
+    };
+
+    if (robloxCsrfToken) {
+      headers["x-csrf-token"] = robloxCsrfToken;
+    }
+
+    response = await fetch(ROBLOX_CATALOG_BATCH_URL, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const freshToken = response.headers.get("x-csrf-token");
+
+    if (freshToken) {
+      robloxCsrfToken = freshToken;
+    }
+
+    if (response.status === 403 && freshToken) {
+      continue;
+    }
+
+    if (response.status !== 429) {
+      break;
+    }
+
+    await sleep(1200 + attempt * 900);
+  }
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText} for ${ROBLOX_CATALOG_BATCH_URL}`);
+  }
+
+  return response.json();
+}
+
+async function fetchCatalogDetailsBatch(assetIds) {
+  const result = new Map();
+  const missing = [];
+
+  for (const assetId of assetIds) {
+    const cached = catalogDetailCache.get(assetId);
+
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+      result.set(assetId, cached.data);
+    } else if (assetId > 0) {
+      missing.push(assetId);
+    }
+  }
+
+  for (let index = 0; index < missing.length; index += 100) {
+    const chunk = missing.slice(index, index + 100);
+    let data;
+
+    try {
+      data = await fetchCatalogDetailsChunk(chunk);
+    } catch (error) {
+      if (result.size > 0) {
+        break;
+      }
+
+      throw error;
+    }
+
+    const rows = Array.isArray(data.data) ? data.data : [];
+
+    for (const row of rows) {
+      const assetId = normalizeNumber(row.id);
+
+      if (assetId > 0) {
+        catalogDetailCache.set(assetId, { fetchedAt: Date.now(), data: row });
+        result.set(assetId, row);
+      }
+    }
+
+    if (index + 100 < missing.length) {
+      await sleep(220);
+    }
+  }
+
+  return result;
+}
+
 function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
   const metricSorts = [
@@ -136,7 +236,7 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "profit_1y",
     "profit_all",
   ];
-  const sortType = sort === "price_asc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
+  const sortType = sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // All + salesTypeFilter=2 covers accessories, faces/heads, and bundle-like collectible results.
   url.searchParams.set("category", "All");
@@ -169,8 +269,8 @@ async function fetchResaleData(assetId) {
 
   try {
     const data = await fetchJson(`${ROBLOX_RESALE_URL}/${assetId}/resale-data`, {
-      retries: 1,
-      timeoutMs: 2500,
+      retries: 2,
+      timeoutMs: 5000,
     });
     resaleCache.set(assetId, { fetchedAt: Date.now(), data });
     return data;
@@ -205,20 +305,28 @@ function normalizeHistoryPoints(points) {
 
   return points
     .filter((point) => typeof point.value === "number" && point.value > 0)
-    .slice(-180)
     .map((point) => ({
       value: point.value,
       date: String(point.date || ""),
-    }));
+    }))
+    .filter((point) => Number.isFinite(Date.parse(point.date)))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+    .slice(-365);
 }
 
-function findHistoryValueAtLeastDaysAgo(history, days) {
+function findHistoryBaselineValue(history, days) {
   if (!Array.isArray(history) || history.length === 0) {
     return null;
   }
 
+  if (!days) {
+    return Number(history[0]?.value) || null;
+  }
+
   const targetTime = Date.now() - days * 24 * 60 * 60 * 1000;
-  let best = null;
+  let baseline = null;
+  let firstInsidePeriod = null;
+  let latestTime = 0;
 
   for (const point of history) {
     const value = Number(point.value);
@@ -228,28 +336,48 @@ function findHistoryValueAtLeastDaysAgo(history, days) {
       continue;
     }
 
+    latestTime = Math.max(latestTime, time);
+
     if (time <= targetTime) {
-      best = value;
+      baseline = value;
+    } else if (firstInsidePeriod === null) {
+      firstInsidePeriod = value;
     }
   }
 
-  return best ?? Number(history[0]?.value) ?? null;
-}
-
-function percentDrop(fromValue, toValue) {
-  if (!fromValue || !toValue || fromValue <= 0 || toValue <= 0 || toValue >= fromValue) {
+  if (latestTime > 0 && latestTime < targetTime) {
     return null;
   }
 
-  return Math.round(((fromValue - toValue) / fromValue) * 10000) / 100;
+  return baseline ?? firstInsidePeriod;
 }
 
-function percentGain(fromValue, toValue) {
-  if (!fromValue || !toValue || fromValue <= 0 || toValue <= fromValue) {
+function percentChange(fromValue, toValue) {
+  if (!fromValue || !toValue || fromValue <= 0 || toValue <= 0) {
     return null;
   }
 
   return Math.round(((toValue - fromValue) / fromValue) * 10000) / 100;
+}
+
+function percentDrop(fromValue, toValue) {
+  const change = percentChange(fromValue, toValue);
+
+  if (change === null || change >= 0) {
+    return null;
+  }
+
+  return Math.abs(change);
+}
+
+function percentGain(fromValue, toValue) {
+  const change = percentChange(fromValue, toValue);
+
+  if (change === null || change <= 0) {
+    return null;
+  }
+
+  return change;
 }
 
 function tokenizeKeyword(keyword) {
@@ -329,9 +457,9 @@ async function fetchRolimonsItems() {
   return items;
 }
 
-async function enrichRolimonsItem(item, includeResale = false) {
+async function enrichRolimonsItem(item, includeResale = false, includeDetails = true) {
   const [details, resale] = await Promise.all([
-    fetchEconomyDetails(item.assetId),
+    includeDetails ? fetchEconomyDetails(item.assetId) : {},
     includeResale && item.assetId > 0 && item.assetId < 10000000000
       ? fetchResaleData(item.assetId)
       : {},
@@ -362,27 +490,62 @@ async function enrichRolimonsItem(item, includeResale = false) {
   };
 }
 
+async function enrichRolimonsItemsWithCatalogDetails(items) {
+  const detailByAssetId = await fetchCatalogDetailsBatch(items.map((item) => item.assetId));
+
+  return items.map((item) => {
+    const details = detailByAssetId.get(item.assetId) || {};
+    const lowestPrice = firstNumber(
+      details.lowestResalePrice,
+      details.lowestPrice,
+      details.price,
+      item.lowestPrice
+    );
+    const rap = firstPositiveNumber(
+      details.recentAveragePrice,
+      item.rap
+    );
+
+    return {
+      ...item,
+      rap,
+      lowestPrice,
+      availableCopies: firstNonNegativeNumber(details.unitsAvailableForConsumption, item.availableCopies),
+      totalCopies: firstPositiveNumber(details.totalQuantity, item.totalCopies),
+      creatorName: String(details.creatorName || item.creatorName || "Roblox"),
+      itemType: String(details.itemType || item.itemType || "Asset"),
+      dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
+        ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
+        : null,
+    };
+  });
+}
+
 async function addHistoryMetrics(item) {
   const resale = await fetchResaleData(item.assetId);
   const history = normalizeHistoryPoints(resale.priceDataPoints);
-  const firstHistoryValue = history.length > 0 ? Number(history[0].value) : null;
   const rap = firstPositiveNumber(resale.recentAveragePrice, item.rap);
+  const baselineAll = findHistoryBaselineValue(history, null);
+  const baseline24h = findHistoryBaselineValue(history, 1);
+  const baseline7d = findHistoryBaselineValue(history, 7);
+  const baseline30d = findHistoryBaselineValue(history, 30);
+  const baseline1y = findHistoryBaselineValue(history, 365);
 
   return {
     ...item,
     rap,
     lowestPrice: firstNumber(resale.lowestResalePrice, item.lowestPrice),
     availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
-    lossAllTime: percentDrop(firstHistoryValue, rap),
-    loss24h: percentDrop(findHistoryValueAtLeastDaysAgo(history, 1), rap),
-    loss7d: percentDrop(findHistoryValueAtLeastDaysAgo(history, 7), rap),
-    loss30d: percentDrop(findHistoryValueAtLeastDaysAgo(history, 30), rap),
-    loss1y: percentDrop(findHistoryValueAtLeastDaysAgo(history, 365), rap),
-    profitAllTime: percentGain(firstHistoryValue, rap),
-    profit24h: percentGain(findHistoryValueAtLeastDaysAgo(history, 1), rap),
-    profit7d: percentGain(findHistoryValueAtLeastDaysAgo(history, 7), rap),
-    profit30d: percentGain(findHistoryValueAtLeastDaysAgo(history, 30), rap),
-    profit1y: percentGain(findHistoryValueAtLeastDaysAgo(history, 365), rap),
+    lossAllTime: percentDrop(baselineAll, rap),
+    loss24h: percentDrop(baseline24h, rap),
+    loss7d: percentDrop(baseline7d, rap),
+    loss30d: percentDrop(baseline30d, rap),
+    loss1y: percentDrop(baseline1y, rap),
+    profitAllTime: percentGain(baselineAll, rap),
+    profit24h: percentGain(baseline24h, rap),
+    profit7d: percentGain(baseline7d, rap),
+    profit30d: percentGain(baseline30d, rap),
+    profit1y: percentGain(baseline1y, rap),
   };
 }
 
@@ -434,10 +597,20 @@ async function fetchRolimonsCatalogPage({
   if (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc" || metricKey || minPrice !== null || maxPrice !== null) {
     const shouldScanAllMatches = keywordTokens.length > 0;
     const scanSize = shouldScanAllMatches
+      || sort === "deal_desc"
       ? items.length
       : Math.min(items.length, Math.max(offset + limit * 8, 240));
-    const scanWindow = items.slice(0, scanSize);
-    let enriched = await mapWithConcurrency(scanWindow, 8, enrichRolimonsItem);
+    const scanWindow = sort === "deal_desc"
+      ? interleaveForCoverage(items).slice(0, scanSize)
+      : items.slice(0, scanSize);
+    const needsLiveResalePrice = sort === "price_asc" || sort === "price_desc" || sort === "deal_desc";
+    let enriched = needsLiveResalePrice
+      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow)
+      : await mapWithConcurrency(
+        scanWindow,
+        8,
+        (item) => enrichRolimonsItem(item, false, true)
+      );
 
     if (metricKey) {
       enriched = await mapWithConcurrency(enriched, 4, addHistoryMetrics);
@@ -497,6 +670,39 @@ function cursorFromOffset(offset, total) {
   return offset < total ? `offset:${offset}` : "";
 }
 
+function interleaveForCoverage(items, bucketCount = 12) {
+  if (items.length <= bucketCount) {
+    return items;
+  }
+
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
+    const start = Math.floor((index * items.length) / bucketCount);
+    const end = Math.floor(((index + 1) * items.length) / bucketCount);
+    return items.slice(start, end);
+  });
+  const result = [];
+  let row = 0;
+
+  while (result.length < items.length) {
+    let added = false;
+
+    for (const bucket of buckets) {
+      if (bucket[row]) {
+        result.push(bucket[row]);
+        added = true;
+      }
+    }
+
+    if (!added) {
+      break;
+    }
+
+    row += 1;
+  }
+
+  return result;
+}
+
 function buildItemFromCatalog(item, resale, marketType) {
   const assetId = normalizeNumber(item.id || item.assetId);
   const lowestPrice = firstNumber(
@@ -515,17 +721,21 @@ function buildItemFromCatalog(item, resale, marketType) {
   const dealPercent = rap && lowestPrice > 0 && lowestPrice < rap
     ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
     : null;
-  const firstHistoryValue = history.length > 0 ? Number(history[0].value) : null;
-  const lossAllTime = percentDrop(firstHistoryValue, rap);
-  const loss24h = percentDrop(findHistoryValueAtLeastDaysAgo(history, 1), rap);
-  const loss7d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 7), rap);
-  const loss30d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 30), rap);
-  const loss1y = percentDrop(findHistoryValueAtLeastDaysAgo(history, 365), rap);
-  const profitAllTime = percentGain(firstHistoryValue, rap);
-  const profit24h = percentGain(findHistoryValueAtLeastDaysAgo(history, 1), rap);
-  const profit7d = percentGain(findHistoryValueAtLeastDaysAgo(history, 7), rap);
-  const profit30d = percentGain(findHistoryValueAtLeastDaysAgo(history, 30), rap);
-  const profit1y = percentGain(findHistoryValueAtLeastDaysAgo(history, 365), rap);
+  const baselineAll = findHistoryBaselineValue(history, null);
+  const baseline24h = findHistoryBaselineValue(history, 1);
+  const baseline7d = findHistoryBaselineValue(history, 7);
+  const baseline30d = findHistoryBaselineValue(history, 30);
+  const baseline1y = findHistoryBaselineValue(history, 365);
+  const lossAllTime = percentDrop(baselineAll, rap);
+  const loss24h = percentDrop(baseline24h, rap);
+  const loss7d = percentDrop(baseline7d, rap);
+  const loss30d = percentDrop(baseline30d, rap);
+  const loss1y = percentDrop(baseline1y, rap);
+  const profitAllTime = percentGain(baselineAll, rap);
+  const profit24h = percentGain(baseline24h, rap);
+  const profit7d = percentGain(baseline7d, rap);
+  const profit30d = percentGain(baseline30d, rap);
+  const profit1y = percentGain(baseline1y, rap);
   const availableCopies = firstNonNegativeNumber(
     item.unitsAvailableForConsumption,
     resale.numberRemaining
@@ -697,10 +907,14 @@ async function fetchCatalogPage({
     || safeMaxPrice !== null
     || safeMinRap !== null
     || safeMaxRap !== null;
+  const isChangeSort = safeSort.startsWith("loss_") || safeSort.startsWith("profit_");
   const isRobloxPriceSort = safeMarketType === "roblox"
     && (safeSort === "price_asc" || safeSort === "price_desc");
+  const isRobloxDealSort = safeMarketType === "roblox" && safeSort === "deal_desc";
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0;
-  const maxPages = keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : isRobloxPriceSort ? 40 : 1;
+  const maxPages = isRobloxPriceSort || isRobloxDealSort
+    ? 40
+    : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
@@ -781,7 +995,7 @@ async function fetchCatalogPage({
 
       for (const item of matchingItems) {
         const assetId = normalizeNumber(item.id || item.assetId);
-        const shouldFetchClassicResaleData = needsMetricScan && safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000;
+        const shouldFetchClassicResaleData = isChangeSort && safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000;
         const resale = shouldFetchClassicResaleData ? await fetchResaleData(assetId) : {};
         const builtItem = buildItemFromCatalog(item, resale, safeMarketType);
         const classicItem = classicItemByAssetId?.get(assetId);
