@@ -1,17 +1,19 @@
 // live-limiteds-server.mjs
-// Fast backend with real RAP snapshots for 24h / 7d / 30d / 1y profit-loss.
+// Fast backend with instant estimated profit/loss from Rolimon's,
+// then real profit/loss from your own RAP snapshots once enough time passes.
 
 const { createServer } = await import("node:http");
 const fs = await import("node:fs/promises");
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "fast-real-rap-history-2026-06-10";
+const SERVER_VERSION = "estimated-plus-real-profit-loss-2026-06-10";
 
 const SNAPSHOT_FILE = process.env.SNAPSHOT_FILE || "./rap-snapshots.json";
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 15 * 60 * 1000);
+
 const PAGE_CACHE_MS = Number(process.env.PAGE_CACHE_MS || 30_000);
-const ROLIMONS_CACHE_MS = Number(process.env.ROLIMONS_CACHE_MS || 120_000);
 const DETAIL_CACHE_MS = Number(process.env.DETAIL_CACHE_MS || 45_000);
+const ROLIMONS_CACHE_MS = Number(process.env.ROLIMONS_CACHE_MS || 120_000);
 
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
@@ -67,6 +69,18 @@ function firstNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return 0;
+}
+
+function percentChange(oldRap, currentRap) {
+  if (!oldRap || !currentRap || oldRap <= 0 || currentRap <= 0) return null;
+  return Math.round(((currentRap - oldRap) / oldRap) * 10000) / 100;
+}
+
+function splitChange(change) {
+  if (change === null || change === undefined) return { profit: null, loss: null };
+  if (change > 0) return { profit: change, loss: null };
+  if (change < 0) return { profit: null, loss: Math.abs(change) };
+  return { profit: null, loss: null };
 }
 
 function normalizeLimit(value) {
@@ -130,7 +144,7 @@ async function fetchJson(url, options = {}) {
         signal: controller.signal,
         headers: {
           Accept: "application/json",
-          "User-Agent": "LimitedsLiveRealHistory/1.0",
+          "User-Agent": "LimitedsLiveEstimatedReal/1.0",
           ...(options.headers || {}),
         },
       });
@@ -166,17 +180,15 @@ async function fetchRolimonsItems() {
       assetId: Number(assetId),
       name: String(values[0] || "Unknown Limited"),
       acronym: String(values[1] || ""),
-      rap: positive(values[2]),
-      value: positive(values[3]),
+      rolimonsRap: positive(values[2]),
+      rolimonsValue: positive(values[3]),
       lowestPrice: 0,
-      availableCopies: null,
-      totalCopies: null,
       creatorName: "Roblox",
       itemType: "Asset",
       marketType: "roblox",
       thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
     }))
-    .filter((item) => item.assetId > 0 && item.rap);
+    .filter((item) => item.assetId > 0 && item.rolimonsRap);
 
   rolimonsCache = {
     fetchedAt: Date.now(),
@@ -236,7 +248,7 @@ async function fetchCatalogDetailsChunk(assetIds) {
     const headers = {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "LimitedsLiveRealHistory/1.0",
+      "User-Agent": "LimitedsLiveEstimatedReal/1.0",
     };
 
     if (robloxCsrfToken) headers["x-csrf-token"] = robloxCsrfToken;
@@ -374,6 +386,7 @@ function addSnapshot(assetId, rap, time) {
   }
 
   const cutoff = Date.now() - 400 * 24 * 60 * 60 * 1000;
+
   while (list.length > 0 && list[0].time < cutoff) {
     list.shift();
   }
@@ -388,12 +401,11 @@ async function runSnapshotJob() {
     const now = Date.now();
 
     for (const item of items) {
-      addSnapshot(item.assetId, item.rap, now);
+      addSnapshot(item.assetId, item.rolimonsRap, now);
     }
 
     await saveSnapshots();
-
-    console.log(`Saved RAP snapshot for ${items.length} limiteds.`);
+    console.log(`Saved estimated RAP snapshot for ${items.length} limiteds.`);
   } catch (error) {
     console.warn(`Snapshot failed: ${error.message}`);
   } finally {
@@ -421,19 +433,18 @@ function findOldestSnapshot(assetId) {
   return list.length > 0 ? list[0] : null;
 }
 
-function percentChange(oldRap, currentRap) {
-  if (!oldRap || !currentRap || oldRap <= 0 || currentRap <= 0) return null;
-  return Math.round(((currentRap - oldRap) / oldRap) * 10000) / 100;
+function buildEstimatedMetrics(currentRap, rolimonsRap) {
+  const change = percentChange(rolimonsRap, currentRap);
+  const split = splitChange(change);
+
+  return {
+    estimatedChange: change,
+    estimatedProfit: split.profit,
+    estimatedLoss: split.loss,
+  };
 }
 
-function splitChange(change) {
-  if (change === null || change === undefined) return { profit: null, loss: null };
-  if (change > 0) return { profit: change, loss: null };
-  if (change < 0) return { profit: null, loss: Math.abs(change) };
-  return { profit: null, loss: null };
-}
-
-function buildSnapshotMetrics(assetId, currentRap) {
+function buildRealMetrics(assetId, currentRap) {
   const now = Date.now();
 
   const point24h = findSnapshotAtOrBefore(assetId, now - 1 * 24 * 60 * 60 * 1000);
@@ -475,8 +486,40 @@ function buildSnapshotMetrics(assetId, currentRap) {
   };
 }
 
+function buildCombinedMetrics(assetId, currentRap, rolimonsRap) {
+  const real = buildRealMetrics(assetId, currentRap);
+  const estimated = buildEstimatedMetrics(currentRap, rolimonsRap);
+
+  return {
+    ...real,
+
+    estimatedChange: estimated.estimatedChange,
+    estimatedProfit: estimated.estimatedProfit,
+    estimatedLoss: estimated.estimatedLoss,
+
+    profit24h: real.profit24h ?? estimated.estimatedProfit,
+    profit7d: real.profit7d ?? estimated.estimatedProfit,
+    profit30d: real.profit30d ?? estimated.estimatedProfit,
+    profit1y: real.profit1y ?? estimated.estimatedProfit,
+    profitAllTime: real.profitAllTime ?? estimated.estimatedProfit,
+
+    loss24h: real.loss24h ?? estimated.estimatedLoss,
+    loss7d: real.loss7d ?? estimated.estimatedLoss,
+    loss30d: real.loss30d ?? estimated.estimatedLoss,
+    loss1y: real.loss1y ?? estimated.estimatedLoss,
+    lossAllTime: real.lossAllTime ?? estimated.estimatedLoss,
+
+    metricSource24h: real.change24h === null ? "estimated_rolimons" : "real_snapshot",
+    metricSource7d: real.change7d === null ? "estimated_rolimons" : "real_snapshot",
+    metricSource30d: real.change30d === null ? "estimated_rolimons" : "real_snapshot",
+    metricSource1y: real.change1y === null ? "estimated_rolimons" : "real_snapshot",
+    metricSourceAll: real.changeAll === null ? "estimated_rolimons" : "real_snapshot",
+  };
+}
+
 function buildHistoryForClient(assetId, currentRap) {
   const list = snapshotsByAssetId.get(Number(assetId)) || [];
+
   const history = list.map((point) => ({
     value: point.rap,
     date: new Date(point.time).toISOString(),
@@ -551,7 +594,13 @@ function sortItems(items, sort) {
 
 function buildListItem(base, catalog = {}) {
   const assetId = Number(base.assetId);
-  const rap = firstPositive(catalog.recentAveragePrice, catalog.rap, base.rap);
+
+  const liveRap = firstPositive(
+    catalog.recentAveragePrice,
+    catalog.rap,
+    base.rolimonsRap
+  );
+
   const lowestPrice = firstNumber(
     catalog.lowestResalePrice,
     catalog.lowestPrice,
@@ -559,19 +608,20 @@ function buildListItem(base, catalog = {}) {
     base.lowestPrice
   );
 
-  const metrics = buildSnapshotMetrics(assetId, rap);
+  const metrics = buildCombinedMetrics(assetId, liveRap, base.rolimonsRap);
 
   const dealPercent =
-    rap && lowestPrice > 0 && lowestPrice < rap
-      ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
+    liveRap && lowestPrice > 0 && lowestPrice < liveRap
+      ? Math.round(((liveRap - lowestPrice) / liveRap) * 10000) / 100
       : null;
 
   return {
     assetId,
     name: String(catalog.name || base.name || "Unknown Limited"),
     acronym: String(base.acronym || ""),
-    rap,
-    rolimonsRap: base.rap,
+    rap: liveRap,
+    rolimonsRap: base.rolimonsRap,
+    rolimonsValue: base.rolimonsValue,
     lowestPrice,
     availableCopies: firstNumber(catalog.unitsAvailableForConsumption, base.availableCopies),
     totalCopies: firstPositive(catalog.totalQuantity, base.totalCopies),
@@ -610,13 +660,13 @@ async function fetchLimiteds(params) {
   let items = await fetchRolimonsItems();
   items = items.filter((item) => matchesTokens(item, tokens));
 
-  if (safe.minRap !== null) items = items.filter((item) => item.rap >= safe.minRap);
-  if (safe.maxRap !== null) items = items.filter((item) => item.rap <= safe.maxRap);
+  if (safe.minRap !== null) items = items.filter((item) => item.rolimonsRap >= safe.minRap);
+  if (safe.maxRap !== null) items = items.filter((item) => item.rolimonsRap <= safe.maxRap);
 
   if (safe.sort === "updated") {
     items.sort((a, b) => b.assetId - a.assetId);
   } else {
-    items.sort((a, b) => num(b.rap) - num(a.rap));
+    items.sort((a, b) => num(b.rolimonsRap) - num(a.rolimonsRap));
   }
 
   const scanSize =
@@ -670,17 +720,17 @@ async function fetchItemDetails(assetId, marketType) {
   const rolimonsItem = rolimonsItems.find((item) => item.assetId === assetId) || null;
   const collectible = economy.CollectiblesItemDetails || {};
 
-  const rap = firstPositive(
+  const liveRap = firstPositive(
     resale.recentAveragePrice,
     economy.RecentAveragePrice,
     collectible.RecentAveragePrice,
     catalog.recentAveragePrice,
     catalog.rap,
-    rolimonsItem?.rap
+    rolimonsItem?.rolimonsRap
   );
 
-  if (rap) {
-    addSnapshot(assetId, rap, Date.now());
+  if (liveRap) {
+    addSnapshot(assetId, liveRap, Date.now());
     saveSnapshots().catch(() => {});
   }
 
@@ -693,19 +743,20 @@ async function fetchItemDetails(assetId, marketType) {
     catalog.price
   );
 
-  const metrics = buildSnapshotMetrics(assetId, rap);
+  const metrics = buildCombinedMetrics(assetId, liveRap, rolimonsItem?.rolimonsRap);
 
   const dealPercent =
-    rap && lowestPrice > 0 && lowestPrice < rap
-      ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
+    liveRap && lowestPrice > 0 && lowestPrice < liveRap
+      ? Math.round(((liveRap - lowestPrice) / liveRap) * 10000) / 100
       : null;
 
   const data = {
     assetId,
     name: String(catalog.name || economy.Name || rolimonsItem?.name || "Unknown Limited"),
     acronym: String(rolimonsItem?.acronym || ""),
-    rap,
-    rolimonsRap: rolimonsItem?.rap || null,
+    rap: liveRap,
+    rolimonsRap: rolimonsItem?.rolimonsRap || null,
+    rolimonsValue: rolimonsItem?.rolimonsValue || null,
     lowestPrice,
     availableCopies: firstNumber(resale.numberRemaining, catalog.unitsAvailableForConsumption),
     totalCopies: firstPositive(collectible.TotalQuantity, catalog.totalQuantity, resale.assetStock),
@@ -714,7 +765,7 @@ async function fetchItemDetails(assetId, marketType) {
     itemType: String(catalog.itemType || rolimonsItem?.itemType || "Asset"),
     marketType: safeMarketType,
     dealPercent,
-    history: buildHistoryForClient(assetId, rap),
+    history: buildHistoryForClient(assetId, liveRap),
     updatedAt: new Date().toISOString(),
     ...metrics,
   };
