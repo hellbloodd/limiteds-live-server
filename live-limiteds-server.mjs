@@ -527,7 +527,8 @@ function buildRawComparableRapHistory(ownHistory, currentRap) {
 
 function buildRapChangeMetrics(ownHistory, currentRap) {
   const rawHistory = buildRawComparableRapHistory(ownHistory, currentRap);
-  const history = compactHistoryByDay(rawHistory).slice(-1000);
+  const compactedHistory = compactHistoryByDay(rawHistory).slice(-1000);
+  const history = compactedHistory.length >= 2 ? compactedHistory : rawHistory.slice(-1000);
 
   if (rawHistory.length < 2) {
     return {
@@ -959,7 +960,7 @@ async function fetchRolimonsCatalogPage({
   }
 
   if (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc" || metricKey || minPrice !== null || maxPrice !== null) {
-    const shouldScanAllMatches = keywordTokens.length > 0;
+    const shouldScanAllMatches = keywordTokens.length > 0 || Boolean(metricKey);
     const scanSize = shouldScanAllMatches
       || sort === "deal_desc"
       ? items.length
