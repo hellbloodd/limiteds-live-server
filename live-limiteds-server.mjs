@@ -103,7 +103,21 @@ async function fetchJson(url) {
 
 function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
-  const metricSorts = ["price_desc", "rap_desc", "deal_desc", "loss_24h", "loss_7d", "loss_30d", "loss_all"];
+  const metricSorts = [
+    "price_desc",
+    "rap_desc",
+    "deal_desc",
+    "loss_24h",
+    "loss_7d",
+    "loss_30d",
+    "loss_1y",
+    "loss_all",
+    "up_24h",
+    "up_7d",
+    "up_30d",
+    "up_1y",
+    "up_all",
+  ];
   const sortType = sort === "price_asc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // All + salesTypeFilter=2 covers accessories, faces/heads, and bundle-like collectible results.
@@ -198,6 +212,14 @@ function percentDrop(fromValue, toValue) {
   return Math.round(((fromValue - toValue) / fromValue) * 10000) / 100;
 }
 
+function percentGain(fromValue, toValue) {
+  if (!fromValue || !toValue || fromValue <= 0 || toValue <= fromValue) {
+    return null;
+  }
+
+  return Math.round(((toValue - fromValue) / fromValue) * 10000) / 100;
+}
+
 function tokenizeKeyword(keyword) {
   return String(keyword || "")
     .toLowerCase()
@@ -246,6 +268,12 @@ function buildItemFromCatalog(item, resale, marketType) {
   const loss24h = percentDrop(findHistoryValueAtLeastDaysAgo(history, 1), rap);
   const loss7d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 7), rap);
   const loss30d = percentDrop(findHistoryValueAtLeastDaysAgo(history, 30), rap);
+  const loss1y = percentDrop(findHistoryValueAtLeastDaysAgo(history, 365), rap);
+  const upAllTime = percentGain(firstHistoryValue, rap);
+  const up24h = percentGain(findHistoryValueAtLeastDaysAgo(history, 1), rap);
+  const up7d = percentGain(findHistoryValueAtLeastDaysAgo(history, 7), rap);
+  const up30d = percentGain(findHistoryValueAtLeastDaysAgo(history, 30), rap);
+  const up1y = percentGain(findHistoryValueAtLeastDaysAgo(history, 365), rap);
   const availableCopies = firstNonNegativeNumber(
     item.unitsAvailableForConsumption,
     resale.numberRemaining
@@ -271,7 +299,13 @@ function buildItemFromCatalog(item, resale, marketType) {
     loss24h,
     loss7d,
     loss30d,
+    loss1y,
     lossAllTime,
+    up24h,
+    up7d,
+    up30d,
+    up1y,
+    upAllTime,
     marketType,
   };
 }
@@ -344,7 +378,13 @@ async function fetchCatalogPage({
     "loss_24h",
     "loss_7d",
     "loss_30d",
+    "loss_1y",
     "loss_all",
+    "up_24h",
+    "up_7d",
+    "up_30d",
+    "up_1y",
+    "up_all",
     "updated",
   ].includes(sort) ? sort : "updated";
   const safeMinPrice = parseOptionalNumber(minPrice);
@@ -372,7 +412,20 @@ async function fetchCatalogPage({
   let previousPageCursor = "";
   let collectedItems = [];
 
-  const needsMetricScan = ["rap_desc", "deal_desc", "loss_24h", "loss_7d", "loss_30d", "loss_all"].includes(safeSort)
+  const needsMetricScan = [
+    "rap_desc",
+    "deal_desc",
+    "loss_24h",
+    "loss_7d",
+    "loss_30d",
+    "loss_1y",
+    "loss_all",
+    "up_24h",
+    "up_7d",
+    "up_30d",
+    "up_1y",
+    "up_all",
+  ].includes(safeSort)
     || safeMinRap !== null
     || safeMaxRap !== null;
   const hasRangeFilter = safeMinPrice !== null
@@ -451,18 +504,39 @@ async function fetchCatalogPage({
   } else if (safeSort === "deal_desc") {
     collectedItems = collectedItems.filter((item) => item.dealPercent && item.dealPercent > 0);
     collectedItems.sort((a, b) => b.dealPercent - a.dealPercent);
-  } else if (safeSort === "loss_24h") {
-    collectedItems = collectedItems.filter((item) => item.loss24h && item.loss24h > 0);
-    collectedItems.sort((a, b) => b.loss24h - a.loss24h);
-  } else if (safeSort === "loss_7d") {
-    collectedItems = collectedItems.filter((item) => item.loss7d && item.loss7d > 0);
-    collectedItems.sort((a, b) => b.loss7d - a.loss7d);
-  } else if (safeSort === "loss_30d") {
-    collectedItems = collectedItems.filter((item) => item.loss30d && item.loss30d > 0);
-    collectedItems.sort((a, b) => b.loss30d - a.loss30d);
-  } else if (safeSort === "loss_all") {
-    collectedItems = collectedItems.filter((item) => item.lossAllTime && item.lossAllTime > 0);
-    collectedItems.sort((a, b) => b.lossAllTime - a.lossAllTime);
+  } else {
+    const metricKeyBySort = {
+      loss_24h: "loss24h",
+      loss_7d: "loss7d",
+      loss_30d: "loss30d",
+      loss_1y: "loss1y",
+      loss_all: "lossAllTime",
+      up_24h: "up24h",
+      up_7d: "up7d",
+      up_30d: "up30d",
+      up_1y: "up1y",
+      up_all: "upAllTime",
+    };
+    const metricKey = metricKeyBySort[safeSort];
+
+    if (metricKey) {
+      collectedItems = collectedItems.filter((item) => item[metricKey] && item[metricKey] > 0);
+      collectedItems.sort((a, b) => b[metricKey] - a[metricKey]);
+    }
+  }
+
+  if (collectedItems.length === 0 && needsMetricScan && safeSort !== "updated" && safeSort !== "price_desc") {
+    return fetchCatalogPage({
+      cursor,
+      limit,
+      keyword,
+      marketType,
+      sort: "price_desc",
+      minPrice,
+      maxPrice,
+      minRap,
+      maxRap,
+    });
   }
 
   const data = {
