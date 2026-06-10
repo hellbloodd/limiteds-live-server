@@ -427,7 +427,13 @@ async function supabaseRequest(path, options = {}) {
     return null;
   }
 
-  return response.json();
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return null;
+  }
+
+  return JSON.parse(text);
 }
 
 function normalizeSnapshotRows(rows) {
@@ -1299,7 +1305,7 @@ async function fetchCatalogPage({
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc";
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? 8 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
+    : safeMarketType === "ugc" ? 12 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
