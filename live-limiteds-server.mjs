@@ -314,6 +314,27 @@ function normalizeHistoryPoints(points) {
     .slice(-365);
 }
 
+function appendCurrentRapPoint(history, rap) {
+  const currentRap = Number(rap);
+
+  if (!Number.isFinite(currentRap) || currentRap <= 0) {
+    return history;
+  }
+
+  const today = new Date().toISOString();
+  const lastPoint = history[history.length - 1];
+
+  if (lastPoint && Date.parse(lastPoint.date) > Date.now() - 60 * 60 * 1000) {
+    return history;
+  }
+
+  return history.concat({
+    value: currentRap,
+    date: today,
+    live: true,
+  }).slice(-365);
+}
+
 function findHistoryBaselineValue(history, days) {
   if (!Array.isArray(history) || history.length === 0) {
     return null;
@@ -810,6 +831,8 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     rolimonsItem?.rap
   );
 
+  const history = appendCurrentRapPoint(normalizeHistoryPoints(resale.priceDataPoints), rap);
+
   const data = {
     assetId: safeAssetId,
     name: String(details.Name || rolimonsItem?.name || "Unknown Limited"),
@@ -819,7 +842,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, resale.assetStock),
     creatorName: String(creator.Name || ""),
     thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
-    history: normalizeHistoryPoints(resale.priceDataPoints),
+    history,
     volumeHistory: normalizeHistoryPoints(resale.volumeDataPoints),
     marketType,
   };
