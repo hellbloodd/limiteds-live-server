@@ -689,8 +689,16 @@ async function runSnapshotJob() {
       throw new Error(`Rolimons snapshot fetch failed: ${error.message}`);
     }
 
+    let pricedItems = items;
+
+    try {
+      pricedItems = await enrichRolimonsItemsWithCatalogDetails(items);
+    } catch (error) {
+      console.warn(`Snapshot price enrichment failed: ${error.message}`);
+    }
+
     const savedAt = new Date().toISOString();
-    const rows = items
+    const rows = pricedItems
       .filter((item) => item.assetId > 0 && item.rap > 0)
       .map((item) => ({
         asset_id: item.assetId,
