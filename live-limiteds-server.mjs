@@ -322,7 +322,7 @@ function normalizeHistoryPoints(points) {
     }))
     .filter((point) => Number.isFinite(Date.parse(point.date)))
     .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
-    .slice(-365);
+    .slice(-5000);
 }
 
 function findHistoryBaselineValue(history, days) {
@@ -696,6 +696,20 @@ async function runSnapshotJob() {
     } catch (error) {
       console.warn(`Snapshot price enrichment failed: ${error.message}`);
     }
+
+    pricedItems = await mapWithConcurrency(pricedItems, 10, async (item) => {
+      if (item.lowestPrice && item.lowestPrice > 0) {
+        return item;
+      }
+
+      const resale = await fetchResaleData(item.assetId);
+      const lowestPrice = firstNumber(resale.lowestResalePrice, item.lowestPrice);
+
+      return {
+        ...item,
+        lowestPrice,
+      };
+    });
 
     const savedAt = new Date().toISOString();
     const rows = pricedItems
@@ -1197,7 +1211,15 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   );
 
   const ownHistory = await fetchStoredSnapshots(safeAssetId);
+  const saleHistory = normalizeHistoryPoints(resale.priceDataPoints).map((point) => ({
+    ...point,
+    source: "sale",
+  }));
   const metrics = buildRapChangeMetrics(ownHistory, rap);
+  const chartHistory = buildRawComparableRapHistory(
+    saleHistory.length >= 2 ? saleHistory : ownHistory,
+    rap
+  );
 
   const data = {
     assetId: safeAssetId,
@@ -1208,7 +1230,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     totalCopies: firstPositiveNumber(catalogDetails.totalQuantity, collectibleDetails.TotalQuantity, resale.assetStock),
     creatorName: String(catalogDetails.creatorName || creator.Name || ""),
     thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
-    history: metrics.history,
+    history: chartHistory,
     volumeHistory: normalizeHistoryPoints(resale.volumeDataPoints),
     lossAllTime: metrics.lossAllTime,
     loss24h: metrics.loss24h,
