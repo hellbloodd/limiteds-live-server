@@ -854,7 +854,7 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
     collectibleDetails.RecentAveragePrice,
     resale.recentAveragePrice
   );
-  const lowestPrice = firstNumber(
+  const lowestPrice = firstPositiveNumber(
     collectibleDetails.CollectibleLowestResalePrice,
     details.PriceInRobux,
     resale.lowestResalePrice,
@@ -873,12 +873,12 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
   };
 }
 
-async function enrichRolimonsItemsWithCatalogDetails(items) {
+async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallback = false) {
   const detailByAssetId = await fetchCatalogDetailsBatch(items.map((item) => item.assetId));
 
-  return items.map((item) => {
+  const enriched = items.map((item) => {
     const details = detailByAssetId.get(item.assetId) || {};
-    const lowestPrice = firstNumber(
+    const lowestPrice = firstPositiveNumber(
       details.lowestResalePrice,
       details.lowestPrice,
       details.price,
@@ -900,6 +900,28 @@ async function enrichRolimonsItemsWithCatalogDetails(items) {
       dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
         ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
         : null,
+    };
+  });
+
+  if (!includeResaleFallback) {
+    return enriched;
+  }
+
+  return mapWithConcurrency(enriched, 10, async (item) => {
+    if (item.lowestPrice && item.lowestPrice > 0) {
+      return item;
+    }
+
+    const resale = await fetchResaleData(item.assetId);
+    const lowestPrice = firstPositiveNumber(resale.lowestResalePrice, item.lowestPrice);
+
+    return {
+      ...item,
+      lowestPrice,
+      availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
+      dealPercent: item.rap && lowestPrice > 0 && lowestPrice < item.rap
+        ? Math.round(((item.rap - lowestPrice) / item.rap) * 10000) / 100
+        : item.dealPercent,
     };
   });
 }
@@ -1012,7 +1034,7 @@ async function fetchRolimonsCatalogPage({
     let enriched = metricKey
       ? scanWindow
       : needsLiveResalePrice
-      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow)
+      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow, true)
       : await mapWithConcurrency(
         scanWindow,
         8,
@@ -1041,7 +1063,7 @@ async function fetchRolimonsCatalogPage({
 
     const pageItems = enriched.slice(offset, offset + limit);
     const visibleItems = metricKey
-      ? pageItems
+      ? await enrichRolimonsItemsWithCatalogDetails(pageItems, true)
       : await mapWithConcurrency(pageItems, 8, (item) => enrichRolimonsItem(item, true));
 
     return {
@@ -1111,7 +1133,7 @@ function interleaveForCoverage(items, bucketCount = 12) {
 
 function buildItemFromCatalog(item, resale, marketType) {
   const assetId = normalizeNumber(item.id || item.assetId);
-  const lowestPrice = firstNumber(
+  const lowestPrice = firstPositiveNumber(
     item.lowestResalePrice,
     item.lowestPrice,
     item.price,
