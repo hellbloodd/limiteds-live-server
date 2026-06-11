@@ -1362,7 +1362,6 @@ async function fetchCatalogPage({
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
       keywordTokens.length > 0
-      || safeSort === "updated"
       || safeSort === "rap_desc"
       || safeSort === "deal_desc"
       || safeSort.startsWith("loss_")
