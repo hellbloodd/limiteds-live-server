@@ -472,13 +472,11 @@ function getPeriodEndTime(days) {
 }
 
 function clearPriceWithoutSellers(lowestPrice, availableCopies) {
-  const sellers = Number(availableCopies);
   const price = Number(lowestPrice);
 
-  if (!Number.isFinite(sellers) || sellers <= 0) {
-    return null;
-  }
-
+  // Roblox sometimes returns 0 or 1 for limiteds with no real seller.
+  // Keep those hidden, but do not require numberRemaining because Roblox
+  // often omits it even when lowestResalePrice is valid.
   if (!Number.isFinite(price) || price <= 1) {
     return null;
   }
@@ -988,7 +986,6 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
   );
   const rawLowestPrice = firstPositiveNumber(
     collectibleDetails.CollectibleLowestResalePrice,
-    details.PriceInRobux,
     resale.lowestResalePrice,
     item.lowestPrice
   );
@@ -1437,8 +1434,7 @@ async function fetchRobloxRecentDiscoveryItems() {
 
 function isBuyableCollectibleItem(item) {
   return Number(item.rap) > 0
-    && Number(item.lowestPrice) > 1
-    && Number(item.availableCopies) > 0;
+    && Number(item.lowestPrice) > 1;
 }
 
 async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId = "") {
@@ -1481,7 +1477,6 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     catalogDetails.lowestResalePrice,
     catalogDetails.lowestPrice,
     collectibleDetails.CollectibleLowestResalePrice,
-    details.PriceInRobux,
     resale.lowestResalePrice
   );
   const rap = firstPositiveNumber(
@@ -1913,18 +1908,17 @@ async function fetchCatalogPage({
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc" || isRobloxRecent;
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
+    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter || isRobloxRecent ? 6 : 4;
   const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || safeSort === "deal_desc" || hasRangeFilter)
     ? safeLimit * 4
-    : isRobloxRecent
-      ? safeLimit * 2
+    : isRobloxRecent || isRobloxDealSort || isRobloxPriceSort
+      ? safeLimit * 4
       : safeLimit;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
       keywordTokens.length > 0
       || safeSort === "rap_desc"
-      || safeSort === "deal_desc"
       || safeSort.startsWith("loss_")
       || safeSort.startsWith("profit_")
     );
