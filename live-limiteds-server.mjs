@@ -336,7 +336,7 @@ function findHistoryBaselineValue(history, days) {
     return Number(history[0]?.value) || null;
   }
 
-  const targetTime = Date.now() - days * 24 * 60 * 60 * 1000;
+  const targetTime = getPeriodStartTime(days);
   let baseline = null;
   let firstInsidePeriod = null;
   let latestTime = 0;
@@ -363,6 +363,24 @@ function findHistoryBaselineValue(history, days) {
   }
 
   return baseline ?? firstInsidePeriod;
+}
+
+function getStartOfTodayTime() {
+  const now = new Date();
+  now.setUTCHours(0, 0, 0, 0);
+  return now.getTime();
+}
+
+function getPeriodStartTime(days) {
+  if (!days) {
+    return 0;
+  }
+
+  if (Number(days) === 1) {
+    return getStartOfTodayTime();
+  }
+
+  return Date.now() - days * 24 * 60 * 60 * 1000;
 }
 
 function percentChange(fromValue, toValue) {
@@ -1340,17 +1358,41 @@ function baselineValueForHistory(history, days) {
 
 function buildPortfolioChart(items, marketType, days) {
   const filtered = items.filter((item) => item.marketType === marketType);
-  const nowTime = Date.now();
-  const cutoff = days ? nowTime - days * 24 * 60 * 60 * 1000 : 0;
+  const cutoff = days ? getPeriodStartTime(days) : 0;
   const byDate = new Map();
 
   for (const item of filtered) {
     const quantity = Math.max(1, Number(item.quantity) || 1);
     const history = Array.isArray(item.history) ? item.history : [];
-    const points = history.filter((point) => {
+    const points = [];
+
+    if (cutoff) {
+      let baseline = null;
+
+      for (const point of history) {
+        const value = Number(point.value);
+        const time = Date.parse(point.date || "");
+
+        if (Number.isFinite(value) && value > 0 && Number.isFinite(time) && time <= cutoff) {
+          baseline = value;
+        }
+      }
+
+      if (baseline) {
+        points.push({
+          value: baseline,
+          date: new Date(cutoff).toISOString(),
+        });
+      }
+    }
+
+    for (const point of history) {
       const time = Date.parse(point.date || "");
-      return Number(point.value) > 0 && Number.isFinite(time) && (!days || time >= cutoff);
-    });
+
+      if (Number(point.value) > 0 && Number.isFinite(time) && (!cutoff || time >= cutoff)) {
+        points.push(point);
+      }
+    }
 
     if (points.length === 0 && Number(item.rap) > 0) {
       points.push({
