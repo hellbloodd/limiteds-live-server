@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "snapshot-debug-2026-06-10-1";
+const SERVER_VERSION = "recent-price-fix-2026-06-12-1";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -20,15 +20,6 @@ const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
-const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
-  "8-Bit Clockwork Shades",
-  "Oozing Oscar",
-  "Bunny Ears",
-  "Lampshade",
-  "Pinstripe Fedora",
-  "Clockwork's Golden Shades",
-  "Fall Fairy",
-];
 
 const pageCache = new Map();
 const resaleCache = new Map();
@@ -480,12 +471,9 @@ function getPeriodEndTime(days) {
 }
 
 function clearPriceWithoutSellers(lowestPrice, availableCopies) {
-  const sellers = Number(availableCopies);
-
-  if (Number.isFinite(sellers) && sellers <= 0) {
-    return null;
-  }
-
+  // Roblox sometimes reports availableCopies/numberRemaining as 0 even when a
+  // lowest resale price is visible in catalog/marketplace results. Prefer
+  // showing a real positive price instead of "N/A".
   return firstPositiveNumber(lowestPrice);
 }
 
@@ -1394,50 +1382,6 @@ function buildItemFromCatalog(item, resale, marketType) {
   };
 }
 
-async function fetchRobloxRecentDiscoveryItems() {
-  const results = [];
-  const seen = new Set();
-
-  for (const keyword of ROBLOX_RECENT_DISCOVERY_KEYWORDS) {
-    try {
-      const catalog = await fetchJson(buildCatalogUrl({
-        cursor: "",
-        limit: 30,
-        keyword,
-        marketType: "roblox",
-        sort: "updated",
-      }));
-      const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
-      const exact = rawItems.find((item) => {
-        return String(item.creatorName || "") === "Roblox"
-          && String(item.name || "").toLowerCase() === keyword.toLowerCase();
-      });
-
-      if (!exact) {
-        continue;
-      }
-
-      const assetId = normalizeNumber(exact.id || exact.assetId);
-
-      if (!assetId || seen.has(assetId)) {
-        continue;
-      }
-
-      const resale = exact.collectibleItemId
-        ? await fetchCollectibleResaleData(exact.collectibleItemId)
-        : await fetchResaleData(assetId);
-      const item = buildItemFromCatalog(exact, resale, "roblox");
-      seen.add(assetId);
-      results.push(item);
-      await sleep(80);
-    } catch {
-      // Discovery is best-effort; the regular live catalog still loads.
-    }
-  }
-
-  return results;
-}
-
 function isBuyableCollectibleItem(item) {
   return Number(item.rap) > 0 && Number(item.lowestPrice) > 0;
 }
@@ -2004,7 +1948,43 @@ async function fetchCatalogPage({
             ? await fetchCollectibleResaleData(item.collectibleItemId)
             : await fetchResaleData(assetId)
           : {};
-        const builtItem = buildItemFromCatalog(item, resale, safeMarketType);
+        const marketplaceDetails = item.collectibleItemId
+          ? await fetchMarketplaceItemDetails(item.collectibleItemId)
+          : {};
+        const mergedItem = {
+          ...item,
+          lowestPrice: firstPositiveNumber(
+            marketplaceDetails.lowestPrice,
+            marketplaceDetails.lowestResalePrice,
+            item.lowestPrice,
+            item.lowestResalePrice,
+            item.price
+          ),
+          lowestResalePrice: firstPositiveNumber(
+            marketplaceDetails.lowestResalePrice,
+            marketplaceDetails.lowestPrice,
+            item.lowestResalePrice,
+            item.lowestPrice,
+            item.price
+          ),
+          recentAveragePrice: firstPositiveNumber(
+            marketplaceDetails.recentAveragePrice,
+            item.recentAveragePrice,
+            item.rap
+          ),
+          unitsAvailableForConsumption: firstNonNegativeNumber(
+            marketplaceDetails.unitsAvailableForConsumption,
+            item.unitsAvailableForConsumption
+          ),
+          totalQuantity: firstPositiveNumber(
+            marketplaceDetails.totalQuantity,
+            item.totalQuantity
+          ),
+          hasResellers: Boolean(marketplaceDetails.hasResellers || item.hasResellers),
+          name: marketplaceDetails.name || item.name,
+          creatorName: marketplaceDetails.creatorName || item.creatorName,
+        };
+        const builtItem = buildItemFromCatalog(mergedItem, resale, safeMarketType);
         const classicItem = classicItemByAssetId?.get(assetId);
 
         if (classicItem) {
@@ -2102,9 +2082,9 @@ async function fetchCatalogPage({
   }
 
   if (isRobloxRecent && !safeKeyword) {
-    const discoveryItems = await fetchRobloxRecentDiscoveryItems();
     const seenAssetIds = new Set();
-    collectedItems = [...discoveryItems, ...collectedItems].filter((item) => {
+
+    collectedItems = collectedItems.filter((item) => {
       if (!item.assetId || seenAssetIds.has(item.assetId)) {
         return false;
       }
