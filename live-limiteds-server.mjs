@@ -132,7 +132,17 @@ async function fetchJson(url, options = {}) {
     throw new Error(`${response.status} ${response.statusText} for ${url}`);
   }
 
-  return response.json();
+  const text = await response.text();
+
+  if (!text.trim()) {
+    throw new Error(`Empty JSON response for ${url}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Bad JSON response for ${url}: ${error.message}`);
+  }
 }
 
 async function fetchCatalogDetailsChunk(assetIds) {
@@ -1252,7 +1262,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     return cached.data;
   }
 
-  const resale = safeAssetId > 0 && safeAssetId < 10000000000
+  const resale = safeAssetId > 0
     ? await fetchResaleData(safeAssetId)
     : {};
   const details = safeAssetId > 0 ? await fetchEconomyDetails(safeAssetId) : {};
@@ -1758,7 +1768,7 @@ async function fetchCatalogPage({
 
           const assetId = normalizeNumber(item.id || item.assetId);
 
-          if (classicItemByAssetId) {
+          if (classicItemByAssetId && safeSort !== "updated") {
             return classicItemByAssetId.has(assetId);
           }
 
