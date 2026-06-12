@@ -15,6 +15,8 @@ const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
+const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
+const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/v1/items/details";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
@@ -109,10 +111,13 @@ async function fetchJson(url, options = {}) {
 
     try {
       response = await fetch(url, {
+        method: options.method || "GET",
+        body: options.body,
         signal: controller.signal,
         headers: {
           Accept: "application/json",
           "User-Agent": "LimitedsLiveMarketViewer/1.0",
+          ...(options.headers || {}),
         },
       });
     } catch (error) {
@@ -259,9 +264,12 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "profit_1y",
     "profit_all",
   ];
-  const sortType = sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
+  const sortType = marketType === "ugc" && sort === "updated"
+    ? "2"
+    : sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
-  // All + salesTypeFilter=2 covers accessories, faces/heads, and bundle-like collectible results.
+  // The public search endpoint accepts All + salesTypeFilter=2 for resale-enabled
+  // catalog results. "Collectibles" is rejected by this endpoint.
   url.searchParams.set("category", "All");
   url.searchParams.set("salesTypeFilter", "2");
   url.searchParams.set("sortType", sortType);
@@ -297,6 +305,65 @@ async function fetchResaleData(assetId) {
     });
     resaleCache.set(assetId, { fetchedAt: Date.now(), data });
     return data;
+  } catch {
+    return {};
+  }
+}
+
+async function fetchCollectibleResaleData(collectibleItemId) {
+  const safeId = String(collectibleItemId || "").trim();
+
+  if (!safeId) {
+    return {};
+  }
+
+  const cacheKey = `collectible:${safeId}`;
+  const cached = resaleCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  try {
+    const data = await fetchJson(`${ROBLOX_COLLECTIBLE_RESALE_URL}/${encodeURIComponent(safeId)}/resale-data`, {
+      retries: 2,
+      timeoutMs: 5000,
+    });
+    resaleCache.set(cacheKey, { fetchedAt: Date.now(), data });
+    return data;
+  } catch {
+    return {};
+  }
+}
+
+async function fetchMarketplaceItemDetails(collectibleItemId) {
+  const safeId = String(collectibleItemId || "").trim();
+
+  if (!safeId) {
+    return {};
+  }
+
+  const cacheKey = `marketplace:${safeId}`;
+  const cached = catalogDetailCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  try {
+    const data = await fetchJson(ROBLOX_MARKETPLACE_ITEMS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ itemIds: [safeId] }),
+      retries: 2,
+      timeoutMs: 5000,
+    });
+    const row = Array.isArray(data) ? data[0] || {} : {};
+    catalogDetailCache.set(cacheKey, { fetchedAt: Date.now(), data: row });
+    return row;
   } catch {
     return {};
   }
@@ -1011,6 +1078,11 @@ async function addHistoryMetrics(item) {
     profit7d: metrics.profit7d,
     profit30d: metrics.profit30d,
     profit1y: metrics.profit1y,
+    changeAllTime: metrics.changeAllTime,
+    change24h: metrics.change24h,
+    change7d: metrics.change7d,
+    change30d: metrics.change30d,
+    change1y: metrics.change1y,
   };
 }
 
@@ -1035,6 +1107,11 @@ async function addHistoryMetricsBatch(items) {
       profit7d: metrics.profit7d,
       profit30d: metrics.profit30d,
       profit1y: metrics.profit1y,
+      changeAllTime: metrics.changeAllTime,
+      change24h: metrics.change24h,
+      change7d: metrics.change7d,
+      change30d: metrics.change30d,
+      change1y: metrics.change1y,
     };
   });
 }
@@ -1209,14 +1286,15 @@ function buildItemFromCatalog(item, resale, marketType) {
     item.rap,
     resale.recentAveragePrice
   );
+  const availableCopies = firstNonNegativeNumber(
+    resale.numberRemaining,
+    item.unitsAvailableForConsumption
+  );
+  const sellerSignal = item.hasResellers ? 1 : availableCopies;
+  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
   const dealPercent = rap && lowestPrice > 0 && lowestPrice < rap
     ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
     : null;
-  const availableCopies = firstNonNegativeNumber(
-    item.unitsAvailableForConsumption,
-    resale.numberRemaining
-  );
-  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
   const totalCopies = firstPositiveNumber(
     item.totalQuantity,
     resale.assetStock
@@ -1234,6 +1312,8 @@ function buildItemFromCatalog(item, resale, marketType) {
     thumbnail: `rbxthumb://type=${thumbnailType}&id=${assetId}&w=420&h=420`,
     creatorName: String(item.creatorName || ""),
     itemType,
+    collectibleItemId: item.collectibleItemId ? String(item.collectibleItemId) : "",
+    hasResellers: Boolean(item.hasResellers),
     dealPercent,
     loss24h: null,
     loss7d: null,
@@ -1245,6 +1325,11 @@ function buildItemFromCatalog(item, resale, marketType) {
     profit30d: null,
     profit1y: null,
     profitAllTime: null,
+    change24h: null,
+    change7d: null,
+    change30d: null,
+    change1y: null,
+    changeAllTime: null,
     marketType,
   };
 }
@@ -1253,21 +1338,27 @@ function isBuyableCollectibleItem(item) {
   return Number(item.rap) > 0 && Number(item.lowestPrice) > 0;
 }
 
-async function fetchItemDetails(assetId, marketType = "ugc") {
+async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId = "") {
   const safeAssetId = normalizeNumber(Number(assetId));
-  const cacheKey = `${safeAssetId}:${marketType}`;
+  const safeCollectibleItemId = String(collectibleItemId || "").trim();
+  const cacheKey = `${safeAssetId}:${marketType}:${safeCollectibleItemId}`;
   const cached = detailCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.data;
   }
 
-  const resale = safeAssetId > 0
-    ? await fetchResaleData(safeAssetId)
-    : {};
+  const resale = safeCollectibleItemId
+    ? await fetchCollectibleResaleData(safeCollectibleItemId)
+    : safeAssetId > 0
+      ? await fetchResaleData(safeAssetId)
+      : {};
   const details = safeAssetId > 0 ? await fetchEconomyDetails(safeAssetId) : {};
   const catalogDetails = marketType === "roblox" && safeAssetId > 0
     ? (await fetchCatalogDetailsBatch([safeAssetId])).get(safeAssetId) || {}
+    : {};
+  const marketplaceDetails = safeCollectibleItemId
+    ? await fetchMarketplaceItemDetails(safeCollectibleItemId)
     : {};
   let rolimonsItem = null;
 
@@ -1283,6 +1374,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   const collectibleDetails = details.CollectiblesItemDetails || {};
   const creator = details.Creator || {};
   const rawLowestPrice = firstNumber(
+    marketplaceDetails.lowestPrice,
     catalogDetails.lowestResalePrice,
     catalogDetails.lowestPrice,
     collectibleDetails.CollectibleLowestResalePrice,
@@ -1291,6 +1383,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   );
   const rap = firstPositiveNumber(
     rolimonsItem?.rap,
+    marketplaceDetails.recentAveragePrice,
     catalogDetails.recentAveragePrice,
     details.RecentAveragePrice,
     collectibleDetails.RecentAveragePrice,
@@ -1300,19 +1393,26 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   const ownHistory = await fetchStoredSnapshots(safeAssetId);
   const metrics = buildRapChangeMetrics(ownHistory, rap);
   const chartHistory = metrics.history;
-  const availableCopies = firstNonNegativeNumber(catalogDetails.unitsAvailableForConsumption, resale.numberRemaining);
-  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
+  const availableCopies = firstNonNegativeNumber(
+    resale.numberRemaining,
+    marketplaceDetails.unitsAvailableForConsumption,
+    catalogDetails.unitsAvailableForConsumption
+  );
+  const sellerSignal = marketplaceDetails.hasResellers ? 1 : availableCopies;
+  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
 
   const data = {
     assetId: safeAssetId,
-    name: String(catalogDetails.name || details.Name || rolimonsItem?.name || "Unknown Limited"),
+    name: String(marketplaceDetails.name || catalogDetails.name || details.Name || rolimonsItem?.name || "Unknown Limited"),
     rap,
     lowestPrice,
     availableCopies,
-    totalCopies: firstPositiveNumber(catalogDetails.totalQuantity, collectibleDetails.TotalQuantity, resale.assetStock),
-    creatorName: String(catalogDetails.creatorName || creator.Name || ""),
+    totalCopies: firstPositiveNumber(marketplaceDetails.totalQuantity, catalogDetails.totalQuantity, collectibleDetails.TotalQuantity, resale.assetStock),
+    creatorName: String(marketplaceDetails.creatorName || catalogDetails.creatorName || creator.Name || ""),
     thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
+    collectibleItemId: safeCollectibleItemId,
     history: chartHistory,
+    salesHistory: normalizeHistoryPoints(resale.priceDataPoints),
     volumeHistory: normalizeHistoryPoints(resale.volumeDataPoints),
     lossAllTime: metrics.lossAllTime,
     loss24h: metrics.loss24h,
@@ -1324,6 +1424,11 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
     profit7d: metrics.profit7d,
     profit30d: metrics.profit30d,
     profit1y: metrics.profit1y,
+    changeAllTime: metrics.changeAllTime,
+    change24h: metrics.change24h,
+    change7d: metrics.change7d,
+    change30d: metrics.change30d,
+    change1y: metrics.change1y,
     marketType,
   };
 
@@ -1701,7 +1806,7 @@ async function fetchCatalogPage({
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc";
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? 12 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
+    : safeMarketType === "ugc" ? 6 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
@@ -1775,12 +1880,17 @@ async function fetchCatalogPage({
           return item.creatorTargetId === 1 && item.creatorName === "Roblox";
       });
 
-      const pageItems = [];
-
-      for (const item of matchingItems) {
+      const pageItems = (await mapWithConcurrency(matchingItems, safeMarketType === "ugc" ? 8 : 5, async (item) => {
         const assetId = normalizeNumber(item.id || item.assetId);
-        const shouldFetchResaleData = safeMarketType === "ugc" || (isChangeSort && safeMarketType === "roblox" && assetId > 0 && assetId < 10000000000);
-        const resale = shouldFetchResaleData ? await fetchResaleData(assetId) : {};
+        const shouldFetchResaleData = assetId > 0 && (
+          safeMarketType === "ugc"
+          || safeMarketType === "roblox"
+        );
+        const resale = shouldFetchResaleData
+          ? item.collectibleItemId && (safeMarketType === "ugc" || assetId > 10_000_000_000)
+            ? await fetchCollectibleResaleData(item.collectibleItemId)
+            : await fetchResaleData(assetId)
+          : {};
         const builtItem = buildItemFromCatalog(item, resale, safeMarketType);
         const classicItem = classicItemByAssetId?.get(assetId);
 
@@ -1790,13 +1900,11 @@ async function fetchCatalogPage({
         }
 
         if (safeMarketType !== "ugc" || isBuyableCollectibleItem(builtItem)) {
-          pageItems.push(builtItem);
+          return builtItem;
         }
 
-        if (shouldFetchResaleData) {
-          await sleep(35);
-        }
-      }
+        return null;
+      })).filter(Boolean);
 
       collectedItems = collectedItems.concat(
         pageItems.filter((item) => item.assetId > 0)
@@ -1981,7 +2089,8 @@ async function handleRequest(req, res) {
     try {
       const data = await fetchItemDetails(
         url.searchParams.get("assetId") || "0",
-        url.searchParams.get("type") || "ugc"
+        url.searchParams.get("type") || "ugc",
+        url.searchParams.get("collectibleItemId") || ""
       );
 
       sendJson(res, 200, data);
