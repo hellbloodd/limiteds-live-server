@@ -20,6 +20,15 @@ const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
+const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
+  "8-Bit Clockwork Shades",
+  "Oozing Oscar",
+  "Bunny Ears",
+  "Lampshade",
+  "Pinstripe Fedora",
+  "Clockwork's Golden Shades",
+  "Fall Fairy",
+];
 
 const pageCache = new Map();
 const resaleCache = new Map();
@@ -264,8 +273,10 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "profit_1y",
     "profit_all",
   ];
-  const sortType = marketType === "ugc" && sort === "updated"
-    ? "2"
+  const sortType = marketType === "roblox" && sort === "updated"
+    ? "0"
+    : marketType === "ugc" && sort === "updated"
+      ? "2"
     : sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // The public search endpoint accepts All + salesTypeFilter=2 for resale-enabled
@@ -327,7 +338,7 @@ async function fetchCollectibleResaleData(collectibleItemId) {
   try {
     const data = await fetchJson(`${ROBLOX_COLLECTIBLE_RESALE_URL}/${encodeURIComponent(safeId)}/resale-data`, {
       retries: 2,
-      timeoutMs: 5000,
+      timeoutMs: 3000,
     });
     resaleCache.set(cacheKey, { fetchedAt: Date.now(), data });
     return data;
@@ -1056,12 +1067,18 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
 }
 
 async function addHistoryMetrics(item) {
-  const resale = await fetchResaleData(item.assetId);
-  const ownHistory = await fetchStoredSnapshots(item.assetId);
+  const resale = item.collectibleItemId
+    ? await fetchCollectibleResaleData(item.collectibleItemId)
+    : await fetchResaleData(item.assetId);
+  const ownHistory = [
+    ...(await fetchStoredSnapshots(item.assetId)),
+    ...normalizeHistoryPoints(resale.priceDataPoints),
+  ];
   const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
   const metrics = buildRapChangeMetrics(ownHistory, rap);
   const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
-  const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), availableCopies);
+  const sellerSignal = item.hasResellers ? 1 : availableCopies;
+  const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), sellerSignal);
 
   return {
     ...item,
@@ -1084,6 +1101,49 @@ async function addHistoryMetrics(item) {
     change30d: metrics.change30d,
     change1y: metrics.change1y,
   };
+}
+
+async function addLiveHistoryMetricsBatch(items) {
+  const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
+
+  return mapWithConcurrency(items, 20, async (item) => {
+    const resale = item.collectibleItemId
+      ? await fetchCollectibleResaleData(item.collectibleItemId)
+      : item.assetId > 0
+        ? await fetchResaleData(item.assetId)
+        : {};
+    const ownHistory = [
+      ...(ownHistoryByAssetId.get(item.assetId) || []),
+      ...normalizeHistoryPoints(resale.priceDataPoints),
+    ];
+    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+    const metrics = buildRapChangeMetrics(ownHistory, rap);
+    const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
+    const sellerSignal = item.hasResellers ? 1 : availableCopies;
+    const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), sellerSignal);
+
+    return {
+      ...item,
+      rap,
+      lowestPrice,
+      availableCopies,
+      lossAllTime: metrics.lossAllTime,
+      loss24h: metrics.loss24h,
+      loss7d: metrics.loss7d,
+      loss30d: metrics.loss30d,
+      loss1y: metrics.loss1y,
+      profitAllTime: metrics.profitAllTime,
+      profit24h: metrics.profit24h,
+      profit7d: metrics.profit7d,
+      profit30d: metrics.profit30d,
+      profit1y: metrics.profit1y,
+      changeAllTime: metrics.changeAllTime,
+      change24h: metrics.change24h,
+      change7d: metrics.change7d,
+      change30d: metrics.change30d,
+      change1y: metrics.change1y,
+    };
+  });
 }
 
 async function addHistoryMetricsBatch(items) {
@@ -1334,6 +1394,50 @@ function buildItemFromCatalog(item, resale, marketType) {
   };
 }
 
+async function fetchRobloxRecentDiscoveryItems() {
+  const results = [];
+  const seen = new Set();
+
+  for (const keyword of ROBLOX_RECENT_DISCOVERY_KEYWORDS) {
+    try {
+      const catalog = await fetchJson(buildCatalogUrl({
+        cursor: "",
+        limit: 30,
+        keyword,
+        marketType: "roblox",
+        sort: "updated",
+      }));
+      const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
+      const exact = rawItems.find((item) => {
+        return String(item.creatorName || "") === "Roblox"
+          && String(item.name || "").toLowerCase() === keyword.toLowerCase();
+      });
+
+      if (!exact) {
+        continue;
+      }
+
+      const assetId = normalizeNumber(exact.id || exact.assetId);
+
+      if (!assetId || seen.has(assetId)) {
+        continue;
+      }
+
+      const resale = exact.collectibleItemId
+        ? await fetchCollectibleResaleData(exact.collectibleItemId)
+        : await fetchResaleData(assetId);
+      const item = buildItemFromCatalog(exact, resale, "roblox");
+      seen.add(assetId);
+      results.push(item);
+      await sleep(80);
+    } catch {
+      // Discovery is best-effort; the regular live catalog still loads.
+    }
+  }
+
+  return results;
+}
+
 function isBuyableCollectibleItem(item) {
   return Number(item.rap) > 0 && Number(item.lowestPrice) > 0;
 }
@@ -1390,7 +1494,10 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     resale.recentAveragePrice
   );
 
-  const ownHistory = await fetchStoredSnapshots(safeAssetId);
+  const ownHistory = [
+    ...(await fetchStoredSnapshots(safeAssetId)),
+    ...normalizeHistoryPoints(resale.priceDataPoints),
+  ];
   const metrics = buildRapChangeMetrics(ownHistory, rap);
   const chartHistory = metrics.history;
   const availableCopies = firstNonNegativeNumber(
@@ -1803,10 +1910,16 @@ async function fetchCatalogPage({
   const isRobloxPriceSort = safeMarketType === "roblox"
     && (safeSort === "price_asc" || safeSort === "price_desc");
   const isRobloxDealSort = safeMarketType === "roblox" && safeSort === "deal_desc";
-  const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc";
+  const isRobloxRecent = safeMarketType === "roblox" && safeSort === "updated";
+  const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc" || isRobloxRecent;
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? 6 : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 1;
+    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
+  const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || safeSort === "deal_desc" || hasRangeFilter)
+    ? safeLimit * 4
+    : isRobloxRecent
+      ? safeLimit * 2
+      : safeLimit;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
@@ -1845,7 +1958,7 @@ async function fetchCatalogPage({
   }
 
   try {
-    for (let page = 0; page < maxPages && (shouldScanFullWindow || collectedItems.length < safeLimit); page += 1) {
+    for (let page = 0; page < maxPages && (shouldScanFullWindow ? collectedItems.length < targetCandidateCount : collectedItems.length < safeLimit); page += 1) {
       const catalog = await fetchJson(buildCatalogUrl({
         cursor: page === 0 ? cursor : nextPageCursor,
         limit: safeLimit,
@@ -1880,7 +1993,7 @@ async function fetchCatalogPage({
           return item.creatorTargetId === 1 && item.creatorName === "Roblox";
       });
 
-      const pageItems = (await mapWithConcurrency(matchingItems, safeMarketType === "ugc" ? 8 : 5, async (item) => {
+      const pageItems = (await mapWithConcurrency(matchingItems, safeMarketType === "ugc" ? 20 : 8, async (item) => {
         const assetId = normalizeNumber(item.id || item.assetId);
         const shouldFetchResaleData = assetId > 0 && (
           safeMarketType === "ugc"
@@ -1934,6 +2047,10 @@ async function fetchCatalogPage({
     throw error;
   }
 
+  if (isChangeSort) {
+    collectedItems = await addLiveHistoryMetricsBatch(collectedItems);
+  }
+
   collectedItems = collectedItems.filter((item) => {
     if (safeMarketType === "ugc" && !isBuyableCollectibleItem(item)) return false;
     if (safeMinPrice !== null && (!item.lowestPrice || item.lowestPrice < safeMinPrice)) return false;
@@ -1972,8 +2089,29 @@ async function fetchCatalogPage({
     const isLossSort = String(safeSort).startsWith("loss_");
 
     if (metricKey) {
+      collectedItems = collectedItems.filter((item) => {
+        const value = Number(item[metricKey]);
+        return Number.isFinite(value) && value > 0;
+      });
       collectedItems.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     }
+  }
+
+  if (isRobloxRecent && collectedItems.length > safeLimit) {
+    collectedItems = interleaveForCoverage(collectedItems, 2);
+  }
+
+  if (isRobloxRecent && !safeKeyword) {
+    const discoveryItems = await fetchRobloxRecentDiscoveryItems();
+    const seenAssetIds = new Set();
+    collectedItems = [...discoveryItems, ...collectedItems].filter((item) => {
+      if (!item.assetId || seenAssetIds.has(item.assetId)) {
+        return false;
+      }
+
+      seenAssetIds.add(item.assetId);
+      return true;
+    });
   }
 
   if (collectedItems.length === 0 && hasRangeFilter && !isMetricSort && safeSort !== "updated" && safeSort !== "price_desc") {
