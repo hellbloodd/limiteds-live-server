@@ -383,6 +383,24 @@ function getPeriodStartTime(days) {
   return Date.now() - days * 24 * 60 * 60 * 1000;
 }
 
+function getPeriodEndTime(days) {
+  if (Number(days) === 1) {
+    return getStartOfTodayTime() + 24 * 60 * 60 * 1000;
+  }
+
+  return Date.now();
+}
+
+function clearPriceWithoutSellers(lowestPrice, availableCopies) {
+  const sellers = Number(availableCopies);
+
+  if (Number.isFinite(sellers) && sellers <= 0) {
+    return null;
+  }
+
+  return firstPositiveNumber(lowestPrice);
+}
+
 function percentChange(fromValue, toValue) {
   if (!fromValue || !toValue || fromValue <= 0 || toValue <= 0) {
     return null;
@@ -883,18 +901,20 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
     collectibleDetails.RecentAveragePrice,
     resale.recentAveragePrice
   );
-  const lowestPrice = firstPositiveNumber(
+  const rawLowestPrice = firstPositiveNumber(
     collectibleDetails.CollectibleLowestResalePrice,
     details.PriceInRobux,
     resale.lowestResalePrice,
     item.lowestPrice
   );
+  const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
+  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
 
   return {
     ...item,
     rap,
     lowestPrice,
-    availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
+    availableCopies,
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, item.totalCopies),
     dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
       ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
@@ -907,12 +927,14 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
 
   const enriched = items.map((item) => {
     const details = detailByAssetId.get(item.assetId) || {};
-    const lowestPrice = firstPositiveNumber(
+    const rawLowestPrice = firstPositiveNumber(
       details.lowestResalePrice,
       details.lowestPrice,
       details.price,
       item.lowestPrice
     );
+    const availableCopies = firstNonNegativeNumber(details.unitsAvailableForConsumption, item.availableCopies);
+    const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
     const rap = firstPositiveNumber(
       item.rap,
       details.recentAveragePrice
@@ -922,7 +944,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       ...item,
       rap,
       lowestPrice,
-      availableCopies: firstNonNegativeNumber(details.unitsAvailableForConsumption, item.availableCopies),
+      availableCopies,
       totalCopies: firstPositiveNumber(details.totalQuantity, item.totalCopies),
       creatorName: String(details.creatorName || item.creatorName || "Roblox"),
       itemType: String(details.itemType || item.itemType || "Asset"),
@@ -942,12 +964,13 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
     }
 
     const resale = await fetchResaleData(item.assetId);
-    const lowestPrice = firstPositiveNumber(resale.lowestResalePrice, item.lowestPrice);
+    const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
+    const lowestPrice = clearPriceWithoutSellers(firstPositiveNumber(resale.lowestResalePrice, item.lowestPrice), availableCopies);
 
     return {
       ...item,
       lowestPrice,
-      availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
+      availableCopies,
       dealPercent: item.rap && lowestPrice > 0 && lowestPrice < item.rap
         ? Math.round(((item.rap - lowestPrice) / item.rap) * 10000) / 100
         : item.dealPercent,
@@ -960,12 +983,14 @@ async function addHistoryMetrics(item) {
   const ownHistory = await fetchStoredSnapshots(item.assetId);
   const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
   const metrics = buildRapChangeMetrics(ownHistory, rap);
+  const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
+  const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), availableCopies);
 
   return {
     ...item,
     rap,
-    lowestPrice: firstNumber(resale.lowestResalePrice, item.lowestPrice),
-    availableCopies: firstNonNegativeNumber(resale.numberRemaining, item.availableCopies),
+    lowestPrice,
+    availableCopies,
     lossAllTime: metrics.lossAllTime,
     loss24h: metrics.loss24h,
     loss7d: metrics.loss7d,
@@ -1162,7 +1187,7 @@ function interleaveForCoverage(items, bucketCount = 12) {
 
 function buildItemFromCatalog(item, resale, marketType) {
   const assetId = normalizeNumber(item.id || item.assetId);
-  const lowestPrice = firstPositiveNumber(
+  const rawLowestPrice = firstPositiveNumber(
     item.lowestResalePrice,
     item.lowestPrice,
     item.price,
@@ -1181,6 +1206,7 @@ function buildItemFromCatalog(item, resale, marketType) {
     item.unitsAvailableForConsumption,
     resale.numberRemaining
   );
+  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
   const totalCopies = firstPositiveNumber(
     item.totalQuantity,
     resale.assetStock
@@ -1246,7 +1272,7 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
 
   const collectibleDetails = details.CollectiblesItemDetails || {};
   const creator = details.Creator || {};
-  const lowestPrice = firstNumber(
+  const rawLowestPrice = firstNumber(
     catalogDetails.lowestResalePrice,
     catalogDetails.lowestPrice,
     collectibleDetails.CollectibleLowestResalePrice,
@@ -1264,13 +1290,15 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   const ownHistory = await fetchStoredSnapshots(safeAssetId);
   const metrics = buildRapChangeMetrics(ownHistory, rap);
   const chartHistory = metrics.history;
+  const availableCopies = firstNonNegativeNumber(catalogDetails.unitsAvailableForConsumption, resale.numberRemaining);
+  const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
 
   const data = {
     assetId: safeAssetId,
     name: String(catalogDetails.name || details.Name || rolimonsItem?.name || "Unknown Limited"),
     rap,
     lowestPrice,
-    availableCopies: firstNonNegativeNumber(catalogDetails.unitsAvailableForConsumption, resale.numberRemaining),
+    availableCopies,
     totalCopies: firstPositiveNumber(catalogDetails.totalQuantity, collectibleDetails.TotalQuantity, resale.assetStock),
     creatorName: String(catalogDetails.creatorName || creator.Name || ""),
     thumbnail: `rbxthumb://type=Asset&id=${safeAssetId}&w=420&h=420`,
@@ -1672,8 +1700,6 @@ async function fetchCatalogPage({
       || safeSort === "deal_desc"
       || safeSort.startsWith("loss_")
       || safeSort.startsWith("profit_")
-      || safeMinRap !== null
-      || safeMaxRap !== null
     );
 
   if (shouldUseClassicIndex) {
@@ -1800,8 +1826,10 @@ async function fetchCatalogPage({
   });
 
   if (safeSort === "price_asc") {
+    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
     collectedItems.sort((a, b) => a.lowestPrice - b.lowestPrice);
   } else if (safeSort === "price_desc") {
+    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
     collectedItems.sort((a, b) => b.lowestPrice - a.lowestPrice);
   } else if (safeSort === "rap_desc") {
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
