@@ -15,6 +15,7 @@ const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
+const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
 
@@ -23,6 +24,7 @@ const resaleCache = new Map();
 const economyCache = new Map();
 const catalogDetailCache = new Map();
 const detailCache = new Map();
+const portfolioCache = new Map();
 let rolimonsCache = null;
 let robloxCsrfToken = "";
 let lastSnapshotRunAt = 0;
@@ -1271,6 +1273,266 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   return data;
 }
 
+async function fetchUserCollectibles(userId) {
+  const safeUserId = Math.floor(Number(userId) || 0);
+
+  if (safeUserId <= 0) {
+    throw new Error("Invalid Roblox user id.");
+  }
+
+  const owned = [];
+  let cursor = "";
+  let guard = 0;
+
+  while (guard < 20) {
+    guard += 1;
+    const url = new URL(`${ROBLOX_INVENTORY_URL}/${safeUserId}/assets/collectibles`);
+    url.searchParams.set("assetType", "All");
+    url.searchParams.set("sortOrder", "Asc");
+    url.searchParams.set("limit", "100");
+
+    if (cursor) {
+      url.searchParams.set("cursor", cursor);
+    }
+
+    const page = await fetchJson(url, {
+      retries: 1,
+      timeoutMs: 7000,
+    });
+
+    for (const raw of Array.isArray(page?.data) ? page.data : []) {
+      const assetId = normalizeNumber(Number(raw.assetId || raw.id));
+
+      if (assetId <= 0) {
+        continue;
+      }
+
+      owned.push({
+        assetId,
+        name: String(raw.name || raw.assetName || "Unknown Limited"),
+        rap: firstPositiveNumber(
+          Number(raw.recentAveragePrice),
+          Number(raw.recentAveragePriceRounded)
+        ),
+        lowestPrice: firstPositiveNumber(
+          Number(raw.lowestResalePrice),
+          Number(raw.price)
+        ),
+        thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+        itemType: "Asset",
+      });
+    }
+
+    cursor = String(page?.nextPageCursor || "");
+
+    if (!cursor) {
+      break;
+    }
+  }
+
+  return owned;
+}
+
+function baselineValueForHistory(history, days) {
+  const baseline = findHistoryBaselineValue(history, days);
+  return Number(baseline) > 0 ? Number(baseline) : null;
+}
+
+function buildPortfolioChart(items, marketType, days) {
+  const filtered = items.filter((item) => item.marketType === marketType);
+  const nowTime = Date.now();
+  const cutoff = days ? nowTime - days * 24 * 60 * 60 * 1000 : 0;
+  const byDate = new Map();
+
+  for (const item of filtered) {
+    const quantity = Math.max(1, Number(item.quantity) || 1);
+    const history = Array.isArray(item.history) ? item.history : [];
+    const points = history.filter((point) => {
+      const time = Date.parse(point.date || "");
+      return Number(point.value) > 0 && Number.isFinite(time) && (!days || time >= cutoff);
+    });
+
+    if (points.length === 0 && Number(item.rap) > 0) {
+      points.push({
+        value: Number(item.rap),
+        date: new Date().toISOString(),
+      });
+    }
+
+    for (const point of points) {
+      const date = new Date(Date.parse(point.date)).toISOString();
+      const key = days && days <= 1 ? date.slice(0, 13) + ":00:00.000Z" : date.slice(0, 10);
+      const current = byDate.get(key) || 0;
+      byDate.set(key, current + Number(point.value) * quantity);
+    }
+  }
+
+  const chart = [...byDate.entries()]
+    .map(([date, value]) => ({ date, value: Math.round(value) }))
+    .filter((point) => point.value > 0)
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+
+  const currentValue = filtered.reduce((sum, item) => sum + (Number(item.rap) || 0) * Math.max(1, Number(item.quantity) || 1), 0);
+
+  if (currentValue > 0) {
+    const nowKey = new Date().toISOString();
+    const last = chart[chart.length - 1];
+
+    if (!last || Date.parse(nowKey) > Date.parse(last.date || "")) {
+      chart.push({ date: nowKey, value: Math.round(currentValue) });
+    }
+  }
+
+  return chart.slice(-500);
+}
+
+function calculatePortfolioStats(items, marketType, days) {
+  const filtered = items.filter((item) => item.marketType === marketType);
+  let currentValue = 0;
+  let baselineValue = 0;
+  let baselineCount = 0;
+  let bestGain = null;
+  let worstLoss = null;
+
+  for (const item of filtered) {
+    const quantity = Math.max(1, Number(item.quantity) || 1);
+    const rap = Number(item.rap) || 0;
+    const baseline = baselineValueForHistory(item.history, days);
+    const change = percentChange(baseline, rap);
+
+    currentValue += rap * quantity;
+
+    if (baseline) {
+      baselineValue += baseline * quantity;
+      baselineCount += 1;
+    }
+
+    if (typeof change === "number" && Number.isFinite(change)) {
+      const scored = {
+        assetId: item.assetId,
+        name: item.name,
+        change,
+        rap,
+        thumbnail: item.thumbnail,
+      };
+
+      if (bestGain === null || change > bestGain.change) {
+        bestGain = scored;
+      }
+
+      if (worstLoss === null || change < worstLoss.change) {
+        worstLoss = scored;
+      }
+    }
+  }
+
+  return {
+    count: filtered.length,
+    value: Math.round(currentValue),
+    baselineValue: baselineCount > 0 ? Math.round(baselineValue) : null,
+    change: baselineCount > 0 ? percentChange(baselineValue, currentValue) : null,
+    bestGain,
+    worstLoss,
+  };
+}
+
+async function fetchPortfolio(userId) {
+  const safeUserId = Math.floor(Number(userId) || 0);
+  const cached = portfolioCache.get(safeUserId);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const [inventory, rolimonsItems] = await Promise.all([
+    fetchUserCollectibles(safeUserId),
+    fetchRolimonsItems().catch(() => []),
+  ]);
+  const rolimonsById = new Map(rolimonsItems.map((item) => [item.assetId, item]));
+  const quantityByAssetId = new Map();
+
+  for (const item of inventory) {
+    const current = quantityByAssetId.get(item.assetId);
+
+    if (current) {
+      current.quantity += 1;
+      current.rap = firstPositiveNumber(current.rap, item.rap);
+      current.lowestPrice = firstPositiveNumber(current.lowestPrice, item.lowestPrice);
+    } else {
+      quantityByAssetId.set(item.assetId, { ...item, quantity: 1 });
+    }
+  }
+
+  const assetIds = [...quantityByAssetId.keys()];
+  const storedHistoryById = await fetchStoredSnapshotsForAssets(assetIds);
+  const items = [];
+
+  for (const item of quantityByAssetId.values()) {
+    const rolimonsItem = rolimonsById.get(item.assetId);
+    const marketType = rolimonsItem ? "roblox" : "ugc";
+    const rap = firstPositiveNumber(
+      rolimonsItem?.rap,
+      item.rap
+    );
+    const history = buildRawComparableRapHistory(
+      storedHistoryById.get(item.assetId) || [],
+      rap
+    );
+    const metrics = buildRapChangeMetrics(history, rap);
+
+    items.push({
+      assetId: item.assetId,
+      name: rolimonsItem?.name || item.name,
+      marketType,
+      quantity: item.quantity,
+      rap,
+      lowestPrice: item.lowestPrice || rolimonsItem?.lowestPrice || null,
+      thumbnail: item.thumbnail,
+      history: metrics.history,
+      change24h: metrics.profit24h,
+      change7d: metrics.profit7d,
+      change30d: metrics.profit30d,
+      change6m: percentChange(baselineValueForHistory(history, 180), rap),
+      change1y: metrics.profit1y,
+      changeAll: metrics.profitAllTime,
+    });
+  }
+
+  const ranges = {
+    "24h": 1,
+    "7d": 7,
+    "30d": 30,
+    "6m": 180,
+    "1y": 365,
+    max: null,
+  };
+  const stats = {};
+  const charts = {};
+
+  for (const [range, days] of Object.entries(ranges)) {
+    stats[range] = {
+      ugc: calculatePortfolioStats(items, "ugc", days),
+      roblox: calculatePortfolioStats(items, "roblox", days),
+    };
+    charts[range] = {
+      ugc: buildPortfolioChart(items, "ugc", days),
+      roblox: buildPortfolioChart(items, "roblox", days),
+    };
+  }
+
+  const data = {
+    ok: true,
+    userId: safeUserId,
+    items: items.sort((a, b) => (Number(b.rap) || 0) - (Number(a.rap) || 0)).slice(0, 120),
+    stats,
+    charts,
+    updatedAt: new Date().toISOString(),
+  };
+
+  portfolioCache.set(safeUserId, { fetchedAt: Date.now(), data });
+  return data;
+}
+
 async function fetchCatalogPage({
   cursor = "",
   limit = 30,
@@ -1644,6 +1906,20 @@ async function handleRequest(req, res) {
     } catch (error) {
       sendJson(res, 502, {
         error: "Could not load item details right now.",
+        detail: error.message,
+      });
+    }
+
+    return;
+  }
+
+  if (url.pathname === "/api/portfolio") {
+    try {
+      const data = await fetchPortfolio(url.searchParams.get("userId") || "0");
+      sendJson(res, 200, data);
+    } catch (error) {
+      sendJson(res, 502, {
+        error: "Could not load portfolio right now. Make sure the player's inventory is public.",
         detail: error.message,
       });
     }
