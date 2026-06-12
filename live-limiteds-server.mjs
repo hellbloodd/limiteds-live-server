@@ -553,8 +553,7 @@ function buildRawComparableRapHistory(ownHistory, currentRap) {
 
 function buildRapChangeMetrics(ownHistory, currentRap) {
   const rawHistory = buildRawComparableRapHistory(ownHistory, currentRap);
-  const compactedHistory = compactHistoryByDay(rawHistory).slice(-1000);
-  const history = compactedHistory.length >= 2 ? compactedHistory : rawHistory.slice(-1000);
+  const history = rawHistory.slice(-1000);
 
   if (rawHistory.length < 2) {
     return {
@@ -569,6 +568,11 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
       profit7d: null,
       profit30d: null,
       profit1y: null,
+      changeAllTime: null,
+      change24h: null,
+      change7d: null,
+      change30d: null,
+      change1y: null,
     };
   }
 
@@ -586,16 +590,21 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
 
   return {
     history,
-    lossAllTime: changeAll,
-    loss24h: change24h,
-    loss7d: change7d,
-    loss30d: change30d,
-    loss1y: change1y,
-    profitAllTime: changeAll,
-    profit24h: change24h,
-    profit7d: change7d,
-    profit30d: change30d,
-    profit1y: change1y,
+    lossAllTime: changeAll !== null && changeAll < 0 ? Math.abs(changeAll) : null,
+    loss24h: change24h !== null && change24h < 0 ? Math.abs(change24h) : null,
+    loss7d: change7d !== null && change7d < 0 ? Math.abs(change7d) : null,
+    loss30d: change30d !== null && change30d < 0 ? Math.abs(change30d) : null,
+    loss1y: change1y !== null && change1y < 0 ? Math.abs(change1y) : null,
+    profitAllTime: changeAll !== null && changeAll > 0 ? changeAll : null,
+    profit24h: change24h !== null && change24h > 0 ? change24h : null,
+    profit7d: change7d !== null && change7d > 0 ? change7d : null,
+    profit30d: change30d !== null && change30d > 0 ? change30d : null,
+    profit1y: change1y !== null && change1y > 0 ? change1y : null,
+    changeAllTime: changeAll,
+    change24h,
+    change7d,
+    change30d,
+    change1y,
   };
 }
 
@@ -611,7 +620,7 @@ function compareChangeMetric(a, b, metricKey, isLossSort) {
     return rightHasMetric ? 1 : -1;
   }
 
-  return isLossSort ? left - right : right - left;
+  return right - left;
 }
 
 async function fetchStoredSnapshots(assetId) {
@@ -1253,15 +1262,8 @@ async function fetchItemDetails(assetId, marketType = "ugc") {
   );
 
   const ownHistory = await fetchStoredSnapshots(safeAssetId);
-  const saleHistory = normalizeHistoryPoints(resale.priceDataPoints).map((point) => ({
-    ...point,
-    source: "sale",
-  }));
   const metrics = buildRapChangeMetrics(ownHistory, rap);
-  const chartHistory = buildRawComparableRapHistory(
-    saleHistory.length >= 2 ? saleHistory : ownHistory,
-    rap
-  );
+  const chartHistory = metrics.history;
 
   const data = {
     assetId: safeAssetId,
@@ -1531,12 +1533,12 @@ async function fetchPortfolio(userId) {
       lowestPrice: item.lowestPrice || rolimonsItem?.lowestPrice || null,
       thumbnail: item.thumbnail,
       history: metrics.history,
-      change24h: metrics.profit24h,
-      change7d: metrics.profit7d,
-      change30d: metrics.profit30d,
+      change24h: metrics.change24h,
+      change7d: metrics.change7d,
+      change30d: metrics.change30d,
       change6m: percentChange(baselineValueForHistory(history, 180), rap),
-      change1y: metrics.profit1y,
-      changeAll: metrics.profitAllTime,
+      change1y: metrics.change1y,
+      changeAll: metrics.changeAllTime,
     });
   }
 
