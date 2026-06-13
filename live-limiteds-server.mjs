@@ -262,6 +262,11 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "price_desc",
     "rap_desc",
     "deal_desc",
+    "overpriced_desc",
+    "bought_24h",
+    "bought_7d",
+    "bought_30d",
+    "bought_1y",
     "loss_24h",
     "loss_7d",
     "loss_30d",
@@ -571,6 +576,95 @@ function hasMinimumDeal(item, minimumPercent = 10) {
 function compareDealItems(a, b) {
   const percentDiff = (Number(b?.dealPercent) || 0) - (Number(a?.dealPercent) || 0);
   return percentDiff !== 0 ? percentDiff : (Number(b?.dealValue) || 0) - (Number(a?.dealValue) || 0);
+}
+
+function calculateOverpricedValue(rap, lowestPrice) {
+  const safeRap = Number(rap);
+  const safePrice = Number(lowestPrice);
+
+  if (!Number.isFinite(safeRap) || !Number.isFinite(safePrice) || safeRap <= 0 || safePrice <= safeRap) {
+    return null;
+  }
+
+  return Math.round(safePrice - safeRap);
+}
+
+function calculateOverpricedPercent(rap, lowestPrice) {
+  const overpricedValue = calculateOverpricedValue(rap, lowestPrice);
+  const safeRap = Number(rap);
+
+  if (overpricedValue === null || !Number.isFinite(safeRap) || safeRap <= 0) {
+    return null;
+  }
+
+  return Math.round((overpricedValue / safeRap) * 10000) / 100;
+}
+
+function hasMinimumOverpriced(item, minimumPercent = 10) {
+  const overpricedPercent = Number(item?.overpricedPercent);
+  return Number.isFinite(overpricedPercent) && overpricedPercent >= minimumPercent;
+}
+
+function compareOverpricedItems(a, b) {
+  const percentDiff = (Number(b?.overpricedPercent) || 0) - (Number(a?.overpricedPercent) || 0);
+  return percentDiff !== 0 ? percentDiff : (Number(b?.overpricedValue) || 0) - (Number(a?.overpricedValue) || 0);
+}
+
+function getBoughtRangeDays(sort) {
+  return {
+    bought_24h: 1,
+    bought_7d: 7,
+    bought_30d: 30,
+    bought_1y: 365,
+  }[sort] ?? null;
+}
+
+function calculateSalesMetrics(points, days) {
+  if (!Array.isArray(points) || !days) {
+    return { salesCount: null, averageSalePrice: null };
+  }
+
+  const startTime = getPeriodStartTime(days);
+  const endTime = getPeriodEndTime(days);
+  let salesCount = 0;
+  let totalSoldValue = 0;
+  let totalAverageValue = 0;
+  let averagePointCount = 0;
+
+  for (const point of points) {
+    const value = Number(point.value);
+    const time = Date.parse(point.date || "");
+
+    if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(time) || time < startTime || time > endTime) {
+      continue;
+    }
+
+    const volume = Number(point.salesVolume ?? point.volume ?? point.sales ?? point.count ?? point.quantity);
+
+    if (Number.isFinite(volume) && volume > 0) {
+      salesCount += volume;
+      totalSoldValue += value * volume;
+    } else {
+      salesCount += 1;
+      totalAverageValue += value;
+      averagePointCount += 1;
+    }
+  }
+
+  if (salesCount <= 0) {
+    return { salesCount: null, averageSalePrice: null };
+  }
+
+  const averageSalePrice = totalSoldValue > 0
+    ? Math.round(totalSoldValue / salesCount)
+    : Math.round(totalAverageValue / Math.max(averagePointCount, 1));
+
+  return { salesCount, averageSalePrice };
+}
+
+function compareBoughtItems(a, b) {
+  const countDiff = (Number(b?.salesCount) || 0) - (Number(a?.salesCount) || 0);
+  return countDiff !== 0 ? countDiff : (Number(b?.averageSalePrice) || 0) - (Number(a?.averageSalePrice) || 0);
 }
 
 function snapshotStorageEnabled() {
@@ -1062,6 +1156,8 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, item.totalCopies),
     dealValue: calculateDealValue(rap, lowestPrice),
     dealPercent: calculateDealPercent(rap, lowestPrice),
+    overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+    overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
   };
 }
 
@@ -1092,6 +1188,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       itemType: String(details.itemType || item.itemType || "Asset"),
       dealValue: calculateDealValue(rap, lowestPrice),
       dealPercent: calculateDealPercent(rap, lowestPrice),
+      overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+      overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
     };
   });
 
@@ -1114,6 +1212,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       availableCopies,
       dealValue: calculateDealValue(item.rap, lowestPrice) ?? item.dealValue,
       dealPercent: calculateDealPercent(item.rap, lowestPrice) ?? item.dealPercent,
+      overpricedValue: calculateOverpricedValue(item.rap, lowestPrice) ?? item.overpricedValue,
+      overpricedPercent: calculateOverpricedPercent(item.rap, lowestPrice) ?? item.overpricedPercent,
     };
   });
 }
@@ -1262,8 +1362,9 @@ async function fetchRolimonsCatalogPage({
   };
   const metricKey = metricKeyBySort[sort];
   const isLossSort = String(sort).startsWith("loss_");
+  const boughtRangeDays = getBoughtRangeDays(sort);
 
-  if (sort === "rap_desc" || sort === "deal_desc" || metricKey) {
+  if (sort === "rap_desc" || sort === "deal_desc" || sort === "overpriced_desc" || metricKey || boughtRangeDays) {
     items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
   } else if (sort === "price_asc" || sort === "price_desc") {
     // Price sorts are handled better by Roblox catalog search, not the RAP index.
@@ -1274,20 +1375,23 @@ async function fetchRolimonsCatalogPage({
     items.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  if (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc" || metricKey || minPrice !== null || maxPrice !== null) {
-    const shouldScanAllMatches = keywordTokens.length > 0 || Boolean(metricKey);
+  if (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc" || sort === "overpriced_desc" || boughtRangeDays || metricKey || minPrice !== null || maxPrice !== null) {
+    const shouldScanAllMatches = keywordTokens.length > 0 || Boolean(metricKey) || Boolean(boughtRangeDays);
     const scanSize = shouldScanAllMatches
       || sort === "deal_desc"
+      || sort === "overpriced_desc"
       ? items.length
       : Math.min(items.length, Math.max(offset + limit * 8, 240));
-    const scanWindow = sort === "deal_desc"
+    const scanWindow = sort === "deal_desc" || sort === "overpriced_desc"
       ? interleaveForCoverage(items).slice(0, scanSize)
       : items.slice(0, scanSize);
-    const needsLiveResalePrice = !metricKey && (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc");
+    const needsLiveResalePrice = !metricKey && !boughtRangeDays && (sort === "price_asc" || sort === "price_desc" || sort === "deal_desc" || sort === "overpriced_desc");
     let enriched = metricKey
       ? scanWindow
+      : boughtRangeDays
+      ? scanWindow
       : needsLiveResalePrice
-      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow, sort !== "deal_desc")
+      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow, sort !== "deal_desc" && sort !== "overpriced_desc")
       : await mapWithConcurrency(
         scanWindow,
         8,
@@ -1319,6 +1423,30 @@ async function fetchRolimonsCatalogPage({
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => hasMinimumDeal(item));
       enriched.sort(compareDealItems);
+    } else if (sort === "overpriced_desc") {
+      enriched = enriched.filter((item) => hasMinimumOverpriced(item));
+      enriched.sort(compareOverpricedItems);
+    } else if (boughtRangeDays) {
+      enriched = await mapWithConcurrency(interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360)), 20, async (item) => {
+        const resale = await fetchResaleData(item.assetId);
+        const salesMetrics = calculateSalesMetrics(resale.priceDataPoints, boughtRangeDays);
+        const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+        const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
+
+        return {
+          ...item,
+          rap,
+          lowestPrice,
+          salesCount: salesMetrics.salesCount,
+          averageSalePrice: salesMetrics.averageSalePrice,
+          dealValue: calculateDealValue(rap, lowestPrice),
+          dealPercent: calculateDealPercent(rap, lowestPrice),
+          overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+          overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
+        };
+      });
+      enriched = enriched.filter((item) => Number(item.salesCount) > 0);
+      enriched.sort(compareBoughtItems);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -1333,7 +1461,7 @@ async function fetchRolimonsCatalogPage({
       return true;
     });
 
-    if (sort === "deal_desc") {
+    if (sort === "deal_desc" || sort === "overpriced_desc") {
       const visibleItems = [];
       const chunkSize = Math.max(limit * 6, 180);
       let candidateOffset = offset;
@@ -1341,7 +1469,7 @@ async function fetchRolimonsCatalogPage({
       while (candidateOffset < enriched.length && visibleItems.length < limit) {
         const chunk = enriched.slice(candidateOffset, candidateOffset + chunkSize);
         const validDeals = chunk
-          .filter((item) => hasMinimumDeal(item))
+          .filter((item) => sort === "deal_desc" ? hasMinimumDeal(item) : hasMinimumOverpriced(item))
           .filter((item) => {
             if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
             if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
@@ -1354,6 +1482,9 @@ async function fetchRolimonsCatalogPage({
       }
 
       visibleItems.sort(compareDealItems);
+      if (sort === "overpriced_desc") {
+        visibleItems.sort(compareOverpricedItems);
+      }
 
       return {
         items: visibleItems.slice(0, limit),
@@ -1363,7 +1494,7 @@ async function fetchRolimonsCatalogPage({
       };
     }
 
-    const pageItems = sort === "deal_desc"
+    const pageItems = sort === "deal_desc" || sort === "overpriced_desc"
       ? enriched.slice(offset, offset + Math.max(limit * 6, 180))
       : enriched.slice(offset, offset + limit);
     let visibleItems = metricKey
@@ -1374,6 +1505,11 @@ async function fetchRolimonsCatalogPage({
       visibleItems = visibleItems
         .filter((item) => hasMinimumDeal(item))
         .sort(compareDealItems)
+        .slice(0, limit);
+    } else if (sort === "overpriced_desc") {
+      visibleItems = visibleItems
+        .filter((item) => hasMinimumOverpriced(item))
+        .sort(compareOverpricedItems)
         .slice(0, limit);
     }
 
@@ -1464,6 +1600,8 @@ function buildItemFromCatalog(item, resale, marketType) {
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
   const dealValue = calculateDealValue(rap, lowestPrice);
   const dealPercent = calculateDealPercent(rap, lowestPrice);
+  const overpricedValue = calculateOverpricedValue(rap, lowestPrice);
+  const overpricedPercent = calculateOverpricedPercent(rap, lowestPrice);
   const totalCopies = firstPositiveNumber(
     item.totalQuantity,
     resale.assetStock
@@ -1485,6 +1623,10 @@ function buildItemFromCatalog(item, resale, marketType) {
     hasResellers: Boolean(item.hasResellers),
     dealValue,
     dealPercent,
+    overpricedValue,
+    overpricedPercent,
+    salesCount: null,
+    averageSalePrice: null,
     loss24h: null,
     loss7d: null,
     loss30d: null,
@@ -1968,6 +2110,11 @@ async function fetchCatalogPage({
     "price_desc",
     "rap_desc",
     "deal_desc",
+    "overpriced_desc",
+    "bought_24h",
+    "bought_7d",
+    "bought_30d",
+    "bought_1y",
     "loss_24h",
     "loss_7d",
     "loss_30d",
@@ -2008,6 +2155,11 @@ async function fetchCatalogPage({
   const isMetricSort = [
     "rap_desc",
     "deal_desc",
+    "overpriced_desc",
+    "bought_24h",
+    "bought_7d",
+    "bought_30d",
+    "bought_1y",
     "loss_24h",
     "loss_7d",
     "loss_30d",
@@ -2027,15 +2179,16 @@ async function fetchCatalogPage({
     || safeMinRap !== null
     || safeMaxRap !== null;
   const isChangeSort = safeSort.startsWith("loss_") || safeSort.startsWith("profit_");
+  const isBoughtSort = safeSort.startsWith("bought_");
   const isRobloxPriceSort = safeMarketType === "roblox"
     && (safeSort === "price_asc" || safeSort === "price_desc");
-  const isRobloxDealSort = safeMarketType === "roblox" && safeSort === "deal_desc";
+  const isRobloxDealSort = safeMarketType === "roblox" && (safeSort === "deal_desc" || safeSort === "overpriced_desc");
   const isRobloxRecent = safeMarketType === "roblox" && safeSort === "updated";
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc" || isRobloxRecent;
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
-  const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || safeSort === "deal_desc" || hasRangeFilter)
+    : safeMarketType === "ugc" ? (isChangeSort || isBoughtSort || safeSort === "deal_desc" || safeSort === "overpriced_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
+  const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || isBoughtSort || safeSort === "deal_desc" || safeSort === "overpriced_desc" || hasRangeFilter)
     ? safeLimit * 4
     : isRobloxRecent
       ? safeLimit * 2
@@ -2046,6 +2199,8 @@ async function fetchCatalogPage({
       keywordTokens.length > 0
       || safeSort === "rap_desc"
       || safeSort === "deal_desc"
+      || safeSort === "overpriced_desc"
+      || safeSort.startsWith("bought_")
       || safeSort.startsWith("loss_")
       || safeSort.startsWith("profit_")
     );
@@ -2171,6 +2326,31 @@ async function fetchCatalogPage({
     collectedItems = await addLiveHistoryMetricsBatch(collectedItems);
   }
 
+  if (isBoughtSort) {
+    const boughtRangeDays = getBoughtRangeDays(safeSort);
+
+    collectedItems = await mapWithConcurrency(collectedItems, 20, async (item) => {
+      const resale = item.collectibleItemId && (safeMarketType === "ugc" || item.assetId > 10_000_000_000)
+        ? await fetchCollectibleResaleData(item.collectibleItemId)
+        : await fetchResaleData(item.assetId);
+      const salesMetrics = calculateSalesMetrics(resale.priceDataPoints, boughtRangeDays);
+      const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+      const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
+
+      return {
+        ...item,
+        rap,
+        lowestPrice,
+        salesCount: salesMetrics.salesCount,
+        averageSalePrice: salesMetrics.averageSalePrice,
+        dealValue: calculateDealValue(rap, lowestPrice),
+        dealPercent: calculateDealPercent(rap, lowestPrice),
+        overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+        overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
+      };
+    });
+  }
+
   collectedItems = collectedItems.filter((item) => {
     if (safeMarketType === "ugc" && !isBuyableCollectibleItem(item)) return false;
     if (safeMinPrice !== null && (!item.lowestPrice || item.lowestPrice < safeMinPrice)) return false;
@@ -2192,6 +2372,12 @@ async function fetchCatalogPage({
   } else if (safeSort === "deal_desc") {
     collectedItems = collectedItems.filter((item) => hasMinimumDeal(item));
     collectedItems.sort(compareDealItems);
+  } else if (safeSort === "overpriced_desc") {
+    collectedItems = collectedItems.filter((item) => hasMinimumOverpriced(item));
+    collectedItems.sort(compareOverpricedItems);
+  } else if (isBoughtSort) {
+    collectedItems = collectedItems.filter((item) => Number(item.salesCount) > 0);
+    collectedItems.sort(compareBoughtItems);
   } else {
     const metricKeyBySort = {
       loss_24h: "loss24h",
