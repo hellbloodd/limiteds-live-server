@@ -1296,16 +1296,21 @@ async function fetchRolimonsCatalogPage({
 
     if (metricKey) {
       enriched = await addHistoryMetricsBatch(enriched);
-      enriched = enriched.filter((item) => {
-        const value = Number(item[metricKey]);
-        return Number.isFinite(value) && value > 0;
-      });
-      enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
+      enriched.sort((a, b) => {
+        const aValue = Number(a[metricKey]);
+        const bValue = Number(b[metricKey]);
 
-      // Stored snapshots are fast but can be stale. Recheck the strongest
-      // candidates with the same live resale history used by the item modal so
-      // cards, sorting, and charts agree.
-      enriched = await addLiveHistoryMetricsBatch(enriched.slice(0, Math.max(limit * 4, 120)));
+        if (Number.isFinite(aValue) && Number.isFinite(bValue) && aValue !== bValue) {
+          return compareChangeMetric(a, b, metricKey, isLossSort);
+        }
+
+        return (Number(b.rap) || 0) - (Number(a.rap) || 0);
+      });
+
+      // Stored snapshots can be empty or stale. Recheck a broad candidate set
+      // with the same live resale history used by the item modal before
+      // filtering, otherwise metric tabs can incorrectly return 0 items.
+      enriched = await addLiveHistoryMetricsBatch(interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360)));
       enriched = enriched.filter((item) => {
         const value = Number(item[metricKey]);
         return Number.isFinite(value) && value > 0;
