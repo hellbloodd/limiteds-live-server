@@ -566,6 +566,16 @@ function calculateDealPercent(rap, lowestPrice) {
   return Math.round((dealValue / safeRap) * 10000) / 100;
 }
 
+function hasMinimumDeal(item, minimumPercent = 10) {
+  const dealPercent = Number(item?.dealPercent);
+  return Number.isFinite(dealPercent) && dealPercent >= minimumPercent;
+}
+
+function compareDealItems(a, b) {
+  const percentDiff = (Number(b?.dealPercent) || 0) - (Number(a?.dealPercent) || 0);
+  return percentDiff !== 0 ? percentDiff : (Number(b?.dealValue) || 0) - (Number(a?.dealValue) || 0);
+}
+
 function snapshotStorageEnabled() {
   return SUPABASE_URL !== "" && SUPABASE_SERVICE_ROLE_KEY !== "";
 }
@@ -1306,11 +1316,8 @@ async function fetchRolimonsCatalogPage({
       });
       enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
-      enriched = enriched.filter((item) => item.dealPercent && item.dealPercent >= 10);
-      enriched.sort((a, b) => {
-        const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
-        return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
-      });
+      enriched = enriched.filter((item) => hasMinimumDeal(item));
+      enriched.sort(compareDealItems);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -1325,6 +1332,37 @@ async function fetchRolimonsCatalogPage({
       return true;
     });
 
+    if (sort === "deal_desc") {
+      const visibleItems = [];
+      const chunkSize = Math.max(limit * 6, 180);
+      let candidateOffset = offset;
+
+      while (candidateOffset < enriched.length && visibleItems.length < limit) {
+        const chunk = enriched.slice(candidateOffset, candidateOffset + chunkSize);
+        const refreshed = await mapWithConcurrency(chunk, 8, (item) => enrichRolimonsItem(item, true));
+        const validDeals = refreshed
+          .filter((item) => hasMinimumDeal(item))
+          .filter((item) => {
+            if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
+            if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
+            return true;
+          })
+          .sort(compareDealItems);
+
+        visibleItems.push(...validDeals);
+        candidateOffset += chunk.length;
+      }
+
+      visibleItems.sort(compareDealItems);
+
+      return {
+        items: visibleItems.slice(0, limit),
+        nextPageCursor: cursorFromOffset(candidateOffset, enriched.length),
+        previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - limit), enriched.length) : "",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
     const pageItems = sort === "deal_desc"
       ? enriched.slice(offset, offset + Math.max(limit * 6, 180))
       : enriched.slice(offset, offset + limit);
@@ -1334,11 +1372,8 @@ async function fetchRolimonsCatalogPage({
 
     if (sort === "deal_desc") {
       visibleItems = visibleItems
-        .filter((item) => item.dealPercent && item.dealPercent >= 10)
-        .sort((a, b) => {
-          const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
-          return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
-        })
+        .filter((item) => hasMinimumDeal(item))
+        .sort(compareDealItems)
         .slice(0, limit);
     }
 
@@ -2155,11 +2190,8 @@ async function fetchCatalogPage({
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
     collectedItems.sort((a, b) => b.rap - a.rap);
   } else if (safeSort === "deal_desc") {
-    collectedItems = collectedItems.filter((item) => item.dealPercent && item.dealPercent >= 10);
-    collectedItems.sort((a, b) => {
-      const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
-      return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
-    });
+    collectedItems = collectedItems.filter((item) => hasMinimumDeal(item));
+    collectedItems.sort(compareDealItems);
   } else {
     const metricKeyBySort = {
       loss_24h: "loss24h",
