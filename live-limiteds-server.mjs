@@ -517,6 +517,28 @@ function percentGain(fromValue, toValue) {
   return change;
 }
 
+function calculateDealValue(rap, lowestPrice) {
+  const safeRap = Number(rap);
+  const safePrice = Number(lowestPrice);
+
+  if (!Number.isFinite(safeRap) || !Number.isFinite(safePrice) || safeRap <= 0 || safePrice <= 0 || safePrice >= safeRap) {
+    return null;
+  }
+
+  return Math.round(safeRap - safePrice);
+}
+
+function calculateDealPercent(rap, lowestPrice) {
+  const dealValue = calculateDealValue(rap, lowestPrice);
+  const safeRap = Number(rap);
+
+  if (dealValue === null || !Number.isFinite(safeRap) || safeRap <= 0) {
+    return null;
+  }
+
+  return Math.round((dealValue / safeRap) * 10000) / 100;
+}
+
 function snapshotStorageEnabled() {
   return SUPABASE_URL !== "" && SUPABASE_SERVICE_ROLE_KEY !== "";
 }
@@ -1004,9 +1026,8 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
     lowestPrice,
     availableCopies,
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, item.totalCopies),
-    dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
-      ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
-      : null,
+    dealValue: calculateDealValue(rap, lowestPrice),
+    dealPercent: calculateDealPercent(rap, lowestPrice),
   };
 }
 
@@ -1036,9 +1057,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       totalCopies: firstPositiveNumber(details.totalQuantity, item.totalCopies),
       creatorName: String(details.creatorName || item.creatorName || "Roblox"),
       itemType: String(details.itemType || item.itemType || "Asset"),
-      dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
-        ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
-        : null,
+      dealValue: calculateDealValue(rap, lowestPrice),
+      dealPercent: calculateDealPercent(rap, lowestPrice),
     };
   });
 
@@ -1059,9 +1079,8 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       ...item,
       lowestPrice,
       availableCopies,
-      dealPercent: item.rap && lowestPrice > 0 && lowestPrice < item.rap
-        ? Math.round(((item.rap - lowestPrice) / item.rap) * 10000) / 100
-        : item.dealPercent,
+      dealValue: calculateDealValue(item.rap, lowestPrice) ?? item.dealValue,
+      dealPercent: calculateDealPercent(item.rap, lowestPrice) ?? item.dealPercent,
     };
   });
 }
@@ -1260,8 +1279,11 @@ async function fetchRolimonsCatalogPage({
       });
       enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
-      enriched = enriched.filter((item) => item.dealPercent && item.dealPercent > 0);
-      enriched.sort((a, b) => b.dealPercent - a.dealPercent);
+      enriched = enriched.filter((item) => item.dealValue && item.dealValue > 0);
+      enriched.sort((a, b) => {
+        const valueDiff = (b.dealValue || 0) - (a.dealValue || 0);
+        return valueDiff !== 0 ? valueDiff : (b.dealPercent || 0) - (a.dealPercent || 0);
+      });
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -1366,9 +1388,8 @@ function buildItemFromCatalog(item, resale, marketType) {
   );
   const sellerSignal = item.hasResellers ? 1 : availableCopies;
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
-  const dealPercent = rap && lowestPrice > 0 && lowestPrice < rap
-    ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
-    : null;
+  const dealValue = calculateDealValue(rap, lowestPrice);
+  const dealPercent = calculateDealPercent(rap, lowestPrice);
   const totalCopies = firstPositiveNumber(
     item.totalQuantity,
     resale.assetStock
@@ -1388,6 +1409,7 @@ function buildItemFromCatalog(item, resale, marketType) {
     itemType,
     collectibleItemId: item.collectibleItemId ? String(item.collectibleItemId) : "",
     hasResellers: Boolean(item.hasResellers),
+    dealValue,
     dealPercent,
     loss24h: null,
     loss7d: null,
@@ -1624,74 +1646,84 @@ function baselineValueForHistory(history, days) {
 
 function buildPortfolioChart(items, marketType, days) {
   const filtered = items.filter((item) => item.marketType === marketType);
-  const cutoff = days ? getPeriodStartTime(days) : 0;
-  const byDate = new Map();
+  const startTime = days ? getPeriodStartTime(days) : 0;
+  const nowTime = Date.now();
+  const timelines = [];
+  const timeKeys = new Set();
 
   for (const item of filtered) {
     const quantity = Math.max(1, Number(item.quantity) || 1);
-    const history = Array.isArray(item.history) ? item.history : [];
-    const points = [];
+    const history = (Array.isArray(item.history) ? item.history : [])
+      .map((point) => ({
+        value: Number(point.value),
+        time: Date.parse(point.date || ""),
+      }))
+      .filter((point) => Number.isFinite(point.value) && point.value > 0 && Number.isFinite(point.time))
+      .sort((a, b) => a.time - b.time);
+    const currentRap = Number(item.rap) || 0;
 
-    if (cutoff) {
-      let baseline = null;
+    if (currentRap > 0) {
+      history.push({ value: currentRap, time: nowTime });
+    }
 
-      for (const point of history) {
-        const value = Number(point.value);
-        const time = Date.parse(point.date || "");
+    if (history.length === 0) {
+      continue;
+    }
 
-        if (Number.isFinite(value) && value > 0 && Number.isFinite(time) && time <= cutoff) {
-          baseline = value;
+    const timeline = {
+      quantity,
+      points: history,
+    };
+
+    timelines.push(timeline);
+
+    const visibleStart = startTime || history[0].time;
+    timeKeys.add(visibleStart);
+
+    for (const point of history) {
+      if ((!startTime || point.time >= startTime) && point.time <= nowTime) {
+        timeKeys.add(point.time);
+      }
+    }
+  }
+
+  if (timelines.length === 0) {
+    return [];
+  }
+
+  timeKeys.add(nowTime);
+
+  const times = [...timeKeys]
+    .filter((time) => Number.isFinite(time) && (!startTime || time >= startTime) && time <= nowTime)
+    .sort((a, b) => a - b)
+    .slice(-500);
+
+  return times.map((time) => {
+    let value = 0;
+
+    for (const timeline of timelines) {
+      let latest = null;
+
+      for (const point of timeline.points) {
+        if (point.time <= time) {
+          latest = point.value;
+        } else {
+          break;
         }
       }
 
-      if (baseline) {
-        points.push({
-          value: baseline,
-          date: new Date(cutoff).toISOString(),
-        });
+      if (latest === null) {
+        latest = timeline.points[0].value;
       }
+
+      value += latest * timeline.quantity;
     }
 
-    for (const point of history) {
-      const time = Date.parse(point.date || "");
-
-      if (Number(point.value) > 0 && Number.isFinite(time) && (!cutoff || time >= cutoff)) {
-        points.push(point);
-      }
-    }
-
-    if (points.length === 0 && Number(item.rap) > 0) {
-      points.push({
-        value: Number(item.rap),
-        date: new Date().toISOString(),
-      });
-    }
-
-    for (const point of points) {
-      const date = new Date(Date.parse(point.date)).toISOString();
-      const key = days && days <= 1 ? date.slice(0, 13) + ":00:00.000Z" : date.slice(0, 10);
-      const current = byDate.get(key) || 0;
-      byDate.set(key, current + Number(point.value) * quantity);
-    }
-  }
-
-  const chart = [...byDate.entries()]
-    .map(([date, value]) => ({ date, value: Math.round(value) }))
-    .filter((point) => point.value > 0)
-    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-
-  const currentValue = filtered.reduce((sum, item) => sum + (Number(item.rap) || 0) * Math.max(1, Number(item.quantity) || 1), 0);
-
-  if (currentValue > 0) {
-    const nowKey = new Date().toISOString();
-    const last = chart[chart.length - 1];
-
-    if (!last || Date.parse(nowKey) > Date.parse(last.date || "")) {
-      chart.push({ date: nowKey, value: Math.round(currentValue) });
-    }
-  }
-
-  return chart.slice(-500);
+    return {
+      date: new Date(time).toISOString(),
+      value: Math.round(value),
+    };
+  }).filter((point) => point.value > 0);
 }
 
 function calculatePortfolioStats(items, marketType, days) {
@@ -2084,8 +2116,11 @@ async function fetchCatalogPage({
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
     collectedItems.sort((a, b) => b.rap - a.rap);
   } else if (safeSort === "deal_desc") {
-    collectedItems = collectedItems.filter((item) => item.dealPercent && item.dealPercent > 0);
-    collectedItems.sort((a, b) => b.dealPercent - a.dealPercent);
+    collectedItems = collectedItems.filter((item) => item.dealValue && item.dealValue > 0);
+    collectedItems.sort((a, b) => {
+      const valueDiff = (b.dealValue || 0) - (a.dealValue || 0);
+      return valueDiff !== 0 ? valueDiff : (b.dealPercent || 0) - (a.dealPercent || 0);
+    });
   } else {
     const metricKeyBySort = {
       loss_24h: "loss24h",
