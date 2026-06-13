@@ -409,6 +409,7 @@ function normalizeHistoryPoints(points) {
     .map((point) => ({
       value: point.value,
       date: String(point.date || ""),
+      source: String(point.source || "resale"),
     }))
     .filter((point) => Number.isFinite(Date.parse(point.date)))
     .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
@@ -451,6 +452,32 @@ function findHistoryBaselineValue(history, days) {
   }
 
   return baseline ?? firstInsidePeriod;
+}
+
+function findPeriodBaselineValue(history, days) {
+  if (!days) {
+    return findHistoryBaselineValue(history, null);
+  }
+
+  const targetTime = getPeriodStartTime(days);
+  let firstInsidePeriod = null;
+
+  for (const point of history) {
+    const value = Number(point.value);
+    const time = Date.parse(point.date || "");
+    const source = String(point.source || "");
+
+    if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(time)) {
+      continue;
+    }
+
+    if (time >= targetTime && source !== "current") {
+      firstInsidePeriod = value;
+      break;
+    }
+  }
+
+  return firstInsidePeriod;
 }
 
 function getStartOfTodayTime() {
@@ -706,10 +733,10 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
 
   const rap = Number(currentRap);
   const baselineAll = findHistoryBaselineValue(rawHistory, null);
-  const baseline24h = findHistoryBaselineValue(rawHistory, 1);
-  const baseline7d = findHistoryBaselineValue(rawHistory, 7);
-  const baseline30d = findHistoryBaselineValue(rawHistory, 30);
-  const baseline1y = findHistoryBaselineValue(rawHistory, 365);
+  const baseline24h = findPeriodBaselineValue(rawHistory, 1);
+  const baseline7d = findPeriodBaselineValue(rawHistory, 7);
+  const baseline30d = findPeriodBaselineValue(rawHistory, 30);
+  const baseline1y = findPeriodBaselineValue(rawHistory, 365);
   const changeAll = percentChange(baselineAll, rap);
   const change24h = percentChange(baseline24h, rap);
   const change7d = percentChange(baseline7d, rap);
@@ -1279,10 +1306,10 @@ async function fetchRolimonsCatalogPage({
       });
       enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
-      enriched = enriched.filter((item) => item.dealValue && item.dealValue > 0);
+      enriched = enriched.filter((item) => item.dealPercent && item.dealPercent >= 10);
       enriched.sort((a, b) => {
-        const valueDiff = (b.dealValue || 0) - (a.dealValue || 0);
-        return valueDiff !== 0 ? valueDiff : (b.dealPercent || 0) - (a.dealPercent || 0);
+        const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
+        return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
       });
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
@@ -1298,10 +1325,22 @@ async function fetchRolimonsCatalogPage({
       return true;
     });
 
-    const pageItems = enriched.slice(offset, offset + limit);
-    const visibleItems = metricKey
+    const pageItems = sort === "deal_desc"
+      ? enriched.slice(offset, offset + Math.max(limit * 6, 180))
+      : enriched.slice(offset, offset + limit);
+    let visibleItems = metricKey
       ? await enrichRolimonsItemsWithCatalogDetails(pageItems, true)
       : await mapWithConcurrency(pageItems, 8, (item) => enrichRolimonsItem(item, true));
+
+    if (sort === "deal_desc") {
+      visibleItems = visibleItems
+        .filter((item) => item.dealPercent && item.dealPercent >= 10)
+        .sort((a, b) => {
+          const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
+          return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
+        })
+        .slice(0, limit);
+    }
 
     return {
       items: visibleItems,
@@ -2116,10 +2155,10 @@ async function fetchCatalogPage({
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
     collectedItems.sort((a, b) => b.rap - a.rap);
   } else if (safeSort === "deal_desc") {
-    collectedItems = collectedItems.filter((item) => item.dealValue && item.dealValue > 0);
+    collectedItems = collectedItems.filter((item) => item.dealPercent && item.dealPercent >= 10);
     collectedItems.sort((a, b) => {
-      const valueDiff = (b.dealValue || 0) - (a.dealValue || 0);
-      return valueDiff !== 0 ? valueDiff : (b.dealPercent || 0) - (a.dealPercent || 0);
+      const percentDiff = (b.dealPercent || 0) - (a.dealPercent || 0);
+      return percentDiff !== 0 ? percentDiff : (b.dealValue || 0) - (a.dealValue || 0);
     });
   } else {
     const metricKeyBySort = {
