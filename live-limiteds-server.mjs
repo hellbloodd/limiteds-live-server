@@ -20,7 +20,15 @@ const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
-const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [];
+const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
+  "8-Bit Clockwork Shades",
+  "Oozing Oscar",
+  "Bunny Ears",
+  "Lampshade",
+  "Pinstripe Fedora",
+  "Clockwork's Golden Shades",
+  "Fall Fairy",
+];
 
 const pageCache = new Map();
 const resaleCache = new Map();
@@ -472,16 +480,13 @@ function getPeriodEndTime(days) {
 }
 
 function clearPriceWithoutSellers(lowestPrice, availableCopies) {
-  const price = Number(lowestPrice);
+  const sellers = Number(availableCopies);
 
-  // Roblox sometimes returns 0 or 1 for limiteds with no real seller.
-  // Keep those hidden, but do not require numberRemaining because Roblox
-  // often omits it even when lowestResalePrice is valid.
-  if (!Number.isFinite(price) || price <= 1) {
+  if (Number.isFinite(sellers) && sellers <= 0) {
     return null;
   }
 
-  return price;
+  return firstPositiveNumber(lowestPrice);
 }
 
 function percentChange(fromValue, toValue) {
@@ -828,7 +833,7 @@ async function runSnapshotJob() {
     }
 
     pricedItems = await mapWithConcurrency(pricedItems, 10, async (item) => {
-      if (item.lowestPrice && item.lowestPrice > 1) {
+      if (item.lowestPrice && item.lowestPrice > 0) {
         return item;
       }
 
@@ -848,7 +853,7 @@ async function runSnapshotJob() {
         asset_id: item.assetId,
         name: item.name,
         rap: Math.round(item.rap),
-        lowest_price: item.lowestPrice && item.lowestPrice > 1 ? Math.round(item.lowestPrice) : null,
+        lowest_price: item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null,
         saved_at: savedAt,
       }));
     let saved;
@@ -986,6 +991,7 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
   );
   const rawLowestPrice = firstPositiveNumber(
     collectibleDetails.CollectibleLowestResalePrice,
+    details.PriceInRobux,
     resale.lowestResalePrice,
     item.lowestPrice
   );
@@ -998,7 +1004,7 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
     lowestPrice,
     availableCopies,
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, item.totalCopies),
-    dealPercent: rap && lowestPrice && lowestPrice > 1 && lowestPrice < rap
+    dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
       ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
       : null,
   };
@@ -1030,7 +1036,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       totalCopies: firstPositiveNumber(details.totalQuantity, item.totalCopies),
       creatorName: String(details.creatorName || item.creatorName || "Roblox"),
       itemType: String(details.itemType || item.itemType || "Asset"),
-      dealPercent: rap && lowestPrice && lowestPrice > 1 && lowestPrice < rap
+      dealPercent: rap && lowestPrice > 0 && lowestPrice < rap
         ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
         : null,
     };
@@ -1041,7 +1047,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
   }
 
   return mapWithConcurrency(enriched, 10, async (item) => {
-    if (item.lowestPrice && item.lowestPrice > 1) {
+    if (item.lowestPrice && item.lowestPrice > 0) {
       return item;
     }
 
@@ -1053,7 +1059,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       ...item,
       lowestPrice,
       availableCopies,
-      dealPercent: item.rap && lowestPrice && lowestPrice > 1 && lowestPrice < item.rap
+      dealPercent: item.rap && lowestPrice > 0 && lowestPrice < item.rap
         ? Math.round(((item.rap - lowestPrice) / item.rap) * 10000) / 100
         : item.dealPercent,
     };
@@ -1238,15 +1244,29 @@ async function fetchRolimonsCatalogPage({
 
     if (metricKey) {
       enriched = await addHistoryMetricsBatch(enriched);
+      enriched = enriched.filter((item) => {
+        const value = Number(item[metricKey]);
+        return Number.isFinite(value) && value > 0;
+      });
+      enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
+
+      // Stored snapshots are fast but can be stale. Recheck the strongest
+      // candidates with the same live resale history used by the item modal so
+      // cards, sorting, and charts agree.
+      enriched = await addLiveHistoryMetricsBatch(enriched.slice(0, Math.max(limit * 4, 120)));
+      enriched = enriched.filter((item) => {
+        const value = Number(item[metricKey]);
+        return Number.isFinite(value) && value > 0;
+      });
       enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => item.dealPercent && item.dealPercent > 0);
       enriched.sort((a, b) => b.dealPercent - a.dealPercent);
     } else if (sort === "price_asc") {
-      enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 1);
+      enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
     } else if (sort === "price_desc") {
-      enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 1);
+      enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => b.lowestPrice - a.lowestPrice);
     }
 
@@ -1346,7 +1366,7 @@ function buildItemFromCatalog(item, resale, marketType) {
   );
   const sellerSignal = item.hasResellers ? 1 : availableCopies;
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
-  const dealPercent = rap && lowestPrice && lowestPrice > 1 && lowestPrice < rap
+  const dealPercent = rap && lowestPrice > 0 && lowestPrice < rap
     ? Math.round(((rap - lowestPrice) / rap) * 10000) / 100
     : null;
   const totalCopies = firstPositiveNumber(
@@ -1433,8 +1453,7 @@ async function fetchRobloxRecentDiscoveryItems() {
 }
 
 function isBuyableCollectibleItem(item) {
-  return Number(item.rap) > 0
-    && Number(item.lowestPrice) > 1;
+  return Number(item.rap) > 0 && Number(item.lowestPrice) > 0;
 }
 
 async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId = "") {
@@ -1477,6 +1496,7 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     catalogDetails.lowestResalePrice,
     catalogDetails.lowestPrice,
     collectibleDetails.CollectibleLowestResalePrice,
+    details.PriceInRobux,
     resale.lowestResalePrice
   );
   const rap = firstPositiveNumber(
@@ -1908,17 +1928,18 @@ async function fetchCatalogPage({
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc" || isRobloxRecent;
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter || isRobloxRecent ? 6 : 4;
+    : safeMarketType === "ugc" ? (isChangeSort || safeSort === "deal_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
   const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || safeSort === "deal_desc" || hasRangeFilter)
     ? safeLimit * 4
-    : isRobloxRecent || isRobloxDealSort || isRobloxPriceSort
-      ? safeLimit * 4
+    : isRobloxRecent
+      ? safeLimit * 2
       : safeLimit;
 
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
       keywordTokens.length > 0
       || safeSort === "rap_desc"
+      || safeSort === "deal_desc"
       || safeSort.startsWith("loss_")
       || safeSort.startsWith("profit_")
     );
@@ -2005,7 +2026,7 @@ async function fetchCatalogPage({
           builtItem.name = builtItem.name || classicItem.name;
         }
 
-        if (isBuyableCollectibleItem(builtItem)) {
+        if (safeMarketType !== "ugc" || isBuyableCollectibleItem(builtItem)) {
           return builtItem;
         }
 
@@ -2045,7 +2066,7 @@ async function fetchCatalogPage({
   }
 
   collectedItems = collectedItems.filter((item) => {
-    if (!isBuyableCollectibleItem(item)) return false;
+    if (safeMarketType === "ugc" && !isBuyableCollectibleItem(item)) return false;
     if (safeMinPrice !== null && (!item.lowestPrice || item.lowestPrice < safeMinPrice)) return false;
     if (safeMaxPrice !== null && (!item.lowestPrice || item.lowestPrice > safeMaxPrice)) return false;
     if (safeMinRap !== null && (!item.rap || item.rap < safeMinRap)) return false;
@@ -2054,10 +2075,10 @@ async function fetchCatalogPage({
   });
 
   if (safeSort === "price_asc") {
-    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 1);
+    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
     collectedItems.sort((a, b) => a.lowestPrice - b.lowestPrice);
   } else if (safeSort === "price_desc") {
-    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 1);
+    collectedItems = collectedItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
     collectedItems.sort((a, b) => b.lowestPrice - a.lowestPrice);
   } else if (safeSort === "rap_desc") {
     collectedItems = collectedItems.filter((item) => item.rap && item.rap > 0);
@@ -2092,6 +2113,19 @@ async function fetchCatalogPage({
 
   if (isRobloxRecent && collectedItems.length > safeLimit) {
     collectedItems = interleaveForCoverage(collectedItems, 2);
+  }
+
+  if (isRobloxRecent && !safeKeyword) {
+    const discoveryItems = await fetchRobloxRecentDiscoveryItems();
+    const seenAssetIds = new Set();
+    collectedItems = [...discoveryItems, ...collectedItems].filter((item) => {
+      if (!item.assetId || seenAssetIds.has(item.assetId)) {
+        return false;
+      }
+
+      seenAssetIds.add(item.assetId);
+      return true;
+    });
   }
 
   if (collectedItems.length === 0 && hasRangeFilter && !isMetricSort && safeSort !== "updated" && safeSort !== "price_desc") {
