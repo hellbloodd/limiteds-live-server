@@ -32,6 +32,8 @@ const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
 
 const pageCache = new Map();
 const pagePrefetches = new Set();
+const marketIndexCache = new Map();
+const marketIndexBuilds = new Map();
 const resaleCache = new Map();
 const economyCache = new Map();
 const catalogDetailCache = new Map();
@@ -303,10 +305,10 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     "profit_1y",
     "profit_all",
   ];
-  const sortType = marketType === "roblox" && sort === "updated"
+  const sortType = marketType === "ugc"
+    ? "2"
+    : marketType === "roblox" && sort === "updated"
     ? "0"
-    : marketType === "ugc" && sort === "updated"
-      ? "2"
     : sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // The public search endpoint accepts All + salesTypeFilter=2 for resale-enabled
@@ -402,12 +404,67 @@ async function fetchMarketplaceItemDetails(collectibleItemId) {
       retries: 2,
       timeoutMs: 5000,
     });
-    const row = Array.isArray(data) ? data[0] || {} : {};
+    const rows = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
+    const row = rows[0] || {};
     catalogDetailCache.set(cacheKey, { fetchedAt: Date.now(), data: row });
     return row;
   } catch {
     return {};
   }
+}
+
+async function fetchMarketplaceItemDetailsBatch(collectibleItemIds) {
+  const result = new Map();
+  const missing = [];
+
+  for (const id of collectibleItemIds) {
+    const safeId = String(id || "").trim();
+
+    if (!safeId) {
+      continue;
+    }
+
+    const cacheKey = `marketplace:${safeId}`;
+    const cached = catalogDetailCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+      result.set(safeId, cached.data);
+    } else {
+      missing.push(safeId);
+    }
+  }
+
+  for (let index = 0; index < missing.length; index += 50) {
+    const chunk = missing.slice(index, index + 50);
+
+    try {
+      const data = await fetchJson(ROBLOX_MARKETPLACE_ITEMS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ itemIds: chunk }),
+        retries: 1,
+        timeoutMs: 4000,
+      });
+      const rows = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
+
+      rows.forEach((row, rowIndex) => {
+        const id = String(row.collectibleItemId || row.itemId || row.id || chunk[rowIndex] || "").trim();
+
+        if (id) {
+          const cacheKey = `marketplace:${id}`;
+          catalogDetailCache.set(cacheKey, { fetchedAt: Date.now(), data: row });
+          result.set(id, row);
+        }
+      });
+    } catch {
+      // Best effort. The existing resale fallback still handles missing rows.
+    }
+  }
+
+  return result;
 }
 
 async function fetchEconomyDetails(assetId) {
@@ -1146,7 +1203,7 @@ async function runSnapshotJob() {
 }
 
 function maybeRunSnapshotInBackground() {
-  if (SNAPSHOT_INTERVAL_MS <= 0 || snapshotRunning) {
+  if (SNAPSHOT_INTERVAL_MS <= 0 || snapshotRunning || marketIndexBuilds.size > 0) {
     return;
   }
 
@@ -2223,6 +2280,151 @@ async function fetchPortfolio(userId) {
   return data;
 }
 
+function filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, maxRap }) {
+  return items.filter((item) => {
+    if (!matchesAllKeywordTokens(item, keywordTokens)) return false;
+    if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
+    if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
+    if (minRap !== null && (!item.rap || item.rap < minRap)) return false;
+    if (maxRap !== null && (!item.rap || item.rap > maxRap)) return false;
+    return true;
+  });
+}
+
+async function buildRobloxMarketIndex() {
+  const baseItems = await fetchRolimonsItems();
+  const pricedItems = await enrichRolimonsItemsWithCatalogDetails(baseItems, false);
+
+  return pricedItems
+    .map((item) => ({
+      ...item,
+      marketType: "roblox",
+      thumbnail: item.thumbnail || `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`,
+      dealValue: calculateDealValue(item.rap, item.lowestPrice),
+      dealPercent: calculateDealPercent(item.rap, item.lowestPrice),
+      overpricedValue: calculateOverpricedValue(item.rap, item.lowestPrice),
+      overpricedPercent: calculateOverpricedPercent(item.rap, item.lowestPrice),
+    }))
+    .filter((item) => item.assetId > 0 && item.rap > 0);
+}
+
+async function getRobloxMarketIndex() {
+  const cacheKey = "roblox";
+  const cached = marketIndexCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  if (marketIndexBuilds.has(cacheKey)) {
+    return marketIndexBuilds.get(cacheKey);
+  }
+
+  const buildPromise = buildRobloxMarketIndex()
+    .then((items) => {
+      marketIndexCache.set(cacheKey, { fetchedAt: Date.now(), items });
+      return items;
+    })
+    .finally(() => {
+      marketIndexBuilds.delete(cacheKey);
+    });
+
+  marketIndexBuilds.set(cacheKey, buildPromise);
+  return buildPromise;
+}
+
+function sortIndexedItems(items, sort) {
+  const sorted = items.slice();
+
+  if (sort === "price_asc") {
+    return sorted.filter((item) => item.lowestPrice > 0).sort((a, b) => a.lowestPrice - b.lowestPrice);
+  }
+
+  if (sort === "price_desc") {
+    return sorted.filter((item) => item.lowestPrice > 0).sort((a, b) => b.lowestPrice - a.lowestPrice);
+  }
+
+  if (sort === "rap_desc") {
+    return sorted.sort((a, b) => (b.rap || 0) - (a.rap || 0));
+  }
+
+  if (sort === "deal_desc") {
+    return sorted.filter((item) => hasMinimumDeal(item)).sort(compareDealItems);
+  }
+
+  if (sort === "overpriced_desc") {
+    return sorted.filter((item) => hasMinimumOverpriced(item)).sort(compareOverpricedItems);
+  }
+
+  if (sort === "updated") {
+    return sorted.sort((a, b) => b.assetId - a.assetId);
+  }
+
+  return sorted.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function fetchFastRobloxIndexPage({
+  cursor = "",
+  limit = 30,
+  keywordTokens = [],
+  sort = "updated",
+  minPrice = null,
+  maxPrice = null,
+  minRap = null,
+  maxRap = null,
+}) {
+  const offset = offsetFromCursor(cursor);
+  let items = await getRobloxMarketIndex();
+  const metricKeyBySort = {
+    loss_24h: "loss24h",
+    loss_7d: "loss7d",
+    loss_30d: "loss30d",
+    loss_1y: "loss1y",
+    loss_all: "lossAllTime",
+    profit_24h: "profit24h",
+    profit_7d: "profit7d",
+    profit_30d: "profit30d",
+    profit_1y: "profit1y",
+    profit_all: "profitAllTime",
+  };
+  const metricKey = metricKeyBySort[sort];
+  const boughtRangeDays = getBoughtRangeDays(sort);
+
+  items = filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, maxRap });
+
+  if (metricKey) {
+    items = await addHistoryMetricsBatch(items);
+    items = items
+      .filter((item) => Number(item[metricKey]) > 0)
+      .sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
+  } else if (boughtRangeDays) {
+    const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
+    items = items.map((item) => {
+      const history = ownHistoryByAssetId.get(item.assetId) || [];
+      const activity = calculateActivityMetrics(history, boughtRangeDays, item.rap, item.lowestPrice);
+      return {
+        ...item,
+        activityCount: activity.activityCount,
+        activityScore: activity.activityScore,
+        averageActivePrice: activity.averageActivePrice,
+        salesCount: activity.activityCount,
+        averageSalePrice: activity.averageActivePrice,
+      };
+    })
+      .filter((item) => Number(item.activityScore) > 0)
+      .sort(compareBoughtItems);
+  } else {
+    items = sortIndexedItems(items, sort);
+  }
+
+  return {
+    items: items.slice(offset, offset + limit),
+    nextPageCursor: cursorFromOffset(offset + limit, items.length),
+    previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - limit), items.length) : "",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function fetchCatalogPage({
   cursor = "",
   limit = 30,
@@ -2333,11 +2535,18 @@ async function fetchCatalogPage({
   const isRobloxDealSort = safeMarketType === "roblox" && (safeSort === "deal_desc" || safeSort === "overpriced_desc");
   const isRobloxRecent = safeMarketType === "roblox" && safeSort === "updated";
   const shouldScanFullWindow = needsMetricScan || hasRangeFilter || keywordTokens.length > 0 || safeMarketType === "ugc" || isRobloxRecent;
+  const isUgcHeavyScan = safeMarketType === "ugc" && (
+    isChangeSort
+    || isBoughtSort
+    || safeSort === "deal_desc"
+    || safeSort === "overpriced_desc"
+    || hasRangeFilter
+  );
   const maxPages = isRobloxPriceSort || isRobloxDealSort
     ? 40
-    : safeMarketType === "ugc" ? (isChangeSort || isBoughtSort || safeSort === "deal_desc" || safeSort === "overpriced_desc" || hasRangeFilter ? 4 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
-  const targetCandidateCount = safeMarketType === "ugc" && (isChangeSort || isBoughtSort || safeSort === "deal_desc" || safeSort === "overpriced_desc" || hasRangeFilter)
-    ? safeLimit * 4
+    : safeMarketType === "ugc" ? (isUgcHeavyScan ? 8 : 3) : keywordTokens.length > 0 ? 4 : needsMetricScan || hasRangeFilter ? 5 : 2;
+  const targetCandidateCount = isUgcHeavyScan
+    ? safeLimit * 5
     : isRobloxRecent
       ? safeLimit * 2
       : safeLimit;
@@ -2345,6 +2554,9 @@ async function fetchCatalogPage({
   const shouldUseClassicIndex = safeMarketType === "roblox"
     && (
       keywordTokens.length > 0
+      || safeSort === "updated"
+      || safeSort === "price_asc"
+      || safeSort === "price_desc"
       || safeSort === "rap_desc"
       || safeSort === "deal_desc"
       || safeSort === "overpriced_desc"
@@ -2354,16 +2566,31 @@ async function fetchCatalogPage({
     );
 
   if (shouldUseClassicIndex) {
-    const data = await fetchRolimonsCatalogPage({
-      cursor,
-      limit: safeLimit,
-      keywordTokens,
-      sort: safeSort,
-      minPrice: safeMinPrice,
-      maxPrice: safeMaxPrice,
-      minRap: safeMinRap,
-      maxRap: safeMaxRap,
-    });
+    let data;
+
+    try {
+      data = await fetchFastRobloxIndexPage({
+        cursor,
+        limit: safeLimit,
+        keywordTokens,
+        sort: safeSort,
+        minPrice: safeMinPrice,
+        maxPrice: safeMaxPrice,
+        minRap: safeMinRap,
+        maxRap: safeMaxRap,
+      });
+    } catch {
+      data = await fetchRolimonsCatalogPage({
+        cursor,
+        limit: safeLimit,
+        keywordTokens,
+        sort: safeSort,
+        minPrice: safeMinPrice,
+        maxPrice: safeMaxPrice,
+        minRap: safeMinRap,
+        maxRap: safeMaxRap,
+      });
+    }
 
     pageCache.set(cacheKey, { fetchedAt: Date.now(), data });
     if (prefetchNext && data.nextPageCursor) {
@@ -2428,19 +2655,25 @@ async function fetchCatalogPage({
 
           return item.creatorTargetId === 1 && item.creatorName === "Roblox";
       });
+      const marketplaceDetailsById = safeMarketType === "ugc"
+        ? await fetchMarketplaceItemDetailsBatch(matchingItems.map((item) => item.collectibleItemId).filter(Boolean))
+        : new Map();
 
       const pageItems = (await mapWithConcurrency(matchingItems, safeMarketType === "ugc" ? 20 : 8, async (item) => {
         const assetId = normalizeNumber(item.id || item.assetId);
+        const marketplaceDetails = item.collectibleItemId
+          ? marketplaceDetailsById.get(String(item.collectibleItemId)) || {}
+          : {};
+        const mergedItem = { ...item, ...marketplaceDetails };
         const shouldFetchResaleData = assetId > 0 && (
-          safeMarketType === "ugc"
-          || safeMarketType === "roblox"
+          safeMarketType === "roblox" || Boolean(item.collectibleItemId)
         );
         const resale = shouldFetchResaleData
-          ? item.collectibleItemId && (safeMarketType === "ugc" || assetId > 10_000_000_000)
+          ? item.collectibleItemId && assetId > 10_000_000_000
             ? await fetchCollectibleResaleData(item.collectibleItemId)
             : await fetchResaleData(assetId)
           : {};
-        const builtItem = buildItemFromCatalog(item, resale, safeMarketType);
+        const builtItem = buildItemFromCatalog(mergedItem, resale, safeMarketType);
         const classicItem = classicItemByAssetId?.get(assetId);
 
         if (classicItem) {
@@ -2799,4 +3032,11 @@ createServer((req, res) => {
   });
 }).listen(PORT, () => {
   console.log(`Limiteds Live server ${SERVER_VERSION} running on http://localhost:${PORT}`);
+  getRobloxMarketIndex()
+    .then((items) => {
+      console.log(`Roblox market index warmed with ${items.length} priced limiteds.`);
+    })
+    .catch((error) => {
+      console.warn(`Roblox market index warmup failed: ${error.message}`);
+    });
 });
