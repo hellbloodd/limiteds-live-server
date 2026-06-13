@@ -31,6 +31,7 @@ const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
 ];
 
 const pageCache = new Map();
+const pagePrefetches = new Set();
 const resaleCache = new Map();
 const economyCache = new Map();
 const catalogDetailCache = new Map();
@@ -42,6 +43,30 @@ let lastSnapshotRunAt = 0;
 let lastSnapshotAttemptAt = 0;
 let snapshotRunning = false;
 let memorySnapshots = [];
+
+function makePageCacheKey({
+  marketType,
+  sort,
+  keyword,
+  cursor,
+  limit,
+  minPrice,
+  maxPrice,
+  minRap,
+  maxRap,
+}) {
+  return [
+    marketType,
+    sort,
+    keyword,
+    cursor || "",
+    limit,
+    minPrice ?? "",
+    maxPrice ?? "",
+    minRap ?? "",
+    maxRap ?? "",
+  ].join(":");
+}
 
 function sendJson(res, status, body) {
   const json = JSON.stringify(body);
@@ -619,6 +644,96 @@ function getBoughtRangeDays(sort) {
   }[sort] ?? null;
 }
 
+function calculateActivityMetrics(points, days, currentRap = null, currentPrice = null) {
+  if (!Array.isArray(points) || !days) {
+    return { activityCount: null, activityScore: null, averageActivePrice: null };
+  }
+
+  const startTime = getPeriodStartTime(days);
+  const endTime = Math.min(Date.now(), getPeriodEndTime(days));
+  const history = points
+    .map((point) => ({
+      rap: Number(point.value),
+      price: Number(point.lowestPrice),
+      time: Date.parse(point.date || ""),
+    }))
+    .filter((point) => Number.isFinite(point.time) && point.time <= endTime && (point.rap > 0 || point.price > 0))
+    .sort((a, b) => a.time - b.time);
+
+  const rap = Number(currentRap);
+  const price = Number(currentPrice);
+
+  if ((rap > 0 || price > 0) && endTime >= startTime) {
+    history.push({
+      rap: rap > 0 ? rap : null,
+      price: price > 0 ? price : null,
+      time: Date.now(),
+    });
+  }
+
+  let baseline = null;
+  const visible = [];
+
+  for (const point of history) {
+    if (point.time < startTime) {
+      baseline = point;
+    } else if (point.time <= endTime) {
+      visible.push(point);
+    }
+  }
+
+  if (visible.length === 0) {
+    return { activityCount: null, activityScore: null, averageActivePrice: null };
+  }
+
+  const sequence = baseline ? [baseline, ...visible] : visible;
+  let previousRap = null;
+  let previousPrice = null;
+  let rapChanges = 0;
+  let priceChanges = 0;
+  let priceTotal = 0;
+  let priceCount = 0;
+
+  for (const point of sequence) {
+    if (point.price > 0) {
+      priceTotal += point.price;
+      priceCount += 1;
+    }
+
+    if (point.rap > 0) {
+      if (previousRap !== null && point.rap !== previousRap) {
+        rapChanges += 1;
+      }
+
+      previousRap = point.rap;
+    }
+
+    if (point.price > 0) {
+      if (previousPrice !== null && point.price !== previousPrice) {
+        priceChanges += 1;
+      }
+
+      previousPrice = point.price;
+    }
+  }
+
+  const firstRap = sequence.find((point) => point.rap > 0)?.rap;
+  const lastRap = [...sequence].reverse().find((point) => point.rap > 0)?.rap;
+  const rapMove = Math.abs(percentChange(firstRap, lastRap) || 0);
+  const activityCount = rapChanges + priceChanges;
+  const activityScore = Math.round((activityCount * 100 + rapMove) * 100) / 100;
+
+  if (activityScore <= 0) {
+    return { activityCount: null, activityScore: null, averageActivePrice: null };
+  }
+
+  return {
+    activityCount,
+    activityScore,
+    averageActivePrice: priceCount > 0 ? Math.round(priceTotal / priceCount) : null,
+  };
+}
+
 function calculateSalesMetrics(points, days) {
   if (!Array.isArray(points) || !days) {
     return { salesCount: null, averageSalePrice: null };
@@ -663,8 +778,11 @@ function calculateSalesMetrics(points, days) {
 }
 
 function compareBoughtItems(a, b) {
-  const countDiff = (Number(b?.salesCount) || 0) - (Number(a?.salesCount) || 0);
-  return countDiff !== 0 ? countDiff : (Number(b?.averageSalePrice) || 0) - (Number(a?.averageSalePrice) || 0);
+  const scoreDiff = (Number(b?.activityScore) || 0) - (Number(a?.activityScore) || 0);
+  if (scoreDiff !== 0) return scoreDiff;
+
+  const countDiff = (Number(b?.activityCount ?? b?.salesCount) || 0) - (Number(a?.activityCount ?? a?.salesCount) || 0);
+  return countDiff !== 0 ? countDiff : (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
 function snapshotStorageEnabled() {
@@ -1427,25 +1545,33 @@ async function fetchRolimonsCatalogPage({
       enriched = enriched.filter((item) => hasMinimumOverpriced(item));
       enriched.sort(compareOverpricedItems);
     } else if (boughtRangeDays) {
+      const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(enriched.map((item) => item.assetId));
       enriched = await mapWithConcurrency(interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360)), 20, async (item) => {
         const resale = await fetchResaleData(item.assetId);
-        const salesMetrics = calculateSalesMetrics(resale.priceDataPoints, boughtRangeDays);
+        const ownHistory = [
+          ...(ownHistoryByAssetId.get(item.assetId) || []),
+          ...normalizeHistoryPoints(resale.priceDataPoints),
+        ];
         const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
         const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
+        const activityMetrics = calculateActivityMetrics(ownHistory, boughtRangeDays, rap, lowestPrice);
 
         return {
           ...item,
           rap,
           lowestPrice,
-          salesCount: salesMetrics.salesCount,
-          averageSalePrice: salesMetrics.averageSalePrice,
+          activityCount: activityMetrics.activityCount,
+          activityScore: activityMetrics.activityScore,
+          averageActivePrice: activityMetrics.averageActivePrice,
+          salesCount: activityMetrics.activityCount,
+          averageSalePrice: activityMetrics.averageActivePrice,
           dealValue: calculateDealValue(rap, lowestPrice),
           dealPercent: calculateDealPercent(rap, lowestPrice),
           overpricedValue: calculateOverpricedValue(rap, lowestPrice),
           overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
         };
       });
-      enriched = enriched.filter((item) => Number(item.salesCount) > 0);
+      enriched = enriched.filter((item) => Number(item.activityScore) > 0);
       enriched.sort(compareBoughtItems);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
@@ -1759,6 +1885,10 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
   );
   const sellerSignal = marketplaceDetails.hasResellers ? 1 : availableCopies;
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
+  const activity24h = calculateActivityMetrics(ownHistory, 1, rap, lowestPrice);
+  const activity7d = calculateActivityMetrics(ownHistory, 7, rap, lowestPrice);
+  const activity30d = calculateActivityMetrics(ownHistory, 30, rap, lowestPrice);
+  const activity1y = calculateActivityMetrics(ownHistory, 365, rap, lowestPrice);
 
   const data = {
     assetId: safeAssetId,
@@ -1788,6 +1918,10 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     change7d: metrics.change7d,
     change30d: metrics.change30d,
     change1y: metrics.change1y,
+    activity24h,
+    activity7d,
+    activity30d,
+    activity1y,
     marketType,
   };
 
@@ -2099,6 +2233,7 @@ async function fetchCatalogPage({
   maxPrice = null,
   minRap = null,
   maxRap = null,
+  prefetchNext = true,
 }) {
   const safeLimit = normalizeLimit(limit);
   const safeKeyword = String(keyword || "").slice(0, 80);
@@ -2131,20 +2266,33 @@ async function fetchCatalogPage({
   const safeMaxPrice = parseOptionalNumber(maxPrice);
   const safeMinRap = parseOptionalNumber(minRap);
   const safeMaxRap = parseOptionalNumber(maxRap);
-  const cacheKey = [
-    safeMarketType,
-    safeSort,
-    safeKeyword,
+  const cacheKey = makePageCacheKey({
+    marketType: safeMarketType,
+    sort: safeSort,
+    keyword: safeKeyword,
     cursor,
-    safeLimit,
-    safeMinPrice ?? "",
-    safeMaxPrice ?? "",
-    safeMinRap ?? "",
-    safeMaxRap ?? "",
-  ].join(":");
+    limit: safeLimit,
+    minPrice: safeMinPrice,
+    maxPrice: safeMaxPrice,
+    minRap: safeMinRap,
+    maxRap: safeMaxRap,
+  });
   const cached = pageCache.get(cacheKey);
 
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    if (prefetchNext && cached.data?.nextPageCursor) {
+      prefetchCatalogPage({
+        cursor: cached.data.nextPageCursor,
+        limit: safeLimit,
+        keyword: safeKeyword,
+        marketType: safeMarketType,
+        sort: safeSort,
+        minPrice: safeMinPrice,
+        maxPrice: safeMaxPrice,
+        minRap: safeMinRap,
+        maxRap: safeMaxRap,
+      });
+    }
     return cached.data;
   }
 
@@ -2218,6 +2366,19 @@ async function fetchCatalogPage({
     });
 
     pageCache.set(cacheKey, { fetchedAt: Date.now(), data });
+    if (prefetchNext && data.nextPageCursor) {
+      prefetchCatalogPage({
+        cursor: data.nextPageCursor,
+        limit: safeLimit,
+        keyword: safeKeyword,
+        marketType: safeMarketType,
+        sort: safeSort,
+        minPrice: safeMinPrice,
+        maxPrice: safeMaxPrice,
+        minRap: safeMinRap,
+        maxRap: safeMaxRap,
+      });
+    }
     return data;
   }
 
@@ -2328,21 +2489,29 @@ async function fetchCatalogPage({
 
   if (isBoughtSort) {
     const boughtRangeDays = getBoughtRangeDays(safeSort);
+    const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(collectedItems.map((item) => item.assetId));
 
     collectedItems = await mapWithConcurrency(collectedItems, 20, async (item) => {
       const resale = item.collectibleItemId && (safeMarketType === "ugc" || item.assetId > 10_000_000_000)
         ? await fetchCollectibleResaleData(item.collectibleItemId)
         : await fetchResaleData(item.assetId);
-      const salesMetrics = calculateSalesMetrics(resale.priceDataPoints, boughtRangeDays);
+      const ownHistory = [
+        ...(ownHistoryByAssetId.get(item.assetId) || []),
+        ...normalizeHistoryPoints(resale.priceDataPoints),
+      ];
       const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
       const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
+      const activityMetrics = calculateActivityMetrics(ownHistory, boughtRangeDays, rap, lowestPrice);
 
       return {
         ...item,
         rap,
         lowestPrice,
-        salesCount: salesMetrics.salesCount,
-        averageSalePrice: salesMetrics.averageSalePrice,
+        activityCount: activityMetrics.activityCount,
+        activityScore: activityMetrics.activityScore,
+        averageActivePrice: activityMetrics.averageActivePrice,
+        salesCount: activityMetrics.activityCount,
+        averageSalePrice: activityMetrics.averageActivePrice,
         dealValue: calculateDealValue(rap, lowestPrice),
         dealPercent: calculateDealPercent(rap, lowestPrice),
         overpricedValue: calculateOverpricedValue(rap, lowestPrice),
@@ -2458,7 +2627,64 @@ async function fetchCatalogPage({
   };
 
   pageCache.set(cacheKey, { fetchedAt: Date.now(), data });
+  if (prefetchNext && data.nextPageCursor) {
+    prefetchCatalogPage({
+      cursor: data.nextPageCursor,
+      limit: safeLimit,
+      keyword: safeKeyword,
+      marketType: safeMarketType,
+      sort: safeSort,
+      minPrice: safeMinPrice,
+      maxPrice: safeMaxPrice,
+      minRap: safeMinRap,
+      maxRap: safeMaxRap,
+    });
+  }
   return data;
+}
+
+function prefetchCatalogPage(params) {
+  const safeLimit = normalizeLimit(params.limit);
+  const safeKeyword = String(params.keyword || "").slice(0, 80);
+  const safeMarketType = params.marketType === "roblox" ? "roblox" : "ugc";
+  const safeSort = String(params.sort || "updated");
+  const safeMinPrice = parseOptionalNumber(params.minPrice);
+  const safeMaxPrice = parseOptionalNumber(params.maxPrice);
+  const safeMinRap = parseOptionalNumber(params.minRap);
+  const safeMaxRap = parseOptionalNumber(params.maxRap);
+  const cacheKey = makePageCacheKey({
+    marketType: safeMarketType,
+    sort: safeSort,
+    keyword: safeKeyword,
+    cursor: params.cursor || "",
+    limit: safeLimit,
+    minPrice: safeMinPrice,
+    maxPrice: safeMaxPrice,
+    minRap: safeMinRap,
+    maxRap: safeMaxRap,
+  });
+
+  if (!params.cursor || pagePrefetches.has(cacheKey)) {
+    return;
+  }
+
+  const cached = pageCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return;
+  }
+
+  pagePrefetches.add(cacheKey);
+
+  fetchCatalogPage({
+    ...params,
+    limit: safeLimit,
+    prefetchNext: false,
+  })
+    .catch(() => {})
+    .finally(() => {
+      pagePrefetches.delete(cacheKey);
+    });
 }
 
 async function handleRequest(req, res) {
