@@ -507,12 +507,9 @@ function getPeriodEndTime(days) {
 }
 
 function clearPriceWithoutSellers(lowestPrice, availableCopies) {
-  const sellers = Number(availableCopies);
-
-  if (Number.isFinite(sellers) && sellers <= 0) {
-    return null;
-  }
-
+  // Roblox's seller/count fields are inconsistent for classic limiteds:
+  // some items return 0/null availability while still returning a real
+  // lowest resale price. Treat the actual price as the source of truth.
   return firstPositiveNumber(lowestPrice);
 }
 
@@ -1076,7 +1073,6 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
     const rawLowestPrice = firstPositiveNumber(
       details.lowestResalePrice,
       details.lowestPrice,
-      details.price,
       item.lowestPrice
     );
     const availableCopies = firstNonNegativeNumber(details.unitsAvailableForConsumption, item.availableCopies);
@@ -1291,7 +1287,7 @@ async function fetchRolimonsCatalogPage({
     let enriched = metricKey
       ? scanWindow
       : needsLiveResalePrice
-      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow, true)
+      ? await enrichRolimonsItemsWithCatalogDetails(scanWindow, sort !== "deal_desc")
       : await mapWithConcurrency(
         scanWindow,
         8,
@@ -1339,8 +1335,7 @@ async function fetchRolimonsCatalogPage({
 
       while (candidateOffset < enriched.length && visibleItems.length < limit) {
         const chunk = enriched.slice(candidateOffset, candidateOffset + chunkSize);
-        const refreshed = await mapWithConcurrency(chunk, 8, (item) => enrichRolimonsItem(item, true));
-        const validDeals = refreshed
+        const validDeals = chunk
           .filter((item) => hasMinimumDeal(item))
           .filter((item) => {
             if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
