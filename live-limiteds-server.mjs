@@ -1204,8 +1204,14 @@ async function addHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
   return items.map((item) => {
-    const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+    let ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
     const rap = firstPositiveNumber(item.rap);
+
+    if (ownHistory.length < 1 && Number(item.value) > 0 && rap > 0) {
+      const syntheticDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      ownHistory = [{ value: Number(item.value), date: syntheticDate, source: "rolimons" }];
+    }
+
     const metrics = buildRapChangeMetrics(ownHistory, rap);
 
     return {
@@ -1267,7 +1273,7 @@ async function fetchRolimonsCatalogPage({
     if (metricKey) {
       const poolSize = Math.max(limit * 8, 400);
       enriched = interleaveForCoverage(enriched).slice(0, poolSize);
-      enriched = await addLiveHistoryMetricsBatch(enriched);
+      enriched = await addHistoryMetricsBatch(enriched);
       enriched = enriched.filter((item) => {
         const value = Number(item[metricKey]);
         return Number.isFinite(value) && value > 0;
@@ -1832,7 +1838,7 @@ async function fetchFastRobloxIndexPage({
     const isLossSort = String(sort).startsWith("loss_");
     const poolSize = Math.max(limit * 8, 400);
     items = interleaveForCoverage(items).slice(0, poolSize);
-    items = await addLiveHistoryMetricsBatch(items);
+    items = await addHistoryMetricsBatch(items);
     items = items
       .filter((item) => { const v = Number(item[metricKey]); return Number.isFinite(v) && v > 0; })
       .sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
