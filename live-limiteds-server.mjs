@@ -645,9 +645,6 @@ function calculateActivityMetrics(points, days, currentRap = null, currentPrice 
   const activityScore = Math.round((activityCount * 100 + rapMove) * 100) / 100;
 
   if (activityScore <= 0) {
-    if (rap > 0 || price > 0) {
-      return { activityCount: 1, activityScore: 1, averageActivePrice: price > 0 ? price : (rap > 0 ? rap : null) };
-    }
     return { activityCount: null, activityScore: null, averageActivePrice: null };
   }
 
@@ -723,6 +720,7 @@ async function addResaleActivityMetrics(items, days, maxItems = 8000) {
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
     const history = normalizeHistoryPoints(resale.priceDataPoints);
+    const volumeHistory = normalizeHistoryPoints(resale.volumeDataPoints);
     const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
     const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
     const lowestPrice = clearPriceWithoutSellers(
@@ -730,15 +728,27 @@ async function addResaleActivityMetrics(items, days, maxItems = 8000) {
       firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
     );
     const activity = calculateActivityMetrics(history, days, rap, lowestPrice);
-    const sales = calculateSalesMetrics(history, days);
-    const count = firstPositiveNumber(sales.salesCount, activity.activityCount);
-    const average = firstPositiveNumber(sales.averageSalePrice, activity.averageActivePrice, lowestPrice);
+
+    let salesCount = null;
+    let averageSalePrice = null;
+    if (volumeHistory.length > 0) {
+      const sales = calculateSalesMetrics(volumeHistory, days);
+      salesCount = sales.salesCount;
+      averageSalePrice = sales.averageSalePrice;
+    } else {
+      const sales = calculateSalesMetrics(history, days);
+      salesCount = firstPositiveNumber(sales.salesCount, activity.activityCount);
+      averageSalePrice = sales.averageSalePrice || activity.averageActivePrice;
+    }
+
+    const count = firstPositiveNumber(salesCount, activity.activityCount);
+    const average = firstPositiveNumber(averageSalePrice, activity.averageActivePrice, lowestPrice);
 
     return {
       ...item, rap, lowestPrice,
-      activityCount: count,
+      activityCount: activity.activityCount,
       activityScore: firstPositiveNumber(activity.activityScore, count),
-      averageActivePrice: average,
+      averageActivePrice: activity.averageActivePrice,
       salesCount: count,
       averageSalePrice: average,
     };
@@ -1834,6 +1844,30 @@ async function fetchFastRobloxIndexPage({
     items = items
       .filter((item) => Number(item[metricKey]) > 0)
       .sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
+
+    if (items.length < limit) {
+      const fallbackKey = String(sort).startsWith("profit_") ? "change24h" : null;
+      if (fallbackKey) {
+        const existing = new Set(items.map((i) => i.assetId));
+        const allWithChange = await getRobloxMarketIndex();
+        const extra = allWithChange.filter((i) => !existing.has(i.assetId));
+        const enriched = await addHistoryMetricsBatch(extra);
+        const candidates = enriched
+          .filter((item) => {
+            const v = Number(item[fallbackKey]);
+            return Number.isFinite(v) && v > -100;
+          })
+          .sort((a, b) => compareChangeMetric(a, b, fallbackKey, false));
+        for (const item of candidates) {
+          if (items.length >= limit * 3) break;
+          items.push(item);
+        }
+        items = await addLiveHistoryMetricsBatch(interleaveForCoverage(items).slice(0, Math.max(limit * 3, 120)));
+        items = items
+          .filter((item) => Number.isFinite(Number(item[fallbackKey])))
+          .sort((a, b) => compareChangeMetric(a, b, fallbackKey, false));
+      }
+    }
   } else {
     items = sortIndexedItems(items, sort);
   }
@@ -2019,16 +2053,23 @@ async function fetchCatalogPage({
         ...(ownHistoryByAssetId.get(item.assetId) || []),
         ...normalizeHistoryPoints(resale.priceDataPoints),
       ];
+      const volumeHistory = normalizeHistoryPoints(resale.volumeDataPoints);
       const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
       const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
       const activityMetrics = calculateActivityMetrics(ownHistory, boughtRangeDays, rap, lowestPrice);
+      let salesCount = activityMetrics.activityCount;
+      let avgPrice = activityMetrics.averageActivePrice;
+      if (volumeHistory.length > 0) {
+        const vs = calculateSalesMetrics(volumeHistory, boughtRangeDays);
+        if (vs.salesCount) { salesCount = vs.salesCount; avgPrice = vs.averageSalePrice || avgPrice; }
+      }
       return {
         ...item, rap, lowestPrice,
         activityCount: activityMetrics.activityCount,
         activityScore: activityMetrics.activityScore,
         averageActivePrice: activityMetrics.averageActivePrice,
-        salesCount: activityMetrics.activityCount,
-        averageSalePrice: activityMetrics.averageActivePrice,
+        salesCount: salesCount,
+        averageSalePrice: avgPrice,
         dealValue: calculateDealValue(rap, lowestPrice),
         dealPercent: calculateDealPercent(rap, lowestPrice),
         overpricedValue: calculateOverpricedValue(rap, lowestPrice),
