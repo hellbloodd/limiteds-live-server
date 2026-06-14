@@ -687,35 +687,38 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 8000) {
+async function addResaleActivityMetrics(items, days, maxItems = 400) {
   let candidates = items.filter((item) => Number(item.assetId) > 0).slice(0, maxItems);
 
-  try {
-    const rolimonsItems = await fetchRolimonsItems();
-    const seen = new Set(candidates.map((item) => Number(item.assetId)));
-    for (const item of rolimonsItems) {
-      const assetId = Number(item.assetId);
-      if (assetId > 0 && !seen.has(assetId)) {
-        candidates.push({
-          ...item,
-          lowestPrice: Number(item.lowestPrice) || 0,
-          availableCopies: Number(item.availableCopies) || 0,
-          totalCopies: Number(item.totalCopies) || 0,
-          creatorName: item.creatorName || "Roblox",
-          itemType: item.itemType || "Asset",
-          collectibleItemId: item.collectibleItemId || "",
-        });
-        seen.add(assetId);
+  if (candidates.length < maxItems) {
+    try {
+      const rolimonsItems = await fetchRolimonsItems();
+      const seen = new Set(candidates.map((item) => Number(item.assetId)));
+      for (const item of rolimonsItems) {
+        const assetId = Number(item.assetId);
+        if (assetId > 0 && !seen.has(assetId)) {
+          candidates.push({
+            ...item,
+            lowestPrice: Number(item.lowestPrice) || 0,
+            availableCopies: Number(item.availableCopies) || 0,
+            totalCopies: Number(item.totalCopies) || 0,
+            creatorName: item.creatorName || "Roblox",
+            itemType: item.itemType || "Asset",
+            collectibleItemId: item.collectibleItemId || "",
+          });
+          seen.add(assetId);
+        }
+        if (candidates.length >= maxItems) break;
       }
-      if (candidates.length >= maxItems) break;
+    } catch (error) {
+      console.warn(`Rolimon candidate pool failed: ${error.message}`);
     }
-  } catch (error) {
-    console.warn(`Rolimon candidate pool failed: ${error.message}`);
   }
 
   candidates = candidates.slice(0, maxItems);
 
-  const enriched = await mapWithConcurrency(candidates, 32, async (item) => {
+  const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
+    await sleep(200);
     const resale = item.collectibleItemId && item.assetId > 10_000_000_000
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
@@ -1223,57 +1226,6 @@ async function addHistoryMetricsBatch(items) {
   });
 }
 
-async function addSnapshotActivityMetrics(items, days) {
-  if (!days || items.length === 0) return items;
-  const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
-
-  return items.map((item) => {
-    const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
-    const rap = firstPositiveNumber(item.rap);
-    const lowestPrice = firstPositiveNumber(item.lowestPrice);
-    const rolimonsValue = Number(item.value) > 0 ? Number(item.value) : null;
-
-    let activityCount = null;
-    let activityScore = null;
-    let avgPrice = null;
-
-    if (ownHistory.length > 1) {
-      const metrics = calculateActivityMetrics(ownHistory, days, rap, lowestPrice);
-      if (metrics.activityScore > 0) {
-        activityCount = metrics.activityCount;
-        activityScore = metrics.activityScore;
-        avgPrice = metrics.averageActivePrice;
-      }
-    }
-
-    if (activityScore === null && rolimonsValue && rap && rolimonsValue !== rap) {
-      const move = Math.abs(percentChange(rolimonsValue, rap) || 0);
-      activityCount = 1;
-      activityScore = move;
-    }
-
-    if (activityScore === null && rap && lowestPrice && rap !== lowestPrice) {
-      const move = Math.abs(percentChange(rap, lowestPrice) || 0);
-      activityCount = 1;
-      activityScore = move;
-      avgPrice = lowestPrice;
-    }
-
-    return {
-      ...item, rap, lowestPrice,
-      activityCount: Number.isFinite(activityCount) && activityCount > 0 ? activityCount : null,
-      activityScore: Number.isFinite(activityScore) && activityScore > 0 ? activityScore : null,
-      averageActivePrice: firstPositiveNumber(avgPrice, lowestPrice),
-      salesCount: Number.isFinite(activityCount) && activityCount > 0 ? activityCount : null,
-      averageSalePrice: firstPositiveNumber(avgPrice, lowestPrice),
-      dealValue: calculateDealValue(rap, lowestPrice),
-      dealPercent: calculateDealPercent(rap, lowestPrice),
-      overpricedValue: calculateOverpricedValue(rap, lowestPrice),
-      overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
-    };
-  }).sort(compareBoughtItems);
-}
-
 async function fetchRolimonsCatalogPage({
   cursor, limit, keywordTokens, sort, minPrice, maxPrice, minRap, maxRap,
 }) {
@@ -1334,7 +1286,7 @@ async function fetchRolimonsCatalogPage({
       enriched.sort(compareOverpricedItems);
     } else if (boughtRangeDays) {
       enriched = interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360));
-      enriched = await addSnapshotActivityMetrics(enriched, boughtRangeDays);
+      enriched = await addResaleActivityMetrics(enriched, boughtRangeDays);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -1839,8 +1791,14 @@ async function fetchFastRobloxIndexPage({
       if (maxRap !== null && (!item.rap || item.rap > maxRap)) return false;
       return true;
     });
-    activeItems = interleaveForCoverage(activeItems).slice(0, 3000);
-    activeItems = await addSnapshotActivityMetrics(activeItems, boughtRangeDays);
+    activeItems = activeItems
+      .map((item) => ({
+        ...item,
+        _volatility: item.rap && item.value ? Math.abs(item.rap - item.value) / Math.max(item.rap, item.value) * 100 : 0,
+      }))
+      .sort((a, b) => b._volatility - a._volatility)
+      .slice(0, 400);
+    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
     activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
       if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
@@ -2041,7 +1999,8 @@ async function fetchCatalogPage({
 
   if (isBoughtSort) {
     const boughtRangeDays = getBoughtRangeDays(safeSort);
-    collectedItems = await addSnapshotActivityMetrics(collectedItems, boughtRangeDays);
+    collectedItems = collectedItems.filter((item) => Number(item.assetId) > 0).slice(0, 800);
+    collectedItems = await addResaleActivityMetrics(collectedItems, boughtRangeDays);
   }
 
   collectedItems = collectedItems.filter((item) => {
