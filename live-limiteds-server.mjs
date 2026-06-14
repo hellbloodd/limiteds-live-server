@@ -1177,7 +1177,7 @@ async function addHistoryMetrics(item) {
 async function addLiveHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
-  return mapWithConcurrency(items, 32, async (item) => {
+  return mapWithConcurrency(items, 6, async (item) => {
     const resale = item.collectibleItemId
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : item.assetId > 0 ? await fetchResaleData(item.assetId) : {};
@@ -1265,7 +1265,7 @@ async function fetchRolimonsCatalogPage({
         : await mapWithConcurrency(scanWindow, 8, (item) => enrichRolimonsItem(item, false, true));
 
     if (metricKey) {
-      const poolSize = Math.max(limit * 20, 3000);
+      const poolSize = Math.max(limit * 8, 400);
       enriched = interleaveForCoverage(enriched).slice(0, poolSize);
       enriched = await addLiveHistoryMetricsBatch(enriched);
       enriched = enriched.filter((item) => {
@@ -1830,7 +1830,7 @@ async function fetchFastRobloxIndexPage({
 
   if (metricKey) {
     const isLossSort = String(sort).startsWith("loss_");
-    const poolSize = Math.max(limit * 20, 3000);
+    const poolSize = Math.max(limit * 8, 400);
     items = interleaveForCoverage(items).slice(0, poolSize);
     items = await addLiveHistoryMetricsBatch(items);
     items = items
@@ -2236,6 +2236,24 @@ async function handleRequest(req, res) {
 
 const { createServer } = await import("node:http");
 
+async function warmupResaleCache() {
+  try {
+    const items = await getRobloxMarketIndex();
+    const sample = interleaveForCoverage(items).slice(0, 400);
+    console.log(`Warming resale cache for ${sample.length} limiteds...`);
+    const start = Date.now();
+    const processed = await mapWithConcurrency(sample, 6, async (item) => {
+      await fetchResaleData(item.assetId);
+      return true;
+    });
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    const cached = resaleCache.size;
+    console.log(`Resale cache warmed: ${processed.length} items in ${elapsed}s (${cached} cached total).`);
+  } catch (error) {
+    if (error.stack) console.warn(error.stack);
+  }
+}
+
 createServer((req, res) => {
   handleRequest(req, res).catch((error) => {
     sendJson(res, 500, { error: "Server error", detail: error.message });
@@ -2245,4 +2263,5 @@ createServer((req, res) => {
   getRobloxMarketIndex()
     .then((items) => { console.log(`Roblox market index warmed with ${items.length} priced limiteds.`); })
     .catch((error) => { console.warn(`Roblox market index warmup failed: ${error.message}`); });
+  warmupResaleCache();
 });
