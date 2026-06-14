@@ -1223,6 +1223,42 @@ async function addHistoryMetricsBatch(items) {
   });
 }
 
+async function addSnapshotActivityMetrics(items, days) {
+  if (!days || items.length === 0) return items;
+  const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
+
+  return items.map((item) => {
+    let ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+    const rap = firstPositiveNumber(item.rap);
+    const lowestPrice = firstPositiveNumber(item.lowestPrice);
+
+    if (ownHistory.length < 1 && Number(item.value) > 0 && rap > 0) {
+      const syntheticDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      ownHistory = [{ value: Number(item.value), date: syntheticDate, source: "rolimons" }];
+    }
+
+    const activityMetrics = calculateActivityMetrics(ownHistory, days, rap, lowestPrice);
+    const score = activityMetrics.activityScore;
+
+    return {
+      ...item, rap, lowestPrice,
+      activityCount: Number.isFinite(score) && score > 0 ? activityMetrics.activityCount : null,
+      activityScore: Number.isFinite(score) && score > 0 ? score : null,
+      averageActivePrice: firstPositiveNumber(activityMetrics.averageActivePrice, lowestPrice),
+      salesCount: Number.isFinite(score) && score > 0 ? activityMetrics.activityCount : null,
+      averageSalePrice: firstPositiveNumber(activityMetrics.averageActivePrice, lowestPrice),
+      dealValue: calculateDealValue(rap, lowestPrice),
+      dealPercent: calculateDealPercent(rap, lowestPrice),
+      overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+      overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
+    };
+  }).filter((item) => {
+    const count = Number(item.activityCount ?? item.salesCount ?? 0);
+    const price = Number(item.lowestPrice ?? 0);
+    return count > 0 || price > 0;
+  }).sort(compareBoughtItems);
+}
+
 async function fetchRolimonsCatalogPage({
   cursor, limit, keywordTokens, sort, minPrice, maxPrice, minRap, maxRap,
 }) {
@@ -1282,31 +1318,8 @@ async function fetchRolimonsCatalogPage({
       enriched = enriched.filter((item) => hasMinimumOverpriced(item));
       enriched.sort(compareOverpricedItems);
     } else if (boughtRangeDays) {
-      const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(enriched.map((item) => item.assetId));
-      enriched = await mapWithConcurrency(interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360)), 20, async (item) => {
-        const resale = await fetchResaleData(item.assetId);
-        const ownHistory = [
-          ...(ownHistoryByAssetId.get(item.assetId) || []),
-          ...normalizeHistoryPoints(resale.priceDataPoints),
-        ];
-        const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
-        const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
-        const activityMetrics = calculateActivityMetrics(ownHistory, boughtRangeDays, rap, lowestPrice);
-        return {
-          ...item, rap, lowestPrice,
-          activityCount: activityMetrics.activityCount,
-          activityScore: activityMetrics.activityScore,
-          averageActivePrice: activityMetrics.averageActivePrice,
-          salesCount: activityMetrics.activityCount,
-          averageSalePrice: activityMetrics.averageActivePrice,
-          dealValue: calculateDealValue(rap, lowestPrice),
-          dealPercent: calculateDealPercent(rap, lowestPrice),
-          overpricedValue: calculateOverpricedValue(rap, lowestPrice),
-          overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
-        };
-      });
-      enriched = enriched.filter((item) => Number(item.activityScore) > 0);
-      enriched.sort(compareBoughtItems);
+      enriched = interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360));
+      enriched = await addSnapshotActivityMetrics(enriched, boughtRangeDays);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -1812,7 +1825,7 @@ async function fetchFastRobloxIndexPage({
       return true;
     });
     activeItems = interleaveForCoverage(activeItems).slice(0, 3000);
-    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
+    activeItems = await addSnapshotActivityMetrics(activeItems, boughtRangeDays);
     activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
       if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
@@ -2013,38 +2026,7 @@ async function fetchCatalogPage({
 
   if (isBoughtSort) {
     const boughtRangeDays = getBoughtRangeDays(safeSort);
-    const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(collectedItems.map((item) => item.assetId));
-    collectedItems = await mapWithConcurrency(collectedItems, 20, async (item) => {
-      const resale = item.collectibleItemId && (safeMarketType === "ugc" || item.assetId > 10_000_000_000)
-        ? await fetchCollectibleResaleData(item.collectibleItemId)
-        : await fetchResaleData(item.assetId);
-      const ownHistory = [
-        ...(ownHistoryByAssetId.get(item.assetId) || []),
-        ...normalizeHistoryPoints(resale.priceDataPoints),
-      ];
-      const volumeHistory = normalizeHistoryPoints(resale.volumeDataPoints);
-      const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
-      const lowestPrice = clearPriceWithoutSellers(firstNumber(resale.lowestResalePrice, item.lowestPrice), resale.numberRemaining);
-      const activityMetrics = calculateActivityMetrics(ownHistory, boughtRangeDays, rap, lowestPrice);
-      let salesCount = activityMetrics.activityCount;
-      let avgPrice = activityMetrics.averageActivePrice;
-      if (volumeHistory.length > 0) {
-        const vs = calculateSalesMetrics(volumeHistory, boughtRangeDays);
-        if (vs.salesCount) { salesCount = vs.salesCount; avgPrice = vs.averageSalePrice || avgPrice; }
-      }
-      return {
-        ...item, rap, lowestPrice,
-        activityCount: activityMetrics.activityCount,
-        activityScore: activityMetrics.activityScore,
-        averageActivePrice: activityMetrics.averageActivePrice,
-        salesCount: salesCount,
-        averageSalePrice: avgPrice,
-        dealValue: calculateDealValue(rap, lowestPrice),
-        dealPercent: calculateDealPercent(rap, lowestPrice),
-        overpricedValue: calculateOverpricedValue(rap, lowestPrice),
-        overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
-      };
-    });
+    collectedItems = await addSnapshotActivityMetrics(collectedItems, boughtRangeDays);
   }
 
   collectedItems = collectedItems.filter((item) => {
@@ -2072,7 +2054,6 @@ async function fetchCatalogPage({
     collectedItems = collectedItems.filter((item) => hasMinimumOverpriced(item));
     collectedItems.sort(compareOverpricedItems);
   } else if (isBoughtSort) {
-    collectedItems = collectedItems.filter((item) => Number(item.salesCount) > 0);
     collectedItems.sort(compareBoughtItems);
   } else {
     const metricKeyBySort = {
