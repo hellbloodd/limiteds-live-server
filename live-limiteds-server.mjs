@@ -1248,13 +1248,13 @@ async function addSnapshotActivityMetrics(items, days) {
 
     if (activityScore === null && rolimonsValue && rap && rolimonsValue !== rap) {
       const move = Math.abs(percentChange(rolimonsValue, rap) || 0);
-      activityCount = move > 0 ? Math.round(move) : null;
+      activityCount = 1;
       activityScore = move;
     }
 
     if (activityScore === null && rap && lowestPrice && rap !== lowestPrice) {
       const move = Math.abs(percentChange(rap, lowestPrice) || 0);
-      activityCount = move > 0 ? Math.round(move) : null;
+      activityCount = 1;
       activityScore = move;
       avgPrice = lowestPrice;
     }
