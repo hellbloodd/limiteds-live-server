@@ -717,71 +717,55 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
   candidates = candidates.slice(0, maxItems);
 
-  const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
-    await sleep(200);
-    let resale = item.collectibleItemId
-      ? await fetchCollectibleResaleData(item.collectibleItemId)
-      : await fetchResaleData(item.assetId);
-    if (!resale || (!resale.priceDataPoints && !resale.volumeDataPoints && !resale.recentAveragePrice)) {
-      if (item.collectibleItemId) {
-        resale = await fetchResaleData(item.assetId);
-      } else {
-        const details = await fetchEconomyDetails(item.assetId);
-        if (details?.CollectibleItemId) {
-          resale = await fetchCollectibleResaleData(details.CollectibleItemId);
-        }
+  const volumeByAssetId = new Map();
+  if (snapshotStorageEnabled()) {
+    try {
+      const volMap = await fetchLatestItemSnapshots(candidates.map((item) => item.assetId));
+      for (const [aid, row] of volMap) {
+        volumeByAssetId.set(aid, {
+          volume_24h: row.volume_24h,
+          volume_7d: row.volume_7d,
+          volume_30d: row.volume_30d,
+          volume_1y: row.volume_1y,
+        });
       }
-    }
-    const history = normalizeHistoryPoints(resale.priceDataPoints);
-    const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
-    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
-    const lowestPrice = clearPriceWithoutSellers(
-      firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
-      firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
-    );
-    const activity = calculateActivityMetrics(history, days, rap, lowestPrice);
+    } catch { /* ignore - will fall back to live fetch */ }
+  }
 
+  const volumeKey = days <= 1 ? "volume_24h" : days <= 7 ? "volume_7d" : days <= 30 ? "volume_30d" : "volume_1y";
+
+  const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
+    const assetId = Number(item.assetId);
     let salesCount = null;
     let averageSalePrice = null;
-    if (resale.volumeDataPoints && Array.isArray(resale.volumeDataPoints)) {
-      const volPoints = resale.volumeDataPoints
-        .filter((p) => {
-          const v = Number(p.value ?? p.volume ?? p.sales ?? p.count ?? p.quantity);
-          return Number.isFinite(v) && v > 0;
-        })
-        .filter((p) => Number.isFinite(Date.parse(p.date || "")))
-        .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-      if (volPoints.length > 0) {
-        const latestTime = Date.parse(volPoints[volPoints.length - 1].date);
-        const endTime = Math.min(Date.now(), latestTime + 24 * 60 * 60 * 1000);
-        const startTime = endTime - days * 24 * 60 * 60 * 1000;
-        let total = 0;
-        for (const point of volPoints) {
-          const time = Date.parse(point.date);
-          if (time >= startTime && time <= endTime) {
-            total += Number(point.value ?? point.volume ?? point.sales ?? point.count ?? point.quantity);
-          }
-        }
-        if (total > 0) salesCount = total;
-      }
-    }
-    if (salesCount === null && history.length > 0) {
-      const changes = calculateActivityMetrics(history, days, rap, lowestPrice);
-      const priceCount = changes.activityCount;
-      if (priceCount > 0) salesCount = priceCount;
-      averageSalePrice = changes.averageActivePrice;
+
+    const cached = volumeByAssetId.get(assetId);
+    if (cached && cached[volumeKey] != null) {
+      salesCount = cached[volumeKey];
     }
 
+    if (salesCount === null) {
+      const resale = item.collectibleItemId
+        ? await fetchCollectibleResaleData(item.collectibleItemId)
+        : await fetchResaleData(item.assetId);
+      if (resale?.volumeDataPoints) {
+        const metrics = computeVolumeMetrics(resale.volumeDataPoints);
+        salesCount = metrics[volumeKey] ?? null;
+      }
+      await sleep(120);
+    }
+
+    const rap = firstPositiveNumber(item.rap);
+    const lowestPrice = firstPositiveNumber(item.lowestPrice);
     const count = firstPositiveNumber(salesCount, 0);
-    const average = firstPositiveNumber(averageSalePrice, activity.averageActivePrice, lowestPrice);
 
     return {
       ...item, rap, lowestPrice,
-      activityCount: activity.activityCount,
-      activityScore: firstPositiveNumber(activity.activityScore, count),
-      averageActivePrice: activity.averageActivePrice,
+      activityCount: null,
+      activityScore: null,
+      averageActivePrice: null,
       salesCount: count,
-      averageSalePrice: average,
+      averageSalePrice: null,
     };
   });
 
@@ -1003,6 +987,92 @@ async function saveSnapshotRows(rows) {
   return rows.length;
 }
 
+async function saveItemSnapshotRows(rows) {
+  if (rows.length === 0) return 0;
+  if (snapshotStorageEnabled()) {
+    for (let i = 0; i < rows.length; i += 500) {
+      await supabaseRequest("item_snapshots", {
+        method: "POST",
+        body: JSON.stringify(rows.slice(i, i + 500)),
+      });
+    }
+  }
+  return rows.length;
+}
+
+async function fetchLatestItemSnapshots(assetIds) {
+  const ids = [...new Set(assetIds.map((id) => normalizeNumber(Number(id))).filter((id) => id > 0))];
+  const result = new Map();
+  if (ids.length === 0 || !snapshotStorageEnabled()) return result;
+
+  for (let i = 0; i < ids.length; i += 80) {
+    const chunk = ids.slice(i, i + 80);
+    const rows = await supabaseRequest(
+      `item_snapshots?asset_id=in.(${chunk.join(",")})&order=saved_at.desc&limit=5000`,
+      { headers: { Prefer: "" } }
+    );
+    const seen = new Set();
+    for (const row of rows || []) {
+      const aid = normalizeNumber(row.asset_id);
+      if (aid > 0 && !seen.has(aid)) {
+        seen.add(aid);
+        result.set(aid, row);
+      }
+    }
+  }
+  return result;
+}
+
+async function fetchItemSnapshotHistory(assetId, limit = 1000) {
+  const safeAssetId = normalizeNumber(Number(assetId));
+  if (safeAssetId <= 0) return [];
+  if (snapshotStorageEnabled()) {
+    const rows = await supabaseRequest(
+      `item_snapshots?asset_id=eq.${safeAssetId}&select=rap,value,lowest_price,saved_at&order=saved_at.asc&limit=${limit}`,
+      { headers: { Prefer: "" } }
+    );
+    return (rows || []).map((row) => ({
+      value: Number(row.rap),
+      lowestPrice: Number(row.lowest_price) || null,
+      date: String(row.saved_at || ""),
+      source: "own",
+    })).filter((p) => p.value > 0 && Number.isFinite(Date.parse(p.date)));
+  }
+  return [];
+}
+
+function computeVolumeMetrics(volumeDataPoints) {
+  if (!Array.isArray(volumeDataPoints) || volumeDataPoints.length === 0) return {};
+  const points = volumeDataPoints
+    .map((p) => ({ value: Number(p.value ?? p.volume ?? p.sales ?? p.count ?? p.quantity), date: p.date }))
+    .filter((p) => Number.isFinite(p.value) && p.value > 0 && Number.isFinite(Date.parse(p.date)))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  if (points.length === 0) return {};
+
+  const latestTime = Date.parse(points[points.length - 1].date);
+  const endTime = latestTime + 86400000;
+  const cutoff1d = endTime - 86400000;
+  const cutoff7d = endTime - 604800000;
+  const cutoff30d = endTime - 2592000000;
+  const cutoff1y = endTime - 31536000000;
+
+  let v1d = 0, v7d = 0, v30d = 0, v1y = 0;
+  for (const p of points) {
+    const t = Date.parse(p.date);
+    if (t >= cutoff1d && t < endTime) v1d += p.value;
+    if (t >= cutoff7d && t < endTime) v7d += p.value;
+    if (t >= cutoff30d && t < endTime) v30d += p.value;
+    if (t >= cutoff1y && t < endTime) v1y += p.value;
+  }
+
+  return {
+    volume_24h: v1d > 0 ? v1d : null,
+    volume_7d: v7d > 0 ? v7d : null,
+    volume_30d: v30d > 0 ? v30d : null,
+    volume_1y: v1y > 0 ? v1y : null,
+  };
+}
+
 async function runSnapshotJob() {
   if (snapshotRunning) return { ok: true, skipped: true, reason: "Snapshot already running." };
   snapshotRunning = true;
@@ -1032,24 +1102,84 @@ async function runSnapshotJob() {
     });
 
     const savedAt = new Date().toISOString();
-    const rows = pricedItems
-      .filter((item) => item.assetId > 0 && item.rap > 0)
-      .map((item) => ({
-        asset_id: item.assetId,
+    const oldRows = [];
+    const newRows = [];
+
+    await mapWithConcurrency(pricedItems, 8, async (item) => {
+      const assetId = normalizeNumber(item.assetId);
+      if (assetId <= 0 || !item.rap) return;
+
+      let collectibleItemId = item.collectibleItemId || "";
+      let resaleData = null;
+      let volumeMetrics = {};
+      let totalSales = null;
+
+      if (!collectibleItemId) {
+        try {
+          const details = await fetchEconomyDetails(assetId);
+          collectibleItemId = details?.CollectibleItemId || "";
+        } catch { /* ignore */ }
+      }
+
+      if (collectibleItemId) {
+        try {
+          resaleData = await fetchCollectibleResaleData(collectibleItemId);
+          if (resaleData?.volumeDataPoints) {
+            volumeMetrics = computeVolumeMetrics(resaleData.volumeDataPoints);
+          }
+          totalSales = Number(resaleData.sales) || null;
+        } catch { /* ignore */ }
+      }
+
+      const rap = Math.round(item.rap);
+      const value = Number(item.value) > 0 ? Math.round(item.value) : null;
+      const lowestPrice = item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null;
+      const availableCopies = item.availableCopies;
+      const totalCopies = item.totalCopies;
+
+      oldRows.push({
+        asset_id: assetId,
         name: item.name,
-        rap: Math.round(item.rap),
-        lowest_price: item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null,
+        rap,
+        lowest_price: lowestPrice,
         saved_at: savedAt,
-      }));
-    let saved;
+      });
+
+      newRows.push({
+        asset_id: assetId,
+        collectible_item_id: collectibleItemId || null,
+        name: item.name,
+        rap,
+        value,
+        lowest_price: lowestPrice,
+        available_copies: Number(availableCopies) > 0 ? Number(availableCopies) : null,
+        total_copies: Number(totalCopies) > 0 ? Number(totalCopies) : null,
+        volume_24h: volumeMetrics.volume_24h ?? null,
+        volume_7d: volumeMetrics.volume_7d ?? null,
+        volume_30d: volumeMetrics.volume_30d ?? null,
+        volume_1y: volumeMetrics.volume_1y ?? null,
+        sales_all_time: totalSales,
+        saved_at: savedAt,
+      });
+
+      await sleep(120);
+    });
+
+    let savedOld = 0, savedNew = 0;
     try {
-      saved = await saveSnapshotRows(rows);
+      savedOld = await saveSnapshotRows(oldRows);
     } catch (error) {
-      throw new Error(`Snapshot database save failed: ${error.message}`);
+      console.warn(`Old snapshot save failed: ${error.message}`);
+    }
+    try {
+      savedNew = await saveItemSnapshotRows(newRows);
+    } catch (error) {
+      throw new Error(`Item snapshot save failed: ${error.message}`);
     }
     lastSnapshotRunAt = Date.now();
-    console.log(`Snapshot saved ${saved} rows to ${snapshotStorageEnabled() ? "supabase" : "memory"}.`);
-    return { ok: true, saved, storedIn: snapshotStorageEnabled() ? "supabase" : "memory", savedAt };
+    const storedLoc = snapshotStorageEnabled() ? "supabase" : "memory";
+    console.log(`Snapshot saved ${savedOld} old rows, ${savedNew} new rows to ${storedLoc}.`);
+    return { ok: true, saved: savedNew, storedIn: storedLoc, savedAt };
   } finally {
     snapshotRunning = false;
   }
@@ -1161,6 +1291,7 @@ async function enrichRolimonsItemsWithCatalogDetails(items, includeResaleFallbac
       totalCopies: firstPositiveNumber(details.totalQuantity, item.totalCopies),
       creatorName: String(details.creatorName || item.creatorName || "Roblox"),
       itemType: String(details.itemType || item.itemType || "Asset"),
+      collectibleItemId: String(details.collectibleItemId || item.collectibleItemId || ""),
       dealValue: calculateDealValue(rap, lowestPrice),
       dealPercent: calculateDealPercent(rap, lowestPrice),
       overpricedValue: calculateOverpricedValue(rap, lowestPrice),
@@ -1237,12 +1368,20 @@ async function addHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
   return items.map((item) => {
-    let ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+    const assetId = Number(item.assetId);
     const rap = firstPositiveNumber(item.rap);
 
-    if (ownHistory.length < 1 && Number(item.value) > 0 && rap > 0) {
-      const syntheticDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-      ownHistory = [{ value: Number(item.value), date: syntheticDate, source: "rolimons" }];
+    let ownHistory = ownHistoryByAssetId.get(assetId) || [];
+
+    if (ownHistory.length < 1 && rap > 0) {
+      const value = Number(item.value);
+      if (value > 0 && value !== rap) {
+        const syntheticDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        ownHistory = [{ value, date: syntheticDate, source: "rolimons" }];
+      } else {
+        const baseline = Math.max(1, Math.round(rap * 0.98));
+        ownHistory = [{ value: baseline, date: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(), source: "synthetic" }];
+      }
     }
 
     const metrics = buildRapChangeMetrics(ownHistory, rap);
@@ -1522,7 +1661,15 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     rolimonsItem?.rap, marketplaceDetails.recentAveragePrice, catalogDetails.recentAveragePrice,
     details.RecentAveragePrice, collectibleDetails.RecentAveragePrice, resale.recentAveragePrice
   );
-  const ownHistory = [...(await fetchStoredSnapshots(safeAssetId)), ...normalizeHistoryPoints(resale.priceDataPoints)];
+  const snapshotHistory = await fetchStoredSnapshots(safeAssetId);
+  let ownHistory = [...snapshotHistory];
+  if (snapshotHistory.length < 1 && snapshotStorageEnabled()) {
+    try {
+      const extraHistory = await fetchItemSnapshotHistory(safeAssetId);
+      if (extraHistory.length > 0) ownHistory = extraHistory;
+    } catch { /* fall back to live data */ }
+  }
+  ownHistory = [...ownHistory, ...normalizeHistoryPoints(resale.priceDataPoints)];
   const metrics = buildRapChangeMetrics(ownHistory, rap);
   const chartHistory = metrics.history;
   const availableCopies = firstNonNegativeNumber(
