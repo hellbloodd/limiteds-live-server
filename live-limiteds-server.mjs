@@ -1228,34 +1228,49 @@ async function addSnapshotActivityMetrics(items, days) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
   return items.map((item) => {
-    let ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+    const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
     const rap = firstPositiveNumber(item.rap);
     const lowestPrice = firstPositiveNumber(item.lowestPrice);
+    const rolimonsValue = Number(item.value) > 0 ? Number(item.value) : null;
 
-    if (ownHistory.length < 1 && Number(item.value) > 0 && rap > 0) {
-      const syntheticDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-      ownHistory = [{ value: Number(item.value), date: syntheticDate, source: "rolimons" }];
+    let activityCount = null;
+    let activityScore = null;
+    let avgPrice = null;
+
+    if (ownHistory.length > 1) {
+      const metrics = calculateActivityMetrics(ownHistory, days, rap, lowestPrice);
+      if (metrics.activityScore > 0) {
+        activityCount = metrics.activityCount;
+        activityScore = metrics.activityScore;
+        avgPrice = metrics.averageActivePrice;
+      }
     }
 
-    const activityMetrics = calculateActivityMetrics(ownHistory, days, rap, lowestPrice);
-    const score = activityMetrics.activityScore;
+    if (activityScore === null && rolimonsValue && rap && rolimonsValue !== rap) {
+      const move = Math.abs(percentChange(rolimonsValue, rap) || 0);
+      activityCount = move > 0 ? Math.round(move) : null;
+      activityScore = move;
+    }
+
+    if (activityScore === null && rap && lowestPrice && rap !== lowestPrice) {
+      const move = Math.abs(percentChange(rap, lowestPrice) || 0);
+      activityCount = move > 0 ? Math.round(move) : null;
+      activityScore = move;
+      avgPrice = lowestPrice;
+    }
 
     return {
       ...item, rap, lowestPrice,
-      activityCount: Number.isFinite(score) && score > 0 ? activityMetrics.activityCount : null,
-      activityScore: Number.isFinite(score) && score > 0 ? score : null,
-      averageActivePrice: firstPositiveNumber(activityMetrics.averageActivePrice, lowestPrice),
-      salesCount: Number.isFinite(score) && score > 0 ? activityMetrics.activityCount : null,
-      averageSalePrice: firstPositiveNumber(activityMetrics.averageActivePrice, lowestPrice),
+      activityCount: Number.isFinite(activityCount) && activityCount > 0 ? activityCount : null,
+      activityScore: Number.isFinite(activityScore) && activityScore > 0 ? activityScore : null,
+      averageActivePrice: firstPositiveNumber(avgPrice, lowestPrice),
+      salesCount: Number.isFinite(activityCount) && activityCount > 0 ? activityCount : null,
+      averageSalePrice: firstPositiveNumber(avgPrice, lowestPrice),
       dealValue: calculateDealValue(rap, lowestPrice),
       dealPercent: calculateDealPercent(rap, lowestPrice),
       overpricedValue: calculateOverpricedValue(rap, lowestPrice),
       overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
     };
-  }).filter((item) => {
-    const count = Number(item.activityCount ?? item.salesCount ?? 0);
-    const price = Number(item.lowestPrice ?? 0);
-    return count > 0 || price > 0;
   }).sort(compareBoughtItems);
 }
 
