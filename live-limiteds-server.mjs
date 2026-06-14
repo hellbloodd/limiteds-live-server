@@ -723,7 +723,6 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
     const history = normalizeHistoryPoints(resale.priceDataPoints);
-    const volumeHistory = normalizeHistoryPoints(resale.volumeDataPoints);
     const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
     const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
     const lowestPrice = clearPriceWithoutSellers(
@@ -734,11 +733,20 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
     let salesCount = null;
     let averageSalePrice = null;
-    if (volumeHistory.length > 0) {
-      const sales = calculateSalesMetrics(volumeHistory, days);
-      salesCount = sales.salesCount;
-      averageSalePrice = sales.averageSalePrice;
-    } else {
+    if (resale.volumeDataPoints && Array.isArray(resale.volumeDataPoints)) {
+      const startTime = getPeriodStartTime(days);
+      const endTime = getPeriodEndTime(days);
+      let total = 0;
+      for (const point of resale.volumeDataPoints) {
+        const vol = Number(point.value);
+        const time = Date.parse(point.date || "");
+        if (Number.isFinite(vol) && vol > 0 && Number.isFinite(time) && time >= startTime && time <= endTime) {
+          total += vol;
+        }
+      }
+      if (total > 0) salesCount = total;
+    }
+    if (salesCount === null && history.length > 0) {
       const sales = calculateSalesMetrics(history, days);
       salesCount = firstPositiveNumber(sales.salesCount, activity.activityCount);
       averageSalePrice = sales.averageSalePrice || activity.averageActivePrice;
