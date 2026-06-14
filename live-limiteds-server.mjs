@@ -877,10 +877,10 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
 
   const rap = Number(currentRap);
   const baselineAll = findHistoryBaselineValue(rawHistory, null);
-  const baseline24h = findPeriodBaselineValue(rawHistory, 1);
-  const baseline7d = findPeriodBaselineValue(rawHistory, 7);
-  const baseline30d = findPeriodBaselineValue(rawHistory, 30);
-  const baseline1y = findPeriodBaselineValue(rawHistory, 365);
+  const baseline24h = findHistoryBaselineValue(rawHistory, 1);
+  const baseline7d = findHistoryBaselineValue(rawHistory, 7);
+  const baseline30d = findHistoryBaselineValue(rawHistory, 30);
+  const baseline1y = findHistoryBaselineValue(rawHistory, 365);
   const changeAll = percentChange(baselineAll, rap);
   const change24h = percentChange(baseline24h, rap);
   const change7d = percentChange(baseline7d, rap);
@@ -1177,7 +1177,7 @@ async function addHistoryMetrics(item) {
 async function addLiveHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
-  return mapWithConcurrency(items, 20, async (item) => {
+  return mapWithConcurrency(items, 32, async (item) => {
     const resale = item.collectibleItemId
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : item.assetId > 0 ? await fetchResaleData(item.assetId) : {};
@@ -1265,17 +1265,9 @@ async function fetchRolimonsCatalogPage({
         : await mapWithConcurrency(scanWindow, 8, (item) => enrichRolimonsItem(item, false, true));
 
     if (metricKey) {
-      enriched = await addHistoryMetricsBatch(enriched);
-      enriched.sort((a, b) => {
-        const aValue = Number(a[metricKey]);
-        const bValue = Number(b[metricKey]);
-        if (Number.isFinite(aValue) && Number.isFinite(bValue) && aValue !== bValue) {
-          return compareChangeMetric(a, b, metricKey, isLossSort);
-        }
-        return (Number(b.rap) || 0) - (Number(a.rap) || 0);
-      });
-
-      enriched = await addLiveHistoryMetricsBatch(interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360)));
+      const poolSize = Math.max(limit * 20, 3000);
+      enriched = interleaveForCoverage(enriched).slice(0, poolSize);
+      enriched = await addLiveHistoryMetricsBatch(enriched);
       enriched = enriched.filter((item) => {
         const value = Number(item[metricKey]);
         return Number.isFinite(value) && value > 0;
@@ -1837,37 +1829,13 @@ async function fetchFastRobloxIndexPage({
   items = filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, maxRap });
 
   if (metricKey) {
-    items = await addHistoryMetricsBatch(items);
-    items.sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
-
-    items = await addLiveHistoryMetricsBatch(interleaveForCoverage(items).slice(0, Math.max(limit * 12, 720)));
+    const isLossSort = String(sort).startsWith("loss_");
+    const poolSize = Math.max(limit * 20, 3000);
+    items = interleaveForCoverage(items).slice(0, poolSize);
+    items = await addLiveHistoryMetricsBatch(items);
     items = items
-      .filter((item) => Number(item[metricKey]) > 0)
-      .sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
-
-    if (items.length < limit) {
-      const fallbackKey = String(sort).startsWith("profit_") ? "change24h" : null;
-      if (fallbackKey) {
-        const existing = new Set(items.map((i) => i.assetId));
-        const allWithChange = await getRobloxMarketIndex();
-        const extra = allWithChange.filter((i) => !existing.has(i.assetId));
-        const enriched = await addHistoryMetricsBatch(extra);
-        const candidates = enriched
-          .filter((item) => {
-            const v = Number(item[fallbackKey]);
-            return Number.isFinite(v) && v > -100;
-          })
-          .sort((a, b) => compareChangeMetric(a, b, fallbackKey, false));
-        for (const item of candidates) {
-          if (items.length >= limit * 3) break;
-          items.push(item);
-        }
-        items = await addLiveHistoryMetricsBatch(interleaveForCoverage(items).slice(0, Math.max(limit * 3, 120)));
-        items = items
-          .filter((item) => Number.isFinite(Number(item[fallbackKey])))
-          .sort((a, b) => compareChangeMetric(a, b, fallbackKey, false));
-      }
-    }
+      .filter((item) => { const v = Number(item[metricKey]); return Number.isFinite(v) && v > 0; })
+      .sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
   } else {
     items = sortIndexedItems(items, sort);
   }
