@@ -711,7 +711,7 @@ function calculateActivityMetrics(points, days, currentRap = null, currentPrice 
   const history = points
     .map((point) => ({
       rap: Number(point.value),
-      price: Number(point.lowestPrice),
+      price: Number(point.lowestPrice ?? point.price ?? point.salePrice ?? (point.source === "resale" ? point.value : null)),
       time: Date.parse(point.date || ""),
     }))
     .filter((point) => Number.isFinite(point.time) && point.time <= endTime && (point.rap > 0 || point.price > 0))
@@ -835,11 +835,48 @@ function calculateSalesMetrics(points, days) {
 }
 
 function compareBoughtItems(a, b) {
+  const countDiff = (Number(b?.activityCount ?? b?.salesCount) || 0) - (Number(a?.activityCount ?? a?.salesCount) || 0);
+  if (countDiff !== 0) return countDiff;
+
   const scoreDiff = (Number(b?.activityScore) || 0) - (Number(a?.activityScore) || 0);
   if (scoreDiff !== 0) return scoreDiff;
 
-  const countDiff = (Number(b?.activityCount ?? b?.salesCount) || 0) - (Number(a?.activityCount ?? a?.salesCount) || 0);
-  return countDiff !== 0 ? countDiff : (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
+  return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
+}
+
+async function addResaleActivityMetrics(items, days, maxItems = 120) {
+  const candidates = items
+    .filter((item) => item.assetId > 0)
+    .slice(0, maxItems);
+
+  const enriched = await mapWithConcurrency(candidates, 24, async (item) => {
+    const resale = item.collectibleItemId && item.assetId > 10_000_000_000
+      ? await fetchCollectibleResaleData(item.collectibleItemId)
+      : await fetchResaleData(item.assetId);
+    const history = normalizeHistoryPoints(resale.priceDataPoints);
+    const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
+    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+    const lowestPrice = clearPriceWithoutSellers(
+      firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
+      firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
+    );
+    const activity = calculateActivityMetrics(history, days, rap, lowestPrice);
+
+    return {
+      ...item,
+      rap,
+      lowestPrice,
+      activityCount: activity.activityCount,
+      activityScore: activity.activityScore,
+      averageActivePrice: activity.averageActivePrice,
+      salesCount: activity.activityCount,
+      averageSalePrice: activity.averageActivePrice,
+    };
+  });
+
+  return enriched
+    .filter((item) => Number(item.activityCount ?? item.salesCount) > 0 || Number(item.activityScore) > 0)
+    .sort(compareBoughtItems);
 }
 
 function snapshotStorageEnabled() {
@@ -2374,7 +2411,6 @@ async function fetchFastRobloxIndexPage({
   maxRap = null,
 }) {
   const offset = offsetFromCursor(cursor);
-  let items = await getRobloxMarketIndex();
   const metricKeyBySort = {
     loss_24h: "loss24h",
     loss_7d: "loss7d",
@@ -2390,6 +2426,30 @@ async function fetchFastRobloxIndexPage({
   const metricKey = metricKeyBySort[sort];
   const boughtRangeDays = getBoughtRangeDays(sort);
 
+  if (boughtRangeDays) {
+    let activeItems = await fetchRolimonsItems();
+    activeItems = activeItems.filter((item) => {
+      if (!matchesAllKeywordTokens(item, keywordTokens)) return false;
+      if (minRap !== null && (!item.rap || item.rap < minRap)) return false;
+      if (maxRap !== null && (!item.rap || item.rap > maxRap)) return false;
+      return true;
+    });
+    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
+    activeItems = activeItems.filter((item) => {
+      if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
+      if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
+      return true;
+    });
+
+    return {
+      items: activeItems.slice(offset, offset + limit),
+      nextPageCursor: cursorFromOffset(offset + limit, activeItems.length),
+      previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - limit), activeItems.length) : "",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  let items = await getRobloxMarketIndex();
   items = filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, maxRap });
 
   if (metricKey) {
@@ -2397,22 +2457,6 @@ async function fetchFastRobloxIndexPage({
     items = items
       .filter((item) => Number(item[metricKey]) > 0)
       .sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
-  } else if (boughtRangeDays) {
-    const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
-    items = items.map((item) => {
-      const history = ownHistoryByAssetId.get(item.assetId) || [];
-      const activity = calculateActivityMetrics(history, boughtRangeDays, item.rap, item.lowestPrice);
-      return {
-        ...item,
-        activityCount: activity.activityCount,
-        activityScore: activity.activityScore,
-        averageActivePrice: activity.averageActivePrice,
-        salesCount: activity.activityCount,
-        averageSalePrice: activity.averageActivePrice,
-      };
-    })
-      .filter((item) => Number(item.activityScore) > 0)
-      .sort(compareBoughtItems);
   } else {
     items = sortIndexedItems(items, sort);
   }
