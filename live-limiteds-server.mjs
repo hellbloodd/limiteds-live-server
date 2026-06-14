@@ -719,9 +719,19 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
   const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
     await sleep(200);
-    const resale = item.collectibleItemId && item.assetId > 10_000_000_000
+    let resale = item.collectibleItemId
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
+    if (!resale || (!resale.priceDataPoints && !resale.volumeDataPoints && !resale.recentAveragePrice)) {
+      if (item.collectibleItemId) {
+        resale = await fetchResaleData(item.assetId);
+      } else {
+        const details = await fetchEconomyDetails(item.assetId);
+        if (details?.CollectibleItemId) {
+          resale = await fetchCollectibleResaleData(details.CollectibleItemId);
+        }
+      }
+    }
     const history = normalizeHistoryPoints(resale.priceDataPoints);
     const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
     const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
@@ -734,25 +744,35 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
     let salesCount = null;
     let averageSalePrice = null;
     if (resale.volumeDataPoints && Array.isArray(resale.volumeDataPoints)) {
-      const startTime = getPeriodStartTime(days);
-      const endTime = getPeriodEndTime(days);
-      let total = 0;
-      for (const point of resale.volumeDataPoints) {
-        const vol = Number(point.value);
-        const time = Date.parse(point.date || "");
-        if (Number.isFinite(vol) && vol > 0 && Number.isFinite(time) && time >= startTime && time <= endTime) {
-          total += vol;
+      const volPoints = resale.volumeDataPoints
+        .filter((p) => {
+          const v = Number(p.value ?? p.volume ?? p.sales ?? p.count ?? p.quantity);
+          return Number.isFinite(v) && v > 0;
+        })
+        .filter((p) => Number.isFinite(Date.parse(p.date || "")))
+        .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+      if (volPoints.length > 0) {
+        const latestTime = Date.parse(volPoints[volPoints.length - 1].date);
+        const endTime = Math.min(Date.now(), latestTime + 24 * 60 * 60 * 1000);
+        const startTime = endTime - days * 24 * 60 * 60 * 1000;
+        let total = 0;
+        for (const point of volPoints) {
+          const time = Date.parse(point.date);
+          if (time >= startTime && time <= endTime) {
+            total += Number(point.value ?? point.volume ?? point.sales ?? point.count ?? point.quantity);
+          }
         }
+        if (total > 0) salesCount = total;
       }
-      if (total > 0) salesCount = total;
     }
     if (salesCount === null && history.length > 0) {
-      const sales = calculateSalesMetrics(history, days);
-      salesCount = firstPositiveNumber(sales.salesCount, activity.activityCount);
-      averageSalePrice = sales.averageSalePrice || activity.averageActivePrice;
+      const changes = calculateActivityMetrics(history, days, rap, lowestPrice);
+      const priceCount = changes.activityCount;
+      if (priceCount > 0) salesCount = priceCount;
+      averageSalePrice = changes.averageActivePrice;
     }
 
-    const count = firstPositiveNumber(salesCount, activity.activityCount);
+    const count = firstPositiveNumber(salesCount, 0);
     const average = firstPositiveNumber(averageSalePrice, activity.averageActivePrice, lowestPrice);
 
     return {
@@ -1104,7 +1124,7 @@ async function fetchRolimonsItems() {
 async function enrichRolimonsItem(item, includeResale = false, includeDetails = true) {
   const [details, resale] = await Promise.all([
     includeDetails ? fetchEconomyDetails(item.assetId) : {},
-    includeResale && item.assetId > 0 && item.assetId < 10000000000 ? fetchResaleData(item.assetId) : {},
+    includeResale ? (item.collectibleItemId ? fetchCollectibleResaleData(item.collectibleItemId) : item.assetId > 0 ? fetchResaleData(item.assetId) : {}) : {},
   ]);
   const collectibleDetails = details.CollectiblesItemDetails || {};
   const rap = firstPositiveNumber(item.rap, details.RecentAveragePrice, collectibleDetails.RecentAveragePrice, resale.recentAveragePrice);
@@ -1114,9 +1134,11 @@ async function enrichRolimonsItem(item, includeResale = false, includeDetails = 
   const availableCopies = firstNonNegativeNumber(resale.numberRemaining, item.availableCopies);
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
 
+  const collectibleItemId = details.CollectibleItemId || item.collectibleItemId || "";
   return {
     ...item, rap, lowestPrice, availableCopies,
     totalCopies: firstPositiveNumber(collectibleDetails.TotalQuantity, item.totalCopies),
+    collectibleItemId,
     dealValue: calculateDealValue(rap, lowestPrice),
     dealPercent: calculateDealPercent(rap, lowestPrice),
     overpricedValue: calculateOverpricedValue(rap, lowestPrice),
@@ -1972,7 +1994,7 @@ async function fetchCatalogPage({
         const mergedItem = { ...item, ...marketplaceDetails };
         const shouldFetchResaleData = assetId > 0 && (safeMarketType === "roblox" || Boolean(item.collectibleItemId));
         const resale = shouldFetchResaleData
-          ? item.collectibleItemId && assetId > 10_000_000_000
+          ? item.collectibleItemId
             ? await fetchCollectibleResaleData(item.collectibleItemId)
             : await fetchResaleData(assetId)
           : {};
