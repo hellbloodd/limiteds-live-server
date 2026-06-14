@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "snapshot-debug-2026-06-10-1";
+const SERVER_VERSION = "snapshot-debug-2026-06-10-1-active-sales-fixed";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -492,12 +492,24 @@ function normalizeHistoryPoints(points) {
   }
 
   return points
-    .filter((point) => typeof point.value === "number" && point.value > 0)
-    .map((point) => ({
-      value: point.value,
-      date: String(point.date || ""),
-      source: String(point.source || "resale"),
-    }))
+    .map((point) => {
+      const value = Number(point.value ?? point.price ?? point.salePrice ?? point.lowestPrice);
+
+      return {
+        value,
+        lowestPrice: firstPositiveNumber(
+          Number(point.lowestPrice),
+          Number(point.price),
+          Number(point.salePrice),
+          value
+        ),
+        salesVolume: Number(point.salesVolume ?? point.volume ?? point.sales ?? point.count ?? point.quantity),
+        volume: Number(point.volume ?? point.salesVolume ?? point.sales ?? point.count ?? point.quantity),
+        date: String(point.date || point.created || point.createdAt || point.timestamp || ""),
+        source: String(point.source || "resale"),
+      };
+    })
+    .filter((point) => Number.isFinite(point.value) && point.value > 0)
     .filter((point) => Number.isFinite(Date.parse(point.date)))
     .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
     .slice(-5000);
@@ -804,7 +816,7 @@ function calculateSalesMetrics(points, days) {
   let averagePointCount = 0;
 
   for (const point of points) {
-    const value = Number(point.value);
+    const value = Number(point.lowestPrice ?? point.price ?? point.salePrice ?? point.value);
     const time = Date.parse(point.date || "");
 
     if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(time) || time < startTime || time > endTime) {
@@ -817,6 +829,8 @@ function calculateSalesMetrics(points, days) {
       salesCount += volume;
       totalSoldValue += value * volume;
     } else {
+      // Roblox resale-data often exposes price points without explicit volume.
+      // Count a point as activity so Active 24h is not empty when RAP is unchanged.
       salesCount += 1;
       totalAverageValue += value;
       averagePointCount += 1;
@@ -844,38 +858,47 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 120) {
+async function addResaleActivityMetrics(items, days, maxItems = 2000) {
   const candidates = items
-    .filter((item) => item.assetId > 0)
+    .filter((item) => Number(item.assetId) > 0)
     .slice(0, maxItems);
 
   const enriched = await mapWithConcurrency(candidates, 24, async (item) => {
     const resale = item.collectibleItemId && item.assetId > 10_000_000_000
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
+
     const history = normalizeHistoryPoints(resale.priceDataPoints);
     const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
+
     const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
     const lowestPrice = clearPriceWithoutSellers(
       firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
       firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
     );
+
     const activity = calculateActivityMetrics(history, days, rap, lowestPrice);
+    const sales = calculateSalesMetrics(history, days);
 
     return {
       ...item,
       rap,
       lowestPrice,
-      activityCount: activity.activityCount,
-      activityScore: activity.activityScore,
-      averageActivePrice: activity.averageActivePrice,
-      salesCount: activity.activityCount,
-      averageSalePrice: activity.averageActivePrice,
+      activityCount: activity.activityCount ?? sales.salesCount,
+      activityScore: activity.activityScore ?? sales.salesCount,
+      averageActivePrice: activity.averageActivePrice ?? sales.averageSalePrice,
+      salesCount: sales.salesCount ?? activity.activityCount,
+      averageSalePrice: sales.averageSalePrice ?? activity.averageActivePrice,
     };
   });
 
   return enriched
-    .filter((item) => Number(item.activityCount ?? item.salesCount) > 0 || Number(item.activityScore) > 0)
+    .filter((item) =>
+      Number(item.activityCount ?? 0) > 0 ||
+      Number(item.salesCount ?? 0) > 0 ||
+      Number(item.activityScore ?? 0) > 0 ||
+      Number(item.averageSalePrice ?? 0) > 0
+    )
     .sort(compareBoughtItems);
 }
 
