@@ -1274,10 +1274,6 @@ async function fetchRolimonsCatalogPage({
       const poolSize = Math.max(limit * 8, 400);
       enriched = interleaveForCoverage(enriched).slice(0, poolSize);
       enriched = await addHistoryMetricsBatch(enriched);
-      enriched = enriched.filter((item) => {
-        const value = Number(item[metricKey]);
-        return Number.isFinite(value) && value > 0;
-      });
       enriched.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     } else if (sort === "deal_desc") {
       enriched = enriched.filter((item) => hasMinimumDeal(item));
@@ -1840,7 +1836,6 @@ async function fetchFastRobloxIndexPage({
     items = interleaveForCoverage(items).slice(0, poolSize);
     items = await addHistoryMetricsBatch(items);
     items = items
-      .filter((item) => { const v = Number(item[metricKey]); return Number.isFinite(v) && v > 0; })
       .sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
   } else {
     items = sortIndexedItems(items, sort);
@@ -2087,7 +2082,6 @@ async function fetchCatalogPage({
     const metricKey = metricKeyBySort[safeSort];
     const isLossSort = String(safeSort).startsWith("loss_");
     if (metricKey) {
-      collectedItems = collectedItems.filter((item) => { const value = Number(item[metricKey]); return Number.isFinite(value) && value > 0; });
       collectedItems.sort((a, b) => compareChangeMetric(a, b, metricKey, isLossSort));
     }
   }
