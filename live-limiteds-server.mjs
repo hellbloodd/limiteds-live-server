@@ -1,3 +1,4 @@
+// REAL FIX v3: Rolimon candidate pool + active sales + UI-safe data.
 // Local/prod backend for the Roblox Limiteds Live UI.
 // Run with: node live-limiteds-server.mjs
 //
@@ -5,7 +6,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "snapshot-debug-2026-06-10-1-active-sales-fixed";
+const SERVER_VERSION = "2026-06-14-REAL-ACTIVE-SALES-UI-FIX-v3";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -811,9 +812,7 @@ function calculateSalesMetrics(points, days) {
   const startTime = getPeriodStartTime(days);
   const endTime = getPeriodEndTime(days);
   let salesCount = 0;
-  let totalSoldValue = 0;
-  let totalAverageValue = 0;
-  let averagePointCount = 0;
+  let totalValue = 0;
 
   for (const point of points) {
     const value = Number(point.lowestPrice ?? point.price ?? point.salePrice ?? point.value);
@@ -824,28 +823,20 @@ function calculateSalesMetrics(points, days) {
     }
 
     const volume = Number(point.salesVolume ?? point.volume ?? point.sales ?? point.count ?? point.quantity);
+    const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 1;
 
-    if (Number.isFinite(volume) && volume > 0) {
-      salesCount += volume;
-      totalSoldValue += value * volume;
-    } else {
-      // Roblox resale-data often exposes price points without explicit volume.
-      // Count a point as activity so Active 24h is not empty when RAP is unchanged.
-      salesCount += 1;
-      totalAverageValue += value;
-      averagePointCount += 1;
-    }
+    salesCount += safeVolume;
+    totalValue += value * safeVolume;
   }
 
   if (salesCount <= 0) {
     return { salesCount: null, averageSalePrice: null };
   }
 
-  const averageSalePrice = totalSoldValue > 0
-    ? Math.round(totalSoldValue / salesCount)
-    : Math.round(totalAverageValue / Math.max(averagePointCount, 1));
-
-  return { salesCount, averageSalePrice };
+  return {
+    salesCount,
+    averageSalePrice: Math.round(totalValue / salesCount),
+  };
 }
 
 function compareBoughtItems(a, b) {
@@ -858,12 +849,47 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 2000) {
-  const candidates = items
+async function addResaleActivityMetrics(items, days, maxItems = 5000) {
+  let candidates = items
     .filter((item) => Number(item.assetId) > 0)
     .slice(0, maxItems);
 
-  const enriched = await mapWithConcurrency(candidates, 24, async (item) => {
+  // REAL FIX:
+  // Roblox catalog search misses many classic limiteds for bought/active sorting.
+  // Use Rolimon's classic limited list as a wide candidate pool, then verify activity
+  // with Roblox resale-data priceDataPoints. This makes items that sold today show up
+  // even when RAP did not move.
+  try {
+    const rolimonsItems = await fetchRolimonsItems();
+    const seen = new Set(candidates.map((item) => Number(item.assetId)));
+
+    for (const item of rolimonsItems) {
+      const assetId = Number(item.assetId);
+
+      if (assetId > 0 && !seen.has(assetId)) {
+        candidates.push({
+          ...item,
+          lowestPrice: Number(item.lowestPrice) || 0,
+          availableCopies: Number(item.availableCopies) || 0,
+          totalCopies: Number(item.totalCopies) || 0,
+          creatorName: item.creatorName || "Roblox",
+          itemType: item.itemType || "Asset",
+          collectibleItemId: item.collectibleItemId || "",
+        });
+        seen.add(assetId);
+      }
+
+      if (candidates.length >= maxItems) {
+        break;
+      }
+    }
+  } catch (error) {
+    console.warn(`Rolimon candidate pool failed: ${error.message}`);
+  }
+
+  candidates = candidates.slice(0, maxItems);
+
+  const enriched = await mapWithConcurrency(candidates, 32, async (item) => {
     const resale = item.collectibleItemId && item.assetId > 10_000_000_000
       ? await fetchCollectibleResaleData(item.collectibleItemId)
       : await fetchResaleData(item.assetId);
@@ -880,25 +906,23 @@ async function addResaleActivityMetrics(items, days, maxItems = 2000) {
     const activity = calculateActivityMetrics(history, days, rap, lowestPrice);
     const sales = calculateSalesMetrics(history, days);
 
+    const count = firstPositiveNumber(sales.salesCount, activity.activityCount);
+    const average = firstPositiveNumber(sales.averageSalePrice, activity.averageActivePrice, lowestPrice);
+
     return {
       ...item,
       rap,
       lowestPrice,
-      activityCount: activity.activityCount ?? sales.salesCount,
-      activityScore: activity.activityScore ?? sales.salesCount,
-      averageActivePrice: activity.averageActivePrice ?? sales.averageSalePrice,
-      salesCount: sales.salesCount ?? activity.activityCount,
-      averageSalePrice: sales.averageSalePrice ?? activity.averageActivePrice,
+      activityCount: count,
+      activityScore: firstPositiveNumber(activity.activityScore, count),
+      averageActivePrice: average,
+      salesCount: count,
+      averageSalePrice: average,
     };
   });
 
   return enriched
-    .filter((item) =>
-      Number(item.activityCount ?? 0) > 0 ||
-      Number(item.salesCount ?? 0) > 0 ||
-      Number(item.activityScore ?? 0) > 0 ||
-      Number(item.averageSalePrice ?? 0) > 0
-    )
+    .filter((item) => Number(item.salesCount ?? item.activityCount ?? 0) > 0)
     .sort(compareBoughtItems);
 }
 
