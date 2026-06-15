@@ -308,11 +308,12 @@ async function fetchResaleData(assetId) {
 
   try {
     const data = await fetchJson(`${ROBLOX_RESALE_URL}/${assetId}/resale-data`, {
-      retries: 2, timeoutMs: 5000,
+      retries: 0, timeoutMs: 3000,
     });
     resaleCache.set(assetId, { fetchedAt: Date.now(), data });
     return data;
   } catch {
+    resaleCache.set(assetId, { fetchedAt: Date.now(), data: {} });
     return {};
   }
 }
@@ -737,30 +738,43 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
   const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
     const assetId = Number(item.assetId);
     let salesCount = null;
-    let averageSalePrice = null;
+    let collectibleItemId = item.collectibleItemId;
+    let details = null;
 
     const cached = volumeByAssetId.get(assetId);
     if (cached && cached[volumeKey] != null) {
       salesCount = cached[volumeKey];
     }
 
-    if (salesCount === null) {
-      const resale = item.collectibleItemId
-        ? await fetchCollectibleResaleData(item.collectibleItemId)
-        : await fetchResaleData(item.assetId);
+    if (salesCount === null || !firstPositiveNumber(item.lowestPrice)) {
+      try {
+        details = await fetchEconomyDetails(assetId);
+        if (!collectibleItemId) collectibleItemId = details?.CollectibleItemId || "";
+      } catch { /* ignore */ }
+    }
+
+    if (salesCount === null && collectibleItemId) {
+      const resale = await fetchCollectibleResaleData(collectibleItemId);
       if (resale?.volumeDataPoints) {
         const metrics = computeVolumeMetrics(resale.volumeDataPoints);
         salesCount = metrics[volumeKey] ?? null;
       }
-      await sleep(120);
+      await sleep(60);
     }
 
     const rap = firstPositiveNumber(item.rap);
-    const lowestPrice = firstPositiveNumber(item.lowestPrice);
+    const rawLowestPrice = firstPositiveNumber(
+      details?.CollectiblesItemDetails?.CollectibleLowestResalePrice,
+      details?.PriceInRobux,
+      item.lowestPrice
+    );
+    const availableCopies = firstNonNegativeNumber(item.availableCopies);
+    const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
     const count = firstPositiveNumber(salesCount, 0);
 
     return {
-      ...item, rap, lowestPrice,
+      ...item, rap, lowestPrice, availableCopies,
+      collectibleItemId: collectibleItemId || item.collectibleItemId || "",
       activityCount: null,
       activityScore: null,
       averageActivePrice: null,
@@ -1367,11 +1381,54 @@ async function addLiveHistoryMetricsBatch(items) {
 async function addHistoryMetricsBatch(items) {
   const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(items.map((item) => item.assetId));
 
+  const needsLive = items.filter((item) => {
+    const assetId = Number(item.assetId);
+    const existing = ownHistoryByAssetId.get(assetId);
+    return (!existing || existing.length < 1) && firstPositiveNumber(item.rap) > 0;
+  });
+
+  const liveEnrichmentByAssetId = new Map();
+  if (needsLive.length > 0) {
+    await mapWithConcurrency(needsLive, 8, async (item) => {
+      const assetId = Number(item.assetId);
+      let ownHistory = [];
+      let details = null;
+
+      if (snapshotStorageEnabled()) {
+        try { ownHistory = await fetchItemSnapshotHistory(assetId); } catch { /* ignore */ }
+      }
+
+      if (ownHistory.length < 1) {
+        let collectibleItemId = item.collectibleItemId || "";
+        try {
+          details = await fetchEconomyDetails(assetId);
+          if (!collectibleItemId) collectibleItemId = details?.CollectibleItemId || "";
+        } catch { /* ignore */ }
+        if (collectibleItemId) {
+          try {
+            const resale = await fetchCollectibleResaleData(collectibleItemId);
+            if (resale?.priceDataPoints?.length > 0) {
+              ownHistory = normalizeHistoryPoints(resale.priceDataPoints);
+            }
+          } catch { /* ignore */ }
+        }
+        await sleep(60);
+      }
+
+      const rawLowestPrice = firstPositiveNumber(
+        details?.CollectiblesItemDetails?.CollectibleLowestResalePrice,
+        details?.PriceInRobux
+      );
+      liveEnrichmentByAssetId.set(assetId, { history: ownHistory, details, rawLowestPrice });
+    });
+  }
+
   return items.map((item) => {
     const assetId = Number(item.assetId);
     const rap = firstPositiveNumber(item.rap);
 
-    let ownHistory = ownHistoryByAssetId.get(assetId) || [];
+    const enriched = liveEnrichmentByAssetId.get(assetId);
+    let ownHistory = ownHistoryByAssetId.get(assetId) || enriched?.history || [];
 
     if (ownHistory.length < 1 && rap > 0) {
       const value = Number(item.value);
@@ -1385,9 +1442,10 @@ async function addHistoryMetricsBatch(items) {
     }
 
     const metrics = buildRapChangeMetrics(ownHistory, rap);
+    const lowestPrice = firstPositiveNumber(enriched?.rawLowestPrice, item.lowestPrice);
 
     return {
-      ...item, rap,
+      ...item, rap, lowestPrice,
       lossAllTime: metrics.lossAllTime, loss24h: metrics.loss24h, loss7d: metrics.loss7d, loss30d: metrics.loss30d, loss1y: metrics.loss1y,
       profitAllTime: metrics.profitAllTime, profit24h: metrics.profit24h, profit7d: metrics.profit7d, profit30d: metrics.profit30d, profit1y: metrics.profit1y,
       changeAllTime: metrics.changeAllTime, change24h: metrics.change24h, change7d: metrics.change7d, change30d: metrics.change30d, change1y: metrics.change1y,
