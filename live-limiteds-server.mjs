@@ -44,6 +44,7 @@ let lastSnapshotAttemptAt = 0;
 let firstSnapshotDone = false;
 let snapshotRunning = false;
 let memorySnapshots = [];
+let fallbackCheckedAssets = new Set();
 
 function makePageCacheKey({
   marketType,
@@ -689,7 +690,7 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 400) {
+async function addResaleActivityMetrics(items, days, maxItems = 2000) {
   let candidates = items.filter((item) => Number(item.assetId) > 0).slice(0, maxItems);
 
   if (candidates.length < maxItems) {
@@ -740,11 +741,7 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
   let enriched;
   if (hasAnyVolume) {
-    const withData = candidates.filter((item) => {
-      const cached = volumeByAssetId.get(Number(item.assetId));
-      return cached && cached[volumeKey] != null;
-    });
-    enriched = withData.map((item) => {
+    enriched = candidates.map((item) => {
       const cached = volumeByAssetId.get(Number(item.assetId));
       return {
         ...item,
@@ -753,7 +750,7 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
         availableCopies: firstNonNegativeNumber(item.availableCopies),
         collectibleItemId: item.collectibleItemId || "",
         activityCount: null, activityScore: null, averageActivePrice: null,
-        salesCount: firstPositiveNumber(cached[volumeKey], 0),
+        salesCount: cached && cached[volumeKey] != null ? firstPositiveNumber(cached[volumeKey], 0) : 0,
         averageSalePrice: null,
       };
     });
@@ -1114,8 +1111,8 @@ async function runSnapshotJob() {
 
     let doneCount = 0;
     const processApiItems = async (apiItems) => {
-      for (let i = 0; i < apiItems.length; i += 8) {
-        const batch = apiItems.slice(i, i + 8);
+      for (let i = 0; i < apiItems.length; i += 4) {
+        const batch = apiItems.slice(i, i + 4);
         await Promise.all(batch.map(async (item) => {
           const assetId = normalizeNumber(item.assetId);
           if (assetId <= 0 || !item.rap) return;
@@ -1162,7 +1159,7 @@ async function runSnapshotJob() {
             console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
           }
         }));
-        await sleep(200);
+        await sleep(2000);
       }
     };
 
@@ -1195,10 +1192,50 @@ async function runSnapshotJob() {
     await processApiItems(itemsWithColl);
     processNoApiItems(itemsWithoutColl);
 
+    let fallbackFound = 0;
+    const uncheckedNoColl = itemsWithoutColl.filter((item) => !fallbackCheckedAssets.has(item.assetId));
+    if (uncheckedNoColl.length > 0) {
+      const batchSize = Math.min(uncheckedNoColl.length, 120);
+      console.log(`Fallback: checking ${batchSize} new items without collectibleItemId via economy API...`);
+      for (let i = 0; i < batchSize; i += 4) {
+        await Promise.all(uncheckedNoColl.slice(i, i + 4).map(async (item) => {
+          const assetId = normalizeNumber(item.assetId);
+          fallbackCheckedAssets.add(assetId);
+          if (assetId <= 0 || !item.rap) return;
+          let economy = {};
+          try {
+            economy = await fetchEconomyDetails(assetId);
+          } catch { return; }
+          const collId = economy.CollectibleItemId || "";
+          if (!collId) return;
+          let volumeMetrics = {};
+          let totalSales = null;
+          try {
+            const resale = await fetchCollectibleResaleData(collId);
+            if (resale?.volumeDataPoints) volumeMetrics = computeVolumeMetrics(resale.volumeDataPoints);
+            totalSales = Number(resale.sales) || null;
+          } catch { /* ignore */ }
+          const existing = newRows.find((r) => r.asset_id === assetId);
+          if (existing) {
+            existing.collectible_item_id = collId;
+            if (volumeMetrics.volume_24h != null) existing.volume_24h = volumeMetrics.volume_24h;
+            if (volumeMetrics.volume_7d != null) existing.volume_7d = volumeMetrics.volume_7d;
+            if (volumeMetrics.volume_30d != null) existing.volume_30d = volumeMetrics.volume_30d;
+            if (volumeMetrics.volume_1y != null) existing.volume_1y = volumeMetrics.volume_1y;
+            if (totalSales != null) existing.sales_all_time = totalSales;
+          }
+          fallbackFound += 1;
+        }));
+        await sleep(3000);
+      }
+    }
+    if (fallbackFound > 0) console.log(`Fallback: found ${fallbackFound} items with collectibleItemId via economy API.`);
+
     const withCollectible = newRows.filter((r) => r.collectible_item_id).length;
     const withVolume = newRows.filter((r) => r.volume_24h != null).length;
     const totalSales = newRows.reduce((s, r) => s + (r.volume_24h || 0), 0);
-    console.log(`Snapshot: ${newRows.length} items, ${withCollectible} with collectibleItemId, ${withVolume} with volume data, ${totalSales} total 24h sales.`);
+    const uncheckedRemaining = itemsWithoutColl.filter((item) => !fallbackCheckedAssets.has(item.assetId)).length;
+    console.log(`Snapshot: ${newRows.length} items, ${withCollectible} with collectibleItemId, ${withVolume} with volume data, ${totalSales} total 24h sales, ${uncheckedRemaining} unchecked without collId.`);
 
     let savedOld = 0, savedNew = 0;
     try {
@@ -2054,7 +2091,7 @@ async function fetchFastRobloxIndexPage({
         _volatility: item.rap && item.value ? Math.abs(item.rap - item.value) / Math.max(item.rap, item.value) * 100 : 0,
       }))
       .sort((a, b) => b._volatility - a._volatility)
-      .slice(0, 400);
+      .slice(0, 2000);
     activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
     activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
