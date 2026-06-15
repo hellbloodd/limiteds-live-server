@@ -731,51 +731,61 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
           volume_1y: row.volume_1y,
         });
       }
-    } catch { /* ignore - will fall back to live fetch */ }
+    } catch { /* ignore */ }
   }
 
   const volumeKey = days <= 1 ? "volume_24h" : days <= 7 ? "volume_7d" : days <= 30 ? "volume_30d" : "volume_1y";
 
-  const catalogDetailsById = await fetchCatalogDetailsBatch(candidates.map((item) => item.assetId));
+  const hasAnyVolume = [...volumeByAssetId.values()].some((v) => v[volumeKey] != null);
+  let catalogDetailsById = new Map();
 
-  const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
+  if (hasAnyVolume) {
+    candidates = candidates.filter((item) => {
+      const cached = volumeByAssetId.get(Number(item.assetId));
+      return cached && cached[volumeKey] != null;
+    });
+  } else {
+    try { catalogDetailsById = await fetchCatalogDetailsBatch(candidates.map((item) => item.assetId)); } catch { /* ignore */ }
+  }
+
+  const enriched = await mapWithConcurrency(candidates, hasAnyVolume ? 20 : 6, async (item) => {
     const assetId = Number(item.assetId);
     let salesCount = null;
-    let collectibleItemId = item.collectibleItemId;
-
-    const catalogDetails = catalogDetailsById.get(assetId);
-    if (!collectibleItemId) collectibleItemId = catalogDetails?.collectibleItemId || "";
+    let count = 0;
 
     const cached = volumeByAssetId.get(assetId);
     if (cached && cached[volumeKey] != null) {
       salesCount = cached[volumeKey];
-    }
-
-    if (salesCount === null && collectibleItemId) {
-      const resale = await fetchCollectibleResaleData(collectibleItemId);
-      if (resale?.volumeDataPoints) {
-        const metrics = computeVolumeMetrics(resale.volumeDataPoints);
-        salesCount = metrics[volumeKey] ?? null;
+      count = firstPositiveNumber(salesCount, 0);
+    } else if (!hasAnyVolume) {
+      const catalogDetails = catalogDetailsById.get(assetId);
+      const collectibleItemId = catalogDetails?.collectibleItemId || "";
+      if (collectibleItemId) {
+        const resale = await fetchCollectibleResaleData(collectibleItemId);
+        if (resale?.volumeDataPoints) {
+          const metrics = computeVolumeMetrics(resale.volumeDataPoints);
+          salesCount = metrics[volumeKey] ?? null;
+        }
+        await sleep(60);
       }
-      await sleep(60);
+      count = firstPositiveNumber(salesCount, 0);
     }
 
     const rap = firstPositiveNumber(item.rap);
     const rawLowestPrice = firstPositiveNumber(
-      catalogDetails?.lowestResalePrice,
-      catalogDetails?.lowestPrice,
+      catalogDetailsById.get(assetId)?.lowestResalePrice,
+      catalogDetailsById.get(assetId)?.lowestPrice,
       item.lowestPrice
     );
     const availableCopies = firstNonNegativeNumber(
-      catalogDetails?.unitsAvailableForConsumption,
+      catalogDetailsById.get(assetId)?.unitsAvailableForConsumption,
       item.availableCopies
     );
     const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
-    const count = firstPositiveNumber(salesCount, 0);
 
     return {
       ...item, rap, lowestPrice, availableCopies,
-      collectibleItemId: collectibleItemId || item.collectibleItemId || "",
+      collectibleItemId: catalogDetailsById.get(assetId)?.collectibleItemId || item.collectibleItemId || "",
       activityCount: null,
       activityScore: null,
       averageActivePrice: null,
@@ -1121,65 +1131,70 @@ async function runSnapshotJob() {
     const oldRows = [];
     const newRows = [];
 
-    await mapWithConcurrency(pricedItems, 8, async (item) => {
-      const assetId = normalizeNumber(item.assetId);
-      if (assetId <= 0 || !item.rap) return;
+    const pricedCount = pricedItems.length;
+    let doneCount = 0;
+    for (let i = 0; i < pricedItems.length; i += 2) {
+      const batch = pricedItems.slice(i, i + 2);
+      await Promise.all(batch.map(async (item) => {
+        const assetId = normalizeNumber(item.assetId);
+        if (assetId <= 0 || !item.rap) return;
 
-      let collectibleItemId = item.collectibleItemId || "";
-      let resaleData = null;
-      let volumeMetrics = {};
-      let totalSales = null;
+        let collectibleItemId = item.collectibleItemId || "";
+        let volumeMetrics = {};
+        let totalSales = null;
 
-      if (!collectibleItemId) {
-        try {
-          const details = await fetchEconomyDetails(assetId);
-          collectibleItemId = details?.CollectibleItemId || "";
-        } catch { /* ignore */ }
-      }
+        if (!collectibleItemId) {
+          try {
+            const details = await fetchEconomyDetails(assetId);
+            collectibleItemId = details?.CollectibleItemId || "";
+          } catch { /* ignore */ }
+        }
 
-      if (collectibleItemId) {
-        try {
-          resaleData = await fetchCollectibleResaleData(collectibleItemId);
-          if (resaleData?.volumeDataPoints) {
-            volumeMetrics = computeVolumeMetrics(resaleData.volumeDataPoints);
-          }
-          totalSales = Number(resaleData.sales) || null;
-        } catch { /* ignore */ }
-      }
+        if (collectibleItemId) {
+          try {
+            const resale = await fetchCollectibleResaleData(collectibleItemId);
+            if (resale?.volumeDataPoints) {
+              volumeMetrics = computeVolumeMetrics(resale.volumeDataPoints);
+            }
+            totalSales = Number(resale.sales) || null;
+          } catch { /* ignore */ }
+        }
 
-      const rap = Math.round(item.rap);
-      const value = Number(item.value) > 0 ? Math.round(item.value) : null;
-      const lowestPrice = item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null;
-      const availableCopies = item.availableCopies;
-      const totalCopies = item.totalCopies;
+        const rap = Math.round(item.rap);
+        const value = Number(item.value) > 0 ? Math.round(item.value) : null;
+        const lowestPrice = item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null;
+        const availableCopies = item.availableCopies;
+        const totalCopies = item.totalCopies;
 
-      oldRows.push({
-        asset_id: assetId,
-        name: item.name,
-        rap,
-        lowest_price: lowestPrice,
-        saved_at: savedAt,
-      });
+        oldRows.push({
+          asset_id: assetId, name: item.name, rap,
+          lowest_price: lowestPrice, saved_at: savedAt,
+        });
 
-      newRows.push({
-        asset_id: assetId,
-        collectible_item_id: collectibleItemId || null,
-        name: item.name,
-        rap,
-        value,
-        lowest_price: lowestPrice,
-        available_copies: Number(availableCopies) > 0 ? Number(availableCopies) : null,
-        total_copies: Number(totalCopies) > 0 ? Number(totalCopies) : null,
-        volume_24h: volumeMetrics.volume_24h ?? null,
-        volume_7d: volumeMetrics.volume_7d ?? null,
-        volume_30d: volumeMetrics.volume_30d ?? null,
-        volume_1y: volumeMetrics.volume_1y ?? null,
-        sales_all_time: totalSales,
-        saved_at: savedAt,
-      });
+        newRows.push({
+          asset_id: assetId, collectible_item_id: collectibleItemId || null, name: item.name,
+          rap, value, lowest_price: lowestPrice,
+          available_copies: Number(availableCopies) > 0 ? Number(availableCopies) : null,
+          total_copies: Number(totalCopies) > 0 ? Number(totalCopies) : null,
+          volume_24h: volumeMetrics.volume_24h ?? null,
+          volume_7d: volumeMetrics.volume_7d ?? null,
+          volume_30d: volumeMetrics.volume_30d ?? null,
+          volume_1y: volumeMetrics.volume_1y ?? null,
+          sales_all_time: totalSales, saved_at: savedAt,
+        });
 
-      await sleep(120);
-    });
+        doneCount += 1;
+        if (doneCount % 100 === 0) {
+          console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
+        }
+      }));
+      await sleep(1500);
+    }
+
+    const withCollectible = newRows.filter((r) => r.collectible_item_id).length;
+    const withVolume = newRows.filter((r) => r.volume_24h != null).length;
+    const totalSales = newRows.reduce((s, r) => s + (r.volume_24h || 0), 0);
+    console.log(`Snapshot: ${newRows.length} items, ${withCollectible} with collectibleItemId, ${withVolume} with volume data, ${totalSales} total 24h sales.`);
 
     let savedOld = 0, savedNew = 0;
     try {
@@ -2454,7 +2469,13 @@ createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`Limiteds Live server ${SERVER_VERSION} running on http://localhost:${PORT}`);
   getRobloxMarketIndex()
-    .then((items) => { console.log(`Roblox market index warmed with ${items.length} priced limiteds.`); })
+    .then((items) => {
+      console.log(`Roblox market index warmed with ${items.length} priced limiteds.`);
+      runSnapshotJob().catch((error) => {
+        console.warn(`Startup snapshot failed: ${error.message}`);
+        if (error.stack) console.warn(error.stack);
+      });
+    })
     .catch((error) => { console.warn(`Roblox market index warmup failed: ${error.message}`); });
   warmupResaleCache();
 });
