@@ -45,6 +45,7 @@ let firstSnapshotDone = false;
 let snapshotRunning = false;
 let memorySnapshots = [];
 let fallbackCheckedAssets = new Set();
+let rolimonsSalesCheckedAssets = new Set();
 
 function makePageCacheKey({
   marketType,
@@ -1111,8 +1112,8 @@ async function runSnapshotJob() {
 
     let doneCount = 0;
     const processApiItems = async (apiItems) => {
-      for (let i = 0; i < apiItems.length; i += 4) {
-        const batch = apiItems.slice(i, i + 4);
+      for (let i = 0; i < apiItems.length; i += 2) {
+        const batch = apiItems.slice(i, i + 2);
         await Promise.all(batch.map(async (item) => {
           const assetId = normalizeNumber(item.assetId);
           if (assetId <= 0 || !item.rap) return;
@@ -1231,6 +1232,26 @@ async function runSnapshotJob() {
     }
     if (fallbackFound > 0) console.log(`Fallback: found ${fallbackFound} items with collectibleItemId via economy API.`);
 
+    const uncheckedSales = newRows.filter((r) => r.volume_24h == null && r.asset_id > 0 && !rolimonsSalesCheckedAssets.has(r.asset_id));
+    if (uncheckedSales.length > 0) {
+      const salesBatchSize = Math.min(uncheckedSales.length, 60);
+      console.log(`Rolimon's sales fallback: checking ${salesBatchSize} items without volume data...`);
+      for (let i = 0; i < salesBatchSize; i += 2) {
+        await Promise.all(uncheckedSales.slice(i, i + 2).map(async (row) => {
+          const assetId = normalizeNumber(row.asset_id);
+          rolimonsSalesCheckedAssets.add(assetId);
+          const sales = await fetchRolimonsItemSales(assetId);
+          if (sales.volume_24h != null) {
+            row.volume_24h = sales.volume_24h;
+            if (sales.volume_7d != null) row.volume_7d = sales.volume_7d;
+            if (sales.volume_30d != null) row.volume_30d = sales.volume_30d;
+            if (sales.sales_all_time != null) row.sales_all_time = sales.sales_all_time;
+          }
+        }));
+        await sleep(2000);
+      }
+    }
+
     const withCollectible = newRows.filter((r) => r.collectible_item_id).length;
     const withVolume = newRows.filter((r) => r.volume_24h != null).length;
     const totalSales = newRows.reduce((s, r) => s + (r.volume_24h || 0), 0);
@@ -1324,6 +1345,35 @@ async function fetchRolimonsItems() {
 
   rolimonsCache = { fetchedAt: Date.now(), items };
   return items;
+}
+
+async function fetchRolimonsItemSales(assetId) {
+  try {
+    const url = `https://www.rolimons.com/itemsales/${assetId}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    let response;
+    try {
+      response = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "LimitedsLiveMarketViewer/1.0" },
+      });
+    } finally { clearTimeout(timeout); }
+    if (!response.ok) return {};
+    const html = await response.text();
+    const tagged = html.replace(/>/g, ' ').replace(/</g, ' ').replace(/\s+/g, ' ');
+    const dayMatch = tagged.match(/Past Day Sales\s*([\d,]+)/);
+    const weekMatch = tagged.match(/Past Week Sales\s*([\d,]+)/);
+    const monthMatch = tagged.match(/Past Month Sales\s*([\d,]+)/);
+    const allMatch = tagged.match(/All Tracked Sales\s*([\d,]+)/);
+    const parseNum = (s) => s ? Number(s.replace(/,/g, '')) : null;
+    return {
+      volume_24h: parseNum(dayMatch?.[1]),
+      volume_7d: parseNum(weekMatch?.[1]),
+      volume_30d: parseNum(monthMatch?.[1]),
+      sales_all_time: parseNum(allMatch?.[1]),
+    };
+  } catch { return {}; }
 }
 
 async function enrichRolimonsItem(item, includeResale = false, includeDetails = true) {
