@@ -690,7 +690,7 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 2000) {
+async function addResaleActivityMetrics(items, days, maxItems = 9999) {
   let candidates = items.filter((item) => Number(item.assetId) > 0).slice(0, maxItems);
 
   if (candidates.length < maxItems) {
@@ -772,7 +772,7 @@ async function addResaleActivityMetrics(items, days, maxItems = 2000) {
       const count = Number(item.salesCount ?? item.activityCount ?? 0);
       const price = Number(item.lowestPrice ?? 0);
       const rap = Number(item.rap ?? 0);
-      return count > 0 || price > 0 || rap > 0;
+      return count >= 0 || price > 0 || rap > 0;
     })
     .sort(compareBoughtItems);
 }
@@ -1571,7 +1571,7 @@ async function fetchRolimonsCatalogPage({
       enriched = enriched.filter((item) => hasMinimumOverpriced(item));
       enriched.sort(compareOverpricedItems);
     } else if (boughtRangeDays) {
-      enriched = interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 360));
+      enriched = interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 9999));
       enriched = await addResaleActivityMetrics(enriched, boughtRangeDays);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
@@ -2090,8 +2090,7 @@ async function fetchFastRobloxIndexPage({
         ...item,
         _volatility: item.rap && item.value ? Math.abs(item.rap - item.value) / Math.max(item.rap, item.value) * 100 : 0,
       }))
-      .sort((a, b) => b._volatility - a._volatility)
-      .slice(0, 2000);
+      .sort((a, b) => b._volatility - a._volatility);
     activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
     activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
