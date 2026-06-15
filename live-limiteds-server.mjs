@@ -736,22 +736,19 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
   const volumeKey = days <= 1 ? "volume_24h" : days <= 7 ? "volume_7d" : days <= 30 ? "volume_30d" : "volume_1y";
 
+  const catalogDetailsById = await fetchCatalogDetailsBatch(candidates.map((item) => item.assetId));
+
   const enriched = await mapWithConcurrency(candidates, 6, async (item) => {
     const assetId = Number(item.assetId);
     let salesCount = null;
     let collectibleItemId = item.collectibleItemId;
-    let details = null;
+
+    const catalogDetails = catalogDetailsById.get(assetId);
+    if (!collectibleItemId) collectibleItemId = catalogDetails?.collectibleItemId || "";
 
     const cached = volumeByAssetId.get(assetId);
     if (cached && cached[volumeKey] != null) {
       salesCount = cached[volumeKey];
-    }
-
-    if (salesCount === null || !firstPositiveNumber(item.lowestPrice)) {
-      try {
-        details = await fetchEconomyDetails(assetId);
-        if (!collectibleItemId) collectibleItemId = details?.CollectibleItemId || "";
-      } catch { /* ignore */ }
     }
 
     if (salesCount === null && collectibleItemId) {
@@ -765,11 +762,14 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
 
     const rap = firstPositiveNumber(item.rap);
     const rawLowestPrice = firstPositiveNumber(
-      details?.CollectiblesItemDetails?.CollectibleLowestResalePrice,
-      details?.PriceInRobux,
+      catalogDetails?.lowestResalePrice,
+      catalogDetails?.lowestPrice,
       item.lowestPrice
     );
-    const availableCopies = firstNonNegativeNumber(item.availableCopies);
+    const availableCopies = firstNonNegativeNumber(
+      catalogDetails?.unitsAvailableForConsumption,
+      item.availableCopies
+    );
     const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
     const count = firstPositiveNumber(salesCount, 0);
 
@@ -1392,39 +1392,37 @@ async function addHistoryMetricsBatch(items) {
     return (!existing || existing.length < 1) && firstPositiveNumber(item.rap) > 0;
   });
 
+  const catalogDetailsById = needsLive.length > 0 ? await fetchCatalogDetailsBatch(needsLive.map((item) => item.assetId)) : new Map();
+
   const liveEnrichmentByAssetId = new Map();
   if (needsLive.length > 0) {
     await mapWithConcurrency(needsLive, 8, async (item) => {
       const assetId = Number(item.assetId);
       let ownHistory = [];
-      let details = null;
+      let collectibleItemId = item.collectibleItemId || "";
+
+      const catalogDetails = catalogDetailsById.get(assetId);
+      if (!collectibleItemId) collectibleItemId = catalogDetails?.collectibleItemId || "";
 
       if (snapshotStorageEnabled()) {
         try { ownHistory = await fetchItemSnapshotHistory(assetId); } catch { /* ignore */ }
       }
 
-      if (ownHistory.length < 1) {
-        let collectibleItemId = item.collectibleItemId || "";
+      if (ownHistory.length < 1 && collectibleItemId) {
         try {
-          details = await fetchEconomyDetails(assetId);
-          if (!collectibleItemId) collectibleItemId = details?.CollectibleItemId || "";
+          const resale = await fetchCollectibleResaleData(collectibleItemId);
+          if (resale?.priceDataPoints?.length > 0) {
+            ownHistory = normalizeHistoryPoints(resale.priceDataPoints);
+          }
         } catch { /* ignore */ }
-        if (collectibleItemId) {
-          try {
-            const resale = await fetchCollectibleResaleData(collectibleItemId);
-            if (resale?.priceDataPoints?.length > 0) {
-              ownHistory = normalizeHistoryPoints(resale.priceDataPoints);
-            }
-          } catch { /* ignore */ }
-        }
         await sleep(60);
       }
 
       const rawLowestPrice = firstPositiveNumber(
-        details?.CollectiblesItemDetails?.CollectibleLowestResalePrice,
-        details?.PriceInRobux
+        catalogDetails?.lowestResalePrice,
+        catalogDetails?.lowestPrice
       );
-      liveEnrichmentByAssetId.set(assetId, { history: ownHistory, details, rawLowestPrice });
+      liveEnrichmentByAssetId.set(assetId, { history: ownHistory, rawLowestPrice });
     });
   }
 
