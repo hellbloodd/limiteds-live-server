@@ -690,10 +690,10 @@ function compareBoughtItems(a, b) {
   return (Number(b?.averageActivePrice ?? b?.averageSalePrice) || 0) - (Number(a?.averageActivePrice ?? a?.averageSalePrice) || 0);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = 9999) {
+async function addResaleActivityMetrics(items, days, maxItems = 9999, keywordTokens = []) {
   let candidates = items.filter((item) => Number(item.assetId) > 0).slice(0, maxItems);
 
-  if (candidates.length < maxItems) {
+  if (candidates.length < maxItems && keywordTokens.length === 0) {
     try {
       const rolimonsItems = await fetchRolimonsItems();
       const seen = new Set(candidates.map((item) => Number(item.assetId)));
@@ -1572,7 +1572,7 @@ async function fetchRolimonsCatalogPage({
       enriched.sort(compareOverpricedItems);
     } else if (boughtRangeDays) {
       enriched = interleaveForCoverage(enriched).slice(0, Math.max(limit * 12, 9999));
-      enriched = await addResaleActivityMetrics(enriched, boughtRangeDays);
+      enriched = await addResaleActivityMetrics(enriched, boughtRangeDays, 9999, keywordTokens);
     } else if (sort === "price_asc") {
       enriched = enriched.filter((item) => item.lowestPrice && item.lowestPrice > 0);
       enriched.sort((a, b) => a.lowestPrice - b.lowestPrice);
@@ -2091,7 +2091,7 @@ async function fetchFastRobloxIndexPage({
         _volatility: item.rap && item.value ? Math.abs(item.rap - item.value) / Math.max(item.rap, item.value) * 100 : 0,
       }))
       .sort((a, b) => b._volatility - a._volatility);
-    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
+    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays, 9999, keywordTokens);
     activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
       if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
@@ -2293,7 +2293,7 @@ async function fetchCatalogPage({
   if (isBoughtSort) {
     const boughtRangeDays = getBoughtRangeDays(safeSort);
     collectedItems = collectedItems.filter((item) => Number(item.assetId) > 0).slice(0, 800);
-    collectedItems = await addResaleActivityMetrics(collectedItems, boughtRangeDays);
+    collectedItems = await addResaleActivityMetrics(collectedItems, boughtRangeDays, 9999, keywordTokens);
   }
 
   collectedItems = collectedItems.filter((item) => {
