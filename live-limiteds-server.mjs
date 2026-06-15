@@ -1133,8 +1133,8 @@ async function runSnapshotJob() {
 
     const pricedCount = pricedItems.length;
     let doneCount = 0;
-    for (let i = 0; i < pricedItems.length; i += 2) {
-      const batch = pricedItems.slice(i, i + 2);
+    for (let i = 0; i < pricedItems.length; i += 4) {
+      const batch = pricedItems.slice(i, i + 4);
       await Promise.all(batch.map(async (item) => {
         const assetId = normalizeNumber(item.assetId);
         if (assetId <= 0 || !item.rap) return;
@@ -1188,7 +1188,7 @@ async function runSnapshotJob() {
           console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
         }
       }));
-      await sleep(1500);
+      await sleep(500);
     }
 
     const withCollectible = newRows.filter((r) => r.collectible_item_id).length;
