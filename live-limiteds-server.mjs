@@ -737,62 +737,38 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
   const volumeKey = days <= 1 ? "volume_24h" : days <= 7 ? "volume_7d" : days <= 30 ? "volume_30d" : "volume_1y";
 
   const hasAnyVolume = [...volumeByAssetId.values()].some((v) => v[volumeKey] != null);
-  let catalogDetailsById = new Map();
 
+  let enriched;
   if (hasAnyVolume) {
-    candidates = candidates.filter((item) => {
+    const withData = candidates.filter((item) => {
       const cached = volumeByAssetId.get(Number(item.assetId));
       return cached && cached[volumeKey] != null;
     });
+    enriched = withData.map((item) => {
+      const cached = volumeByAssetId.get(Number(item.assetId));
+      return {
+        ...item,
+        rap: firstPositiveNumber(item.rap),
+        lowestPrice: firstPositiveNumber(item.lowestPrice),
+        availableCopies: firstNonNegativeNumber(item.availableCopies),
+        collectibleItemId: item.collectibleItemId || "",
+        activityCount: null, activityScore: null, averageActivePrice: null,
+        salesCount: firstPositiveNumber(cached[volumeKey], 0),
+        averageSalePrice: null,
+      };
+    });
   } else {
-    try { catalogDetailsById = await fetchCatalogDetailsBatch(candidates.map((item) => item.assetId)); } catch { /* ignore */ }
-  }
-
-  const enriched = await mapWithConcurrency(candidates, hasAnyVolume ? 20 : 6, async (item) => {
-    const assetId = Number(item.assetId);
-    let salesCount = null;
-    let count = 0;
-
-    const cached = volumeByAssetId.get(assetId);
-    if (cached && cached[volumeKey] != null) {
-      salesCount = cached[volumeKey];
-      count = firstPositiveNumber(salesCount, 0);
-    } else if (!hasAnyVolume) {
-      const catalogDetails = catalogDetailsById.get(assetId);
-      const collectibleItemId = catalogDetails?.collectibleItemId || "";
-      if (collectibleItemId) {
-        const resale = await fetchCollectibleResaleData(collectibleItemId);
-        if (resale?.volumeDataPoints) {
-          const metrics = computeVolumeMetrics(resale.volumeDataPoints);
-          salesCount = metrics[volumeKey] ?? null;
-        }
-        await sleep(60);
-      }
-      count = firstPositiveNumber(salesCount, 0);
-    }
-
-    const rap = firstPositiveNumber(item.rap);
-    const rawLowestPrice = firstPositiveNumber(
-      catalogDetailsById.get(assetId)?.lowestResalePrice,
-      catalogDetailsById.get(assetId)?.lowestPrice,
-      item.lowestPrice
-    );
-    const availableCopies = firstNonNegativeNumber(
-      catalogDetailsById.get(assetId)?.unitsAvailableForConsumption,
-      item.availableCopies
-    );
-    const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, availableCopies);
-
-    return {
-      ...item, rap, lowestPrice, availableCopies,
-      collectibleItemId: catalogDetailsById.get(assetId)?.collectibleItemId || item.collectibleItemId || "",
-      activityCount: null,
-      activityScore: null,
-      averageActivePrice: null,
-      salesCount: count,
+    enriched = candidates.map((item) => ({
+      ...item,
+      rap: firstPositiveNumber(item.rap),
+      lowestPrice: firstPositiveNumber(item.lowestPrice),
+      availableCopies: firstNonNegativeNumber(item.availableCopies),
+      collectibleItemId: item.collectibleItemId || "",
+      activityCount: null, activityScore: null, averageActivePrice: null,
+      salesCount: 0,
       averageSalePrice: null,
-    };
-  });
+    }));
+  }
 
   return enriched
     .filter((item) => {
@@ -1138,8 +1114,8 @@ async function runSnapshotJob() {
 
     let doneCount = 0;
     const processApiItems = async (apiItems) => {
-      for (let i = 0; i < apiItems.length; i += 2) {
-        const batch = apiItems.slice(i, i + 2);
+      for (let i = 0; i < apiItems.length; i += 4) {
+        const batch = apiItems.slice(i, i + 4);
         await Promise.all(batch.map(async (item) => {
           const assetId = normalizeNumber(item.assetId);
           if (assetId <= 0 || !item.rap) return;
@@ -1186,7 +1162,7 @@ async function runSnapshotJob() {
             console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
           }
         }));
-        await sleep(1500);
+        await sleep(800);
       }
     };
 
