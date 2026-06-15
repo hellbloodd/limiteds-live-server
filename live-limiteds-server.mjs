@@ -1132,39 +1132,72 @@ async function runSnapshotJob() {
     const newRows = [];
 
     const pricedCount = pricedItems.length;
+    const itemsWithColl = pricedItems.filter((item) => item.collectibleItemId);
+    const itemsWithoutColl = pricedItems.filter((item) => !item.collectibleItemId);
+    console.log(`Snapshot: ${pricedCount} items, ${itemsWithColl.length} with collectibleItemId, ${itemsWithoutColl.length} without.`);
+
     let doneCount = 0;
-    for (let i = 0; i < pricedItems.length; i += 4) {
-      const batch = pricedItems.slice(i, i + 4);
-      await Promise.all(batch.map(async (item) => {
+    const processApiItems = async (apiItems) => {
+      for (let i = 0; i < apiItems.length; i += 2) {
+        const batch = apiItems.slice(i, i + 2);
+        await Promise.all(batch.map(async (item) => {
+          const assetId = normalizeNumber(item.assetId);
+          if (assetId <= 0 || !item.rap) return;
+
+          const collectibleItemId = item.collectibleItemId;
+          let volumeMetrics = {};
+          let totalSales = null;
+
+          if (collectibleItemId) {
+            try {
+              const resale = await fetchCollectibleResaleData(collectibleItemId);
+              if (resale?.volumeDataPoints) {
+                volumeMetrics = computeVolumeMetrics(resale.volumeDataPoints);
+              }
+              totalSales = Number(resale.sales) || null;
+            } catch { /* ignore */ }
+          }
+
+          const rap = Math.round(item.rap);
+          const value = Number(item.value) > 0 ? Math.round(item.value) : null;
+          const lowestPrice = item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null;
+          const availableCopies = item.availableCopies;
+          const totalCopies = item.totalCopies;
+
+          oldRows.push({
+            asset_id: assetId, name: item.name, rap,
+            lowest_price: lowestPrice, saved_at: savedAt,
+          });
+
+          newRows.push({
+            asset_id: assetId, collectible_item_id: collectibleItemId || null, name: item.name,
+            rap, value, lowest_price: lowestPrice,
+            available_copies: Number(availableCopies) > 0 ? Number(availableCopies) : null,
+            total_copies: Number(totalCopies) > 0 ? Number(totalCopies) : null,
+            volume_24h: volumeMetrics.volume_24h ?? null,
+            volume_7d: volumeMetrics.volume_7d ?? null,
+            volume_30d: volumeMetrics.volume_30d ?? null,
+            volume_1y: volumeMetrics.volume_1y ?? null,
+            sales_all_time: totalSales, saved_at: savedAt,
+          });
+
+          doneCount += 1;
+          if (doneCount % 100 === 0) {
+            console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
+          }
+        }));
+        await sleep(1500);
+      }
+    };
+
+    const processNoApiItems = (noApiItems) => {
+      for (const item of noApiItems) {
         const assetId = normalizeNumber(item.assetId);
-        if (assetId <= 0 || !item.rap) return;
-
-        let collectibleItemId = item.collectibleItemId || "";
-        let volumeMetrics = {};
-        let totalSales = null;
-
-        if (!collectibleItemId) {
-          try {
-            const details = await fetchEconomyDetails(assetId);
-            collectibleItemId = details?.CollectibleItemId || "";
-          } catch { /* ignore */ }
-        }
-
-        if (collectibleItemId) {
-          try {
-            const resale = await fetchCollectibleResaleData(collectibleItemId);
-            if (resale?.volumeDataPoints) {
-              volumeMetrics = computeVolumeMetrics(resale.volumeDataPoints);
-            }
-            totalSales = Number(resale.sales) || null;
-          } catch { /* ignore */ }
-        }
+        if (assetId <= 0 || !item.rap) continue;
 
         const rap = Math.round(item.rap);
         const value = Number(item.value) > 0 ? Math.round(item.value) : null;
         const lowestPrice = item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null;
-        const availableCopies = item.availableCopies;
-        const totalCopies = item.totalCopies;
 
         oldRows.push({
           asset_id: assetId, name: item.name, rap,
@@ -1172,24 +1205,19 @@ async function runSnapshotJob() {
         });
 
         newRows.push({
-          asset_id: assetId, collectible_item_id: collectibleItemId || null, name: item.name,
+          asset_id: assetId, collectible_item_id: null, name: item.name,
           rap, value, lowest_price: lowestPrice,
-          available_copies: Number(availableCopies) > 0 ? Number(availableCopies) : null,
-          total_copies: Number(totalCopies) > 0 ? Number(totalCopies) : null,
-          volume_24h: volumeMetrics.volume_24h ?? null,
-          volume_7d: volumeMetrics.volume_7d ?? null,
-          volume_30d: volumeMetrics.volume_30d ?? null,
-          volume_1y: volumeMetrics.volume_1y ?? null,
-          sales_all_time: totalSales, saved_at: savedAt,
+          available_copies: null, total_copies: null,
+          volume_24h: null, volume_7d: null, volume_30d: null, volume_1y: null,
+          sales_all_time: null, saved_at: savedAt,
         });
 
         doneCount += 1;
-        if (doneCount % 100 === 0) {
-          console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
-        }
-      }));
-      await sleep(500);
-    }
+      }
+    };
+
+    await processApiItems(itemsWithColl);
+    processNoApiItems(itemsWithoutColl);
 
     const withCollectible = newRows.filter((r) => r.collectible_item_id).length;
     const withVolume = newRows.filter((r) => r.volume_24h != null).length;
