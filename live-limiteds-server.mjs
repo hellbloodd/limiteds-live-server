@@ -41,6 +41,7 @@ let rolimonsCache = null;
 let robloxCsrfToken = "";
 let lastSnapshotRunAt = 0;
 let lastSnapshotAttemptAt = 0;
+let firstSnapshotDone = false;
 let snapshotRunning = false;
 let memorySnapshots = [];
 
@@ -787,7 +788,8 @@ async function addResaleActivityMetrics(items, days, maxItems = 400) {
     .filter((item) => {
       const count = Number(item.salesCount ?? item.activityCount ?? 0);
       const price = Number(item.lowestPrice ?? 0);
-      return count > 0 || price > 0;
+      const rap = Number(item.rap ?? 0);
+      return count > 0 || price > 0 || rap > 0;
     })
     .sort(compareBoughtItems);
 }
@@ -1191,18 +1193,21 @@ async function runSnapshotJob() {
       console.warn(`Item snapshot save failed: ${error.message}`);
     }
     lastSnapshotRunAt = Date.now();
+    firstSnapshotDone = true;
     const storedLoc = snapshotStorageEnabled() ? "supabase" : "memory";
     console.log(`Snapshot saved ${savedOld} old rows, ${savedNew} new rows to ${storedLoc}.`);
     return { ok: true, saved: savedNew, storedIn: storedLoc, savedAt };
   } finally {
     snapshotRunning = false;
+    firstSnapshotDone = true;
   }
 }
 
 function maybeRunSnapshotInBackground() {
   if (SNAPSHOT_INTERVAL_MS <= 0 || snapshotRunning || marketIndexBuilds.size > 0) return;
   if (Date.now() - lastSnapshotRunAt < SNAPSHOT_INTERVAL_MS) return;
-  if (Date.now() - lastSnapshotAttemptAt < 5 * 60 * 1000) return;
+  if (!firstSnapshotDone && Date.now() - lastSnapshotAttemptAt < 10 * 1000) return;
+  if (firstSnapshotDone && Date.now() - lastSnapshotAttemptAt < 5 * 60 * 1000) return;
   runSnapshotJob().catch((error) => {
     console.warn(`Snapshot failed: ${error.message}`);
     if (error.stack) console.warn(error.stack);
