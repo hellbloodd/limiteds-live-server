@@ -1188,7 +1188,7 @@ async function runSnapshotJob() {
     try {
       savedNew = await saveItemSnapshotRows(newRows);
     } catch (error) {
-      throw new Error(`Item snapshot save failed: ${error.message}`);
+      console.warn(`Item snapshot save failed: ${error.message}`);
     }
     lastSnapshotRunAt = Date.now();
     const storedLoc = snapshotStorageEnabled() ? "supabase" : "memory";
