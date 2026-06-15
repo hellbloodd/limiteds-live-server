@@ -1112,8 +1112,8 @@ async function runSnapshotJob() {
 
     let doneCount = 0;
     const processApiItems = async (apiItems) => {
-      for (let i = 0; i < apiItems.length; i += 2) {
-        const batch = apiItems.slice(i, i + 2);
+      for (let i = 0; i < apiItems.length; i += 4) {
+        const batch = apiItems.slice(i, i + 4);
         await Promise.all(batch.map(async (item) => {
           const assetId = normalizeNumber(item.assetId);
           if (assetId <= 0 || !item.rap) return;
@@ -1160,7 +1160,7 @@ async function runSnapshotJob() {
             console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
           }
         }));
-        await sleep(2000);
+        await sleep(1000);
       }
     };
 
@@ -1227,17 +1227,17 @@ async function runSnapshotJob() {
           }
           fallbackFound += 1;
         }));
-        await sleep(3000);
+        await sleep(1500);
       }
     }
     if (fallbackFound > 0) console.log(`Fallback: found ${fallbackFound} items with collectibleItemId via economy API.`);
 
     const uncheckedSales = newRows.filter((r) => r.volume_24h == null && r.asset_id > 0 && !rolimonsSalesCheckedAssets.has(r.asset_id));
     if (uncheckedSales.length > 0) {
-      const salesBatchSize = Math.min(uncheckedSales.length, 60);
+      const salesBatchSize = Math.min(uncheckedSales.length, 100);
       console.log(`Rolimon's sales fallback: checking ${salesBatchSize} items without volume data...`);
-      for (let i = 0; i < salesBatchSize; i += 2) {
-        await Promise.all(uncheckedSales.slice(i, i + 2).map(async (row) => {
+      for (let i = 0; i < salesBatchSize; i += 4) {
+        await Promise.all(uncheckedSales.slice(i, i + 4).map(async (row) => {
           const assetId = normalizeNumber(row.asset_id);
           rolimonsSalesCheckedAssets.add(assetId);
           const sales = await fetchRolimonsItemSales(assetId);
@@ -1248,7 +1248,7 @@ async function runSnapshotJob() {
             if (sales.sales_all_time != null) row.sales_all_time = sales.sales_all_time;
           }
         }));
-        await sleep(2000);
+        await sleep(1500);
       }
     }
 
