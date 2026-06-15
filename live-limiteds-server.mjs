@@ -1114,8 +1114,8 @@ async function runSnapshotJob() {
 
     let doneCount = 0;
     const processApiItems = async (apiItems) => {
-      for (let i = 0; i < apiItems.length; i += 4) {
-        const batch = apiItems.slice(i, i + 4);
+      for (let i = 0; i < apiItems.length; i += 8) {
+        const batch = apiItems.slice(i, i + 8);
         await Promise.all(batch.map(async (item) => {
           const assetId = normalizeNumber(item.assetId);
           if (assetId <= 0 || !item.rap) return;
@@ -1162,7 +1162,7 @@ async function runSnapshotJob() {
             console.log(`Snapshot progress: ${doneCount}/${pricedCount}`);
           }
         }));
-        await sleep(800);
+        await sleep(200);
       }
     };
 
