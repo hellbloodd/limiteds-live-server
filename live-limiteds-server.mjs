@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "item-snapshots-debug-counts-2026-06-16-2";
+const SERVER_VERSION = "debug-route-aliases-2026-06-16-3";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -3370,8 +3370,10 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   maybeRunSnapshotInBackground();
 
-  if (url.pathname === "/health" || url.pathname === "/api/debug") {
-    const includeCounts = url.pathname === "/api/debug";
+  const debugPaths = new Set(["/api/debug", "/api/debug/", "/debug", "/debug/"]);
+
+  if (url.pathname === "/health" || url.pathname === "/health/" || debugPaths.has(url.pathname)) {
+    const includeCounts = debugPaths.has(url.pathname) || url.searchParams.get("debug") === "1";
     let counts = undefined;
 
     if (includeCounts) {
