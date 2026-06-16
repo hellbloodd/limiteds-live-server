@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "sales-counts-2026-06-16-1";
+const SERVER_VERSION = "item-snapshots-market-2026-06-16-1";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -41,6 +41,7 @@ const catalogDetailCache = new Map();
 const detailCache = new Map();
 const portfolioCache = new Map();
 const rolimonsSalesCache = new Map();
+const latestItemSnapshotCache = new Map();
 let rolimonsCache = null;
 let robloxCsrfToken = "";
 let lastSnapshotRunAt = 0;
@@ -945,18 +946,30 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
     .slice(0, maxItems);
 
   const enriched = await mapWithConcurrency(candidates, 24, async (item) => {
-    const resale = item.collectibleItemId && item.assetId > 10_000_000_000
-      ? await fetchCollectibleResaleData(item.collectibleItemId)
-      : await fetchResaleData(item.assetId);
-    const history = normalizeHistoryPoints(resale.priceDataPoints);
-    const latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
-    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
-    const lowestPrice = clearPriceWithoutSellers(
-      firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
-      firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
-    );
-    const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, lowestPrice);
-    let sales = calculateSalesMetrics(salesHistory, days);
+    let resale = {};
+    let latestHistoryPrice = null;
+    let sales = {
+      salesCount: itemSnapshotSalesForDays(item, days),
+      averageSalePrice: firstPositiveNumber(item.lowestPrice),
+    };
+
+    if (!sales.salesCount) {
+      resale = item.collectibleItemId && item.assetId > 10_000_000_000
+        ? await fetchCollectibleResaleData(item.collectibleItemId)
+        : await fetchResaleData(item.assetId);
+      const history = normalizeHistoryPoints(resale.priceDataPoints);
+      latestHistoryPrice = [...history].reverse().find((point) => Number(point.value) > 0)?.value;
+      const liveLowestPrice = clearPriceWithoutSellers(
+        firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
+        firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
+      );
+      const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, liveLowestPrice);
+      sales = calculateSalesMetrics(salesHistory, days);
+
+      if (sales.salesCount && !sales.averageSalePrice) {
+        sales.averageSalePrice = firstPositiveNumber(liveLowestPrice, latestHistoryPrice);
+      }
+    }
 
     if (!sales.salesCount) {
       const rolimonsSales = await fetchRolimonsItemSales(item.assetId);
@@ -965,11 +978,16 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
       if (rolimonsCount) {
         sales = {
           salesCount: rolimonsCount,
-          averageSalePrice: firstPositiveNumber(lowestPrice, latestHistoryPrice),
+          averageSalePrice: firstPositiveNumber(item.lowestPrice, latestHistoryPrice),
         };
       }
     }
 
+    const rap = firstPositiveNumber(item.rap, resale.recentAveragePrice);
+    const lowestPrice = clearPriceWithoutSellers(
+      firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
+      firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
+    );
     const activity = salesMetricToActivity(sales);
 
     return {
@@ -1047,6 +1065,131 @@ function normalizeSnapshotRows(rows) {
       source: "own",
     }))
     .filter((point) => point.value > 0 && Number.isFinite(Date.parse(point.date)));
+}
+
+function normalizeItemSnapshotRows(rows) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows
+    .map((row) => {
+      const assetId = normalizeNumber(Number(row.asset_id));
+      const rap = firstPositiveNumber(Number(row.rap));
+      const lowestPrice = firstPositiveNumber(Number(row.lowest_price));
+      const value = firstPositiveNumber(Number(row.value));
+      const totalCopies = firstPositiveNumber(Number(row.total_copies));
+      const availableCopies = firstNonNegativeNumber(Number(row.available_copies));
+
+      return {
+        assetId,
+        collectibleItemId: String(row.collectible_item_id || ""),
+        name: String(row.name || "Unknown Limited"),
+        rap,
+        value,
+        lowestPrice,
+        availableCopies,
+        totalCopies,
+        volume24h: firstPositiveNumber(Number(row.volume_24h)),
+        volume7d: firstPositiveNumber(Number(row.volume_7d)),
+        volume30d: firstPositiveNumber(Number(row.volume_30d)),
+        volume1y: firstPositiveNumber(Number(row.volume_1y)),
+        salesAllTime: firstPositiveNumber(Number(row.sales_all_time)),
+        savedAt: String(row.saved_at || ""),
+        thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+        creatorName: "Roblox",
+        itemType: "Asset",
+        marketType: "roblox",
+      };
+    })
+    .filter((item) => item.assetId > 0 && item.rap > 0);
+}
+
+async function fetchLatestItemSnapshotItems() {
+  const cacheKey = "latest";
+  const cached = latestItemSnapshotCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  if (!snapshotStorageEnabled()) {
+    return [];
+  }
+
+  try {
+    let rows;
+
+    try {
+      rows = await supabaseRequest(
+        "item_snapshots?select=asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,volume_24h,volume_7d,volume_30d,volume_1y,sales_all_time,saved_at&order=saved_at.desc&limit=10000",
+        { headers: { Prefer: "" } }
+      );
+    } catch {
+      rows = await supabaseRequest(
+        "item_snapshots?select=asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,saved_at&order=saved_at.desc&limit=10000",
+        { headers: { Prefer: "" } }
+      );
+    }
+
+    const latestByAssetId = new Map();
+
+    for (const item of normalizeItemSnapshotRows(rows)) {
+      const current = latestByAssetId.get(item.assetId);
+      const currentTime = current ? Date.parse(current.savedAt || "") : 0;
+      const itemTime = Date.parse(item.savedAt || "");
+
+      if (!current || itemTime >= currentTime) {
+        latestByAssetId.set(item.assetId, item);
+      }
+    }
+
+    const items = [...latestByAssetId.values()];
+    latestItemSnapshotCache.set(cacheKey, { fetchedAt: Date.now(), items });
+    return items;
+  } catch (error) {
+    console.warn(`item_snapshots read skipped: ${error.message}`);
+    latestItemSnapshotCache.set(cacheKey, { fetchedAt: Date.now(), items: [] });
+    return [];
+  }
+}
+
+function mergeMarketItems(primaryItems, secondaryItems) {
+  const byAssetId = new Map();
+
+  for (const item of [...secondaryItems, ...primaryItems]) {
+    const assetId = normalizeNumber(Number(item.assetId));
+
+    if (assetId <= 0) {
+      continue;
+    }
+
+    const existing = byAssetId.get(assetId) || {};
+    const rap = firstPositiveNumber(item.rap, existing.rap);
+    const lowestPrice = firstPositiveNumber(item.lowestPrice, existing.lowestPrice);
+
+    byAssetId.set(assetId, {
+      ...existing,
+      ...item,
+      assetId,
+      rap,
+      lowestPrice,
+      value: firstPositiveNumber(item.value, existing.value),
+      availableCopies: firstNonNegativeNumber(item.availableCopies, existing.availableCopies),
+      totalCopies: firstPositiveNumber(item.totalCopies, existing.totalCopies),
+      collectibleItemId: String(item.collectibleItemId || existing.collectibleItemId || ""),
+      name: String(item.name || existing.name || "Unknown Limited"),
+      thumbnail: item.thumbnail || existing.thumbnail || `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+      creatorName: String(item.creatorName || existing.creatorName || "Roblox"),
+      marketType: "roblox",
+      dealValue: calculateDealValue(rap, lowestPrice),
+      dealPercent: calculateDealPercent(rap, lowestPrice),
+      overpricedValue: calculateOverpricedValue(rap, lowestPrice),
+      overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
+    });
+  }
+
+  return [...byAssetId.values()].filter((item) => item.assetId > 0 && item.rap > 0);
 }
 
 function dateKeyFromPoint(point) {
@@ -1278,6 +1421,22 @@ async function saveSnapshotRows(rows) {
   return rows.length;
 }
 
+async function saveItemSnapshotRows(rows) {
+  if (rows.length === 0 || !snapshotStorageEnabled()) {
+    return 0;
+  }
+
+  for (let index = 0; index < rows.length; index += 500) {
+    await supabaseRequest("item_snapshots", {
+      method: "POST",
+      body: JSON.stringify(rows.slice(index, index + 500)),
+    });
+  }
+
+  latestItemSnapshotCache.clear();
+  return rows.length;
+}
+
 async function runSnapshotJob() {
   if (snapshotRunning) {
     return { ok: true, skipped: true, reason: "Snapshot already running." };
@@ -1319,21 +1478,40 @@ async function runSnapshotJob() {
     });
 
     const savedAt = new Date().toISOString();
-    const rows = pricedItems
+    const itemRows = pricedItems
       .filter((item) => item.assetId > 0 && item.rap > 0)
       .map((item) => ({
         asset_id: item.assetId,
+        collectible_item_id: item.collectibleItemId ? String(item.collectibleItemId) : null,
         name: item.name,
         rap: Math.round(item.rap),
+        value: item.value && item.value > 0 ? Math.round(item.value) : null,
         lowest_price: item.lowestPrice && item.lowestPrice > 0 ? Math.round(item.lowestPrice) : null,
+        available_copies: item.availableCopies !== null && item.availableCopies !== undefined ? Math.round(item.availableCopies) : null,
+        total_copies: item.totalCopies && item.totalCopies > 0 ? Math.round(item.totalCopies) : null,
+        volume_24h: item.volume24h ?? null,
+        volume_7d: item.volume7d ?? null,
+        volume_30d: item.volume30d ?? null,
+        volume_1y: item.volume1y ?? null,
+        sales_all_time: item.salesAllTime ?? null,
         saved_at: savedAt,
       }));
+    const rows = itemRows.map((item) => ({
+      asset_id: item.asset_id,
+      name: item.name,
+      rap: item.rap,
+      lowest_price: item.lowest_price,
+      saved_at: item.saved_at,
+    }));
     let saved;
 
     try {
-      saved = await saveSnapshotRows(rows);
+      saved = snapshotStorageEnabled()
+        ? await saveItemSnapshotRows(itemRows)
+        : await saveSnapshotRows(rows);
     } catch (error) {
-      throw new Error(`Snapshot database save failed: ${error.message}`);
+      console.warn(`item_snapshots save skipped: ${error.message}`);
+      saved = await saveSnapshotRows(rows);
     }
 
     lastSnapshotRunAt = Date.now();
@@ -1506,6 +1684,17 @@ function rolimonsSalesForDays(sales, days) {
   if (days <= 7) return firstPositiveNumber(sales.sales7d);
   if (days <= 30) return firstPositiveNumber(sales.sales30d);
   return null;
+}
+
+function itemSnapshotSalesForDays(item, days) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  if (days <= 1) return firstPositiveNumber(Number(item.volume24h));
+  if (days <= 7) return firstPositiveNumber(Number(item.volume7d));
+  if (days <= 30) return firstPositiveNumber(Number(item.volume30d));
+  return firstPositiveNumber(Number(item.volume1y));
 }
 
 async function enrichRolimonsItem(item, includeResale = false, includeDetails = true) {
@@ -2518,10 +2707,25 @@ function filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, 
 }
 
 async function buildRobloxMarketIndex() {
-  const baseItems = await fetchRolimonsItems();
-  const pricedItems = await enrichRolimonsItemsWithCatalogDetails(baseItems, false);
+  const [rolimonsItems, snapshotItems] = await Promise.all([
+    fetchRolimonsItems().catch(() => []),
+    fetchLatestItemSnapshotItems(),
+  ]);
+  const baseItems = mergeMarketItems(snapshotItems, rolimonsItems);
+  const needsPricing = baseItems.filter((item) => !item.lowestPrice || item.lowestPrice <= 0);
+  const alreadyPriced = baseItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
+  let pricedItems = alreadyPriced;
 
-  return pricedItems
+  if (needsPricing.length > 0) {
+    try {
+      pricedItems = pricedItems.concat(await enrichRolimonsItemsWithCatalogDetails(needsPricing, false));
+    } catch (error) {
+      console.warn(`Roblox market live enrichment skipped: ${error.message}`);
+      pricedItems = pricedItems.concat(needsPricing);
+    }
+  }
+
+  return mergeMarketItems([], pricedItems)
     .map((item) => ({
       ...item,
       marketType: "roblox",
@@ -2616,7 +2820,7 @@ async function fetchFastRobloxIndexPage({
   const boughtRangeDays = getBoughtRangeDays(sort);
 
   if (boughtRangeDays) {
-    let activeItems = await fetchRolimonsItems();
+    let activeItems = await getRobloxMarketIndex();
     activeItems = activeItems.filter((item) => {
       if (!matchesAllKeywordTokens(item, keywordTokens)) return false;
       if (minRap !== null && (!item.rap || item.rap < minRap)) return false;
