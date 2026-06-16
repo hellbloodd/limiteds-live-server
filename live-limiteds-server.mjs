@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "debug-route-aliases-2026-06-16-3";
+const SERVER_VERSION = "item-snapshot-pagination-2026-06-16-4";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -1117,19 +1117,44 @@ async function fetchLatestItemSnapshotItems() {
     return [];
   }
 
-  try {
-    let rows;
+  async function fetchItemSnapshotPage(offset, includeVolumeColumns) {
+    const select = includeVolumeColumns
+      ? "asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,volume_24h,volume_7d,volume_30d,volume_1y,sales_all_time,saved_at"
+      : "asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,saved_at";
 
-    try {
-      rows = await supabaseRequest(
-        "item_snapshots?select=asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,volume_24h,volume_7d,volume_30d,volume_1y,sales_all_time,saved_at&order=saved_at.desc&limit=10000",
-        { headers: { Prefer: "" } }
-      );
-    } catch {
-      rows = await supabaseRequest(
-        "item_snapshots?select=asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,saved_at&order=saved_at.desc&limit=10000",
-        { headers: { Prefer: "" } }
-      );
+    return supabaseRequest(
+      `item_snapshots?select=${select}&order=saved_at.desc&limit=1000&offset=${offset}`,
+      { headers: { Prefer: "" } }
+    );
+  }
+
+  try {
+    const rows = [];
+    let includeVolumeColumns = true;
+
+    for (let offset = 0; offset < 50000; offset += 1000) {
+      let page;
+
+      try {
+        page = await fetchItemSnapshotPage(offset, includeVolumeColumns);
+      } catch (error) {
+        if (!includeVolumeColumns) {
+          throw error;
+        }
+
+        includeVolumeColumns = false;
+        page = await fetchItemSnapshotPage(offset, includeVolumeColumns);
+      }
+
+      if (!Array.isArray(page) || page.length === 0) {
+        break;
+      }
+
+      rows.push(...page);
+
+      if (page.length < 1000) {
+        break;
+      }
     }
 
     const latestByAssetId = new Map();
