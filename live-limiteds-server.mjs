@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "item-snapshot-pagination-2026-06-16-4";
+const SERVER_VERSION = "live-recent-roblox-index-2026-06-16-5";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -21,6 +21,7 @@ const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 360);
+const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
   "8-Bit Clockwork Shades",
   "Oozing Oscar",
@@ -312,7 +313,7 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const sortType = marketType === "ugc"
     ? "2"
     : marketType === "roblox" && sort === "updated"
-    ? "0"
+    ? "3"
     : sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
 
   // The public search endpoint accepts All + salesTypeFilter=2 for resale-enabled
@@ -2252,8 +2253,56 @@ function buildItemFromCatalog(item, resale, marketType) {
 }
 
 async function fetchRobloxRecentDiscoveryItems() {
-  const results = [];
+  const rawByAssetId = new Map();
   const seen = new Set();
+
+  async function addCatalogItems(catalog) {
+    const rawItems = Array.isArray(catalog?.data) ? catalog.data : [];
+
+    for (const item of rawItems) {
+      const assetId = normalizeNumber(item.id || item.assetId);
+
+      if (!assetId || seen.has(assetId)) {
+        continue;
+      }
+
+      const restrictions = Array.isArray(item.itemRestrictions) ? item.itemRestrictions : [];
+      const creatorName = String(item.creatorName || "");
+      const isLimited = restrictions.includes("Limited") || restrictions.includes("LimitedUnique") || item.collectibleItemId;
+
+      if (creatorName !== "Roblox" || !isLimited) {
+        continue;
+      }
+
+      seen.add(assetId);
+      rawByAssetId.set(assetId, item);
+    }
+  }
+
+  let cursor = "";
+
+  for (let page = 0; page < ROBLOX_RECENT_DISCOVERY_PAGES; page += 1) {
+    try {
+      const catalog = await fetchJson(buildCatalogUrl({
+        cursor,
+        limit: 30,
+        keyword: "",
+        marketType: "roblox",
+        sort: "updated",
+      }));
+
+      await addCatalogItems(catalog);
+      cursor = catalog?.nextPageCursor || "";
+
+      if (!cursor) {
+        break;
+      }
+
+      await sleep(80);
+    } catch {
+      break;
+    }
+  }
 
   for (const keyword of ROBLOX_RECENT_DISCOVERY_KEYWORDS) {
     try {
@@ -2280,19 +2329,25 @@ async function fetchRobloxRecentDiscoveryItems() {
         continue;
       }
 
-      const resale = exact.collectibleItemId
-        ? await fetchCollectibleResaleData(exact.collectibleItemId)
-        : await fetchResaleData(assetId);
-      const item = buildItemFromCatalog(exact, resale, "roblox");
       seen.add(assetId);
-      results.push(item);
+      rawByAssetId.set(assetId, exact);
       await sleep(80);
     } catch {
       // Discovery is best-effort; the regular live catalog still loads.
     }
   }
 
-  return results;
+  const rawItems = [...rawByAssetId.values()];
+  const results = await mapWithConcurrency(rawItems, 8, async (rawItem) => {
+    const assetId = normalizeNumber(rawItem.id || rawItem.assetId);
+    const resale = rawItem.collectibleItemId
+      ? await fetchCollectibleResaleData(rawItem.collectibleItemId)
+      : await fetchResaleData(assetId);
+
+    return buildItemFromCatalog(rawItem, resale, "roblox");
+  });
+
+  return results.filter((item) => item.assetId > 0 && item.rap > 0);
 }
 
 function isBuyableCollectibleItem(item) {
@@ -2732,11 +2787,12 @@ function filterIndexedItems(items, { keywordTokens, minPrice, maxPrice, minRap, 
 }
 
 async function buildRobloxMarketIndex() {
-  const [rolimonsItems, snapshotItems] = await Promise.all([
+  const [rolimonsItems, snapshotItems, discoveryItems] = await Promise.all([
     fetchRolimonsItems().catch(() => []),
     fetchLatestItemSnapshotItems(),
+    fetchRobloxRecentDiscoveryItems().catch(() => []),
   ]);
-  const baseItems = mergeMarketItems(snapshotItems, rolimonsItems);
+  const baseItems = mergeMarketItems([...snapshotItems, ...discoveryItems], rolimonsItems);
   const needsPricing = baseItems.filter((item) => !item.lowestPrice || item.lowestPrice <= 0);
   const alreadyPriced = baseItems.filter((item) => item.lowestPrice && item.lowestPrice > 0);
   let pricedItems = alreadyPriced;
