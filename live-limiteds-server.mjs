@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "snapshot-saves-live-recent-2026-06-16-6";
+const SERVER_VERSION = "live-discovery-sales-scan-2026-06-16-7";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -20,8 +20,11 @@ const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
-const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 360);
+const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
+const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [
+  450557238,
+];
 const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
   "8-Bit Clockwork Shades",
   "Oozing Oscar",
@@ -336,6 +339,18 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
     url.searchParams.set("keyword", keyword);
   }
 
+  return url;
+}
+
+function buildRobloxKeywordDiscoveryUrl(keyword, limit = 30) {
+  const url = new URL(ROBLOX_CATALOG_URL);
+  url.searchParams.set("category", "All");
+  url.searchParams.set("salesTypeFilter", "2");
+  url.searchParams.set("sortType", "0");
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("creatorTargetId", "1");
+  url.searchParams.set("creatorType", "User");
+  url.searchParams.set("keyword", keyword);
   return url;
 }
 
@@ -2311,13 +2326,7 @@ async function fetchRobloxRecentDiscoveryItems() {
 
   for (const keyword of ROBLOX_RECENT_DISCOVERY_KEYWORDS) {
     try {
-      const catalog = await fetchJson(buildCatalogUrl({
-        cursor: "",
-        limit: 30,
-        keyword,
-        marketType: "roblox",
-        sort: "updated",
-      }));
+      const catalog = await fetchJson(buildRobloxKeywordDiscoveryUrl(keyword, 30));
       const rawItems = Array.isArray(catalog.data) ? catalog.data : [];
       const exact = rawItems.find((item) => {
         return String(item.creatorName || "") === "Roblox"
@@ -2340,6 +2349,24 @@ async function fetchRobloxRecentDiscoveryItems() {
     } catch {
       // Discovery is best-effort; the regular live catalog still loads.
     }
+  }
+
+  try {
+    const details = await fetchCatalogDetailsBatch(ROBLOX_RECENT_DISCOVERY_ASSET_IDS);
+
+    for (const [assetId, item] of details) {
+      const restrictions = Array.isArray(item.itemRestrictions) ? item.itemRestrictions : [];
+      const isLimited = restrictions.includes("Limited") || restrictions.includes("LimitedUnique") || item.collectibleItemId;
+
+      if (!assetId || seen.has(assetId) || String(item.creatorName || "") !== "Roblox" || !isLimited) {
+        continue;
+      }
+
+      seen.add(assetId);
+      rawByAssetId.set(assetId, item);
+    }
+  } catch {
+    // Direct id discovery is best-effort.
   }
 
   const rawItems = [...rawByAssetId.values()];
