@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "item-snapshots-market-2026-06-16-1";
+const SERVER_VERSION = "item-snapshots-debug-counts-2026-06-16-2";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -3370,10 +3370,28 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   maybeRunSnapshotInBackground();
 
-  if (url.pathname === "/health") {
+  if (url.pathname === "/health" || url.pathname === "/api/debug") {
+    const includeCounts = url.pathname === "/api/debug";
+    let counts = undefined;
+
+    if (includeCounts) {
+      const [rolimonsItems, snapshotItems, marketItems] = await Promise.all([
+        fetchRolimonsItems().catch(() => []),
+        fetchLatestItemSnapshotItems().catch(() => []),
+        getRobloxMarketIndex().catch(() => []),
+      ]);
+
+      counts = {
+        rolimonsItems: rolimonsItems.length,
+        itemSnapshots: snapshotItems.length,
+        mergedMarketItems: marketItems.length,
+      };
+    }
+
     sendJson(res, 200, {
       ok: true,
       version: SERVER_VERSION,
+      counts,
       snapshots: {
         enabled: snapshotStorageEnabled(),
         running: snapshotRunning,
