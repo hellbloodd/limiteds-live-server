@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "live-recent-roblox-index-2026-06-16-5";
+const SERVER_VERSION = "snapshot-saves-live-recent-2026-06-16-6";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -1476,7 +1476,12 @@ async function runSnapshotJob() {
     let items;
 
     try {
-      items = await fetchRolimonsItems();
+      const [rolimonsItems, discoveryItems] = await Promise.all([
+        fetchRolimonsItems(),
+        fetchRobloxRecentDiscoveryItems().catch(() => []),
+      ]);
+
+      items = mergeMarketItems(discoveryItems, rolimonsItems);
     } catch (error) {
       throw new Error(`Rolimons snapshot fetch failed: ${error.message}`);
     }
