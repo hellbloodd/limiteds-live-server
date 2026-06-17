@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "live-discovery-sales-scan-2026-06-16-7";
+const SERVER_VERSION = "full-sales-snapshot-pool-2026-06-17-9";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -21,9 +21,15 @@ const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
+const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 18);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
+const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
 const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [
   450557238,
+  20011925,
+  1080949,
+  1098282,
+  14463095,
 ];
 const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
   "8-Bit Clockwork Shades",
@@ -351,6 +357,22 @@ function buildRobloxKeywordDiscoveryUrl(keyword, limit = 30) {
   url.searchParams.set("creatorTargetId", "1");
   url.searchParams.set("creatorType", "User");
   url.searchParams.set("keyword", keyword);
+  return url;
+}
+
+function buildRobloxDiscoveryUrl({ cursor = "", sortType = "3", limit = 30 }) {
+  const url = new URL(ROBLOX_CATALOG_URL);
+  url.searchParams.set("category", "All");
+  url.searchParams.set("salesTypeFilter", "2");
+  url.searchParams.set("sortType", String(sortType));
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("creatorTargetId", "1");
+  url.searchParams.set("creatorType", "User");
+
+  if (cursor) {
+    url.searchParams.set("cursor", cursor);
+  }
+
   return url;
 }
 
@@ -936,6 +958,38 @@ function calculateSalesMetrics(points, days) {
   return { salesCount, averageSalePrice: Math.round(totalSoldValue / salesCount) };
 }
 
+function calculateAllSalesMetrics(points) {
+  if (!Array.isArray(points)) {
+    return { salesCount: null, averageSalePrice: null };
+  }
+
+  let salesCount = 0;
+  let totalSoldValue = 0;
+
+  for (const point of points) {
+    const value = Number(point.value);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+
+    const volume = getPointVolume(point);
+
+    if (!volume) {
+      continue;
+    }
+
+    salesCount += volume;
+    totalSoldValue += value * volume;
+  }
+
+  if (salesCount <= 0) {
+    return { salesCount: null, averageSalePrice: null };
+  }
+
+  return { salesCount, averageSalePrice: Math.round(totalSoldValue / salesCount) };
+}
+
 function salesMetricToActivity(metric) {
   return {
     activityCount: metric.salesCount,
@@ -1021,6 +1075,47 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
   return enriched
     .filter((item) => Number(item.salesCount ?? item.activityCount) > 0)
     .sort(compareBoughtItems);
+}
+
+async function addSnapshotSalesMetrics(items) {
+  return mapWithConcurrency(items, SNAPSHOT_SALES_CONCURRENCY, async (item) => {
+    if (!item || !item.assetId) {
+      return item;
+    }
+
+    try {
+      const resale = item.collectibleItemId && item.assetId > 10_000_000_000
+        ? await fetchCollectibleResaleData(item.collectibleItemId)
+        : await fetchResaleData(item.assetId);
+      const latestHistoryPrice = [...normalizeHistoryPoints(resale.priceDataPoints)]
+        .reverse()
+        .find((point) => Number(point.value) > 0)?.value;
+      const lowestPrice = firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice);
+      const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, lowestPrice);
+      const sales24h = calculateSalesMetrics(salesHistory, 1);
+      const sales7d = calculateSalesMetrics(salesHistory, 7);
+      const sales30d = calculateSalesMetrics(salesHistory, 30);
+      const sales1y = calculateSalesMetrics(salesHistory, 365);
+      const salesAll = calculateAllSalesMetrics(salesHistory);
+
+      return {
+        ...item,
+        lowestPrice: firstPositiveNumber(item.lowestPrice, resale.lowestResalePrice, latestHistoryPrice),
+        rap: firstPositiveNumber(item.rap, resale.recentAveragePrice),
+        volume24h: sales24h.salesCount,
+        volume7d: sales7d.salesCount,
+        volume30d: sales30d.salesCount,
+        volume1y: sales1y.salesCount,
+        salesAllTime: salesAll.salesCount,
+        averageSalePrice24h: sales24h.averageSalePrice,
+        averageSalePrice7d: sales7d.averageSalePrice,
+        averageSalePrice30d: sales30d.averageSalePrice,
+        averageSalePrice1y: sales1y.averageSalePrice,
+      };
+    } catch {
+      return item;
+    }
+  });
 }
 
 function snapshotStorageEnabled() {
@@ -1208,6 +1303,15 @@ function mergeMarketItems(primaryItems, secondaryItems) {
     const existing = byAssetId.get(assetId) || {};
     const rap = firstPositiveNumber(item.rap, existing.rap);
     const lowestPrice = firstPositiveNumber(item.lowestPrice, existing.lowestPrice);
+    const itemRecentRank = Number(item.recentRank);
+    const existingRecentRank = Number(existing.recentRank);
+    const recentRank = Number.isFinite(itemRecentRank)
+      ? Number.isFinite(existingRecentRank)
+        ? Math.min(itemRecentRank, existingRecentRank)
+        : itemRecentRank
+      : Number.isFinite(existingRecentRank)
+        ? existingRecentRank
+        : null;
 
     byAssetId.set(assetId, {
       ...existing,
@@ -1220,6 +1324,7 @@ function mergeMarketItems(primaryItems, secondaryItems) {
       totalCopies: firstPositiveNumber(item.totalCopies, existing.totalCopies),
       collectibleItemId: String(item.collectibleItemId || existing.collectibleItemId || ""),
       name: String(item.name || existing.name || "Unknown Limited"),
+      recentRank,
       thumbnail: item.thumbnail || existing.thumbnail || `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
       creatorName: String(item.creatorName || existing.creatorName || "Roblox"),
       marketType: "roblox",
@@ -1522,6 +1627,8 @@ async function runSnapshotJob() {
         lowestPrice,
       };
     });
+
+    pricedItems = await addSnapshotSalesMetrics(pricedItems);
 
     const savedAt = new Date().toISOString();
     const itemRows = pricedItems
@@ -2275,6 +2382,7 @@ function buildItemFromCatalog(item, resale, marketType) {
 async function fetchRobloxRecentDiscoveryItems() {
   const rawByAssetId = new Map();
   const seen = new Set();
+  let recentRank = 0;
 
   async function addCatalogItems(catalog) {
     const rawItems = Array.isArray(catalog?.data) ? catalog.data : [];
@@ -2295,32 +2403,32 @@ async function fetchRobloxRecentDiscoveryItems() {
       }
 
       seen.add(assetId);
-      rawByAssetId.set(assetId, item);
+      rawByAssetId.set(assetId, { ...item, recentRank: recentRank++ });
     }
   }
 
-  let cursor = "";
+  for (const sortType of ROBLOX_DISCOVERY_SORT_TYPES) {
+    let cursor = "";
 
-  for (let page = 0; page < ROBLOX_RECENT_DISCOVERY_PAGES; page += 1) {
-    try {
-      const catalog = await fetchJson(buildCatalogUrl({
-        cursor,
-        limit: 30,
-        keyword: "",
-        marketType: "roblox",
-        sort: "updated",
-      }));
+    for (let page = 0; page < ROBLOX_RECENT_DISCOVERY_PAGES; page += 1) {
+      try {
+        const catalog = await fetchJson(buildRobloxDiscoveryUrl({
+          cursor,
+          sortType,
+          limit: 30,
+        }));
 
-      await addCatalogItems(catalog);
-      cursor = catalog?.nextPageCursor || "";
+        await addCatalogItems(catalog);
+        cursor = catalog?.nextPageCursor || "";
 
-      if (!cursor) {
+        if (!cursor) {
+          break;
+        }
+
+        await sleep(60);
+      } catch {
         break;
       }
-
-      await sleep(80);
-    } catch {
-      break;
     }
   }
 
@@ -2344,7 +2452,7 @@ async function fetchRobloxRecentDiscoveryItems() {
       }
 
       seen.add(assetId);
-      rawByAssetId.set(assetId, exact);
+      rawByAssetId.set(assetId, { ...exact, recentRank: recentRank++ });
       await sleep(80);
     } catch {
       // Discovery is best-effort; the regular live catalog still loads.
@@ -2363,7 +2471,7 @@ async function fetchRobloxRecentDiscoveryItems() {
       }
 
       seen.add(assetId);
-      rawByAssetId.set(assetId, item);
+      rawByAssetId.set(assetId, { ...item, recentRank: recentRank++ });
     }
   } catch {
     // Direct id discovery is best-effort.
@@ -2376,7 +2484,10 @@ async function fetchRobloxRecentDiscoveryItems() {
       ? await fetchCollectibleResaleData(rawItem.collectibleItemId)
       : await fetchResaleData(assetId);
 
-    return buildItemFromCatalog(rawItem, resale, "roblox");
+    return {
+      ...buildItemFromCatalog(rawItem, resale, "roblox"),
+      recentRank: Number.isFinite(Number(rawItem.recentRank)) ? Number(rawItem.recentRank) : null,
+    };
   });
 
   return results.filter((item) => item.assetId > 0 && item.rap > 0);
@@ -2900,7 +3011,22 @@ function sortIndexedItems(items, sort) {
   }
 
   if (sort === "updated") {
-    return sorted.sort((a, b) => b.assetId - a.assetId);
+    return sorted.sort((a, b) => {
+      const aRank = Number(a.recentRank);
+      const bRank = Number(b.recentRank);
+      const aHasRank = Number.isFinite(aRank);
+      const bHasRank = Number.isFinite(bRank);
+
+      if (aHasRank !== bHasRank) {
+        return aHasRank ? -1 : 1;
+      }
+
+      if (aHasRank && bHasRank && aRank !== bRank) {
+        return aRank - bRank;
+      }
+
+      return b.assetId - a.assetId;
+    });
   }
 
   return sorted.sort((a, b) => a.name.localeCompare(b.name));
@@ -3521,6 +3647,26 @@ async function handleRequest(req, res) {
   if (url.pathname === "/api/snapshot") {
     if (SNAPSHOT_SECRET && url.searchParams.get("secret") !== SNAPSHOT_SECRET) {
       sendJson(res, 403, { error: "Bad snapshot secret." });
+      return;
+    }
+
+    if (url.searchParams.get("wait") !== "1") {
+      if (snapshotRunning) {
+        sendJson(res, 200, { ok: true, skipped: true, reason: "Snapshot already running." });
+        return;
+      }
+
+      runSnapshotJob().catch((error) => {
+        console.warn(`Snapshot failed: ${error.message}`);
+        if (error.stack) {
+          console.warn(error.stack);
+        }
+      });
+      sendJson(res, 200, {
+        ok: true,
+        started: true,
+        detail: "Snapshot started in background.",
+      });
       return;
     }
 
