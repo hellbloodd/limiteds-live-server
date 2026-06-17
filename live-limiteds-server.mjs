@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "full-sales-snapshot-pool-2026-06-17-9";
+const SERVER_VERSION = "fast-sales-index-search-2026-06-17-10";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -40,6 +40,13 @@ const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
   "Clockwork's Golden Shades",
   "Fall Fairy",
 ];
+const ROBLOX_RECENT_SEARCH_ALIASES = new Map([
+  [450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]],
+  [20011925, ["oozing oscar", "oscar"]],
+  [1080949, ["lampshade", "lamp shade"]],
+  [1098282, ["santa hat"]],
+  [14463095, ["classic fedora", "roblox fedora"]],
+]);
 
 const pageCache = new Map();
 const pagePrefetches = new Set();
@@ -1714,7 +1721,9 @@ function matchesAllKeywordTokens(item, tokens) {
     return true;
   }
 
-  const haystack = `${item.name || item.itemName || ""} ${item.acronym || ""}`.toLowerCase();
+  const assetId = normalizeNumber(Number(item.assetId || item.id));
+  const aliases = ROBLOX_RECENT_SEARCH_ALIASES.get(assetId) || [];
+  const haystack = `${item.name || item.itemName || ""} ${item.acronym || ""} ${assetId || ""} ${aliases.join(" ")}`.toLowerCase();
   return tokens.every((token) => haystack.includes(token));
 }
 
@@ -3064,14 +3073,44 @@ async function fetchFastRobloxIndexPage({
       if (!matchesAllKeywordTokens(item, keywordTokens)) return false;
       if (minRap !== null && (!item.rap || item.rap < minRap)) return false;
       if (maxRap !== null && (!item.rap || item.rap > maxRap)) return false;
-      return true;
-    });
-    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays);
-    activeItems = activeItems.filter((item) => {
       if (minPrice !== null && (!item.lowestPrice || item.lowestPrice < minPrice)) return false;
       if (maxPrice !== null && (!item.lowestPrice || item.lowestPrice > maxPrice)) return false;
       return true;
     });
+
+    const salesFromSnapshot = activeItems
+      .map((item) => {
+        const salesCount = itemSnapshotSalesForDays(item, boughtRangeDays);
+        const averageSalePrice = firstPositiveNumber(
+          boughtRangeDays <= 1 ? item.averageSalePrice24h : null,
+          boughtRangeDays <= 7 ? item.averageSalePrice7d : null,
+          boughtRangeDays <= 30 ? item.averageSalePrice30d : null,
+          item.averageSalePrice1y,
+          item.lowestPrice
+        );
+
+        return {
+          ...item,
+          activityCount: salesCount,
+          activityScore: salesCount,
+          averageActivePrice: averageSalePrice,
+          salesCount,
+          averageSalePrice,
+        };
+      })
+      .filter((item) => Number(item.salesCount) > 0)
+      .sort(compareBoughtItems);
+
+    if (salesFromSnapshot.length > 0) {
+      return {
+        items: salesFromSnapshot.slice(offset, offset + limit),
+        nextPageCursor: cursorFromOffset(offset + limit, salesFromSnapshot.length),
+        previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - limit), salesFromSnapshot.length) : "",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays, Math.max(limit * 12, 360));
 
     return {
       items: activeItems.slice(offset, offset + limit),
