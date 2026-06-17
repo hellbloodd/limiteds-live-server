@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "fast-sales-index-search-2026-06-17-10";
+const SERVER_VERSION = "sales-point-fallback-2026-06-17-11";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -601,7 +601,7 @@ function buildSalesHistory(pricePoints, volumePoints = [], fallbackPrice = null)
   const sales = priceHistory
     .map((point) => {
       const key = salesHistoryKey(point.date);
-      const volume = getPointVolume(point) ?? volumeByDate.get(key);
+      const volume = getPointVolume(point) ?? volumeByDate.get(key) ?? 1;
 
       if (key && volume) {
         usedVolumeDates.add(key);
