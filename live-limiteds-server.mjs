@@ -1,12 +1,19 @@
+// ============================================================================
+// GLOBAL CONSTANTS & VARIABLES (Replace your ENTIRE top section with this)
+// ============================================================================
+
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "sales-point-fallback-2026-06-17-11";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
+// NEW: Bulk metrics cache config (Added for Movers/Profit/Loss)
 const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000);
+const ROLIMONS_ENRICH_CONCURRENCY = Number(process.env.ROLIMONS_ENRICH_CONCURRENCY || 10); 
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
 const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
+
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
@@ -14,16 +21,24 @@ const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales
 const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/v1/items/details";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
+
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 18);
-const ROLIMONS_ENRICH_CONCURRENCY = Number(process.env.ROLIMONS_ENRICH_CONCURRENCY || 10);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
 const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [450557238, 20011925, 1080949, 1098282, 14463095];
 const ROBLOX_RECENT_DISCOVERY_KEYWORDS = ["8-Bit Clockwork Shades", "Oozing Oscar", "Bunny Ears", "Lampshade", "Pinstripe Fedora", "Clockwork's Golden Shades", "Fall Fairy"];
-const ROBLOX_RECENT_SEARCH_ALIASES = new Map([[450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]], [20011925, ["oozing oscar", "oscar"]], [1080949, ["lampshade", "lamp shade"]], [1098282, ["santa hat"]], [14463095, ["classic fedora", "roblox fedora"]]]);
 
+const ROBLOX_RECENT_SEARCH_ALIASES = new Map([
+  [450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]],
+  [20011925, ["oozing oscar", "oscar"]],
+  [1080949, ["lampshade", "lamp shade"]],
+  [1098282, ["santa hat"]],
+  [14463095, ["classic fedora", "roblox fedora"]],
+]);
+
+// Caches (Maps & Sets)
 const pageCache = new Map();
 const pagePrefetches = new Set();
 const marketIndexCache = new Map();
@@ -35,24 +50,17 @@ const detailCache = new Map();
 const portfolioCache = new Map();
 const rolimonsSalesCache = new Map();
 const latestItemSnapshotCache = new Map();
-let rolimonsEnrichedCache = null;
-let lastRolimonsEnrichmentAt = 0;
-let rolimonsCache = null;
-let robloxCsrfToken = "";
-let lastSnapshotRunAt = 0;
-let lastSnapshotAttemptAt = 0;
-let snapshotRunning = false;
-let memorySnapshots = [];
-let rolimonsSalesBlockedUntil = 0;
 
-let lastRolimonsEnrichmentAt = 0;
-let rolimonsCache = null;
-let robloxCsrfToken = "";
-let lastSnapshotRunAt = 0;
-let lastSnapshotAttemptAt = 0;
-let snapshotRunning = false;
-let memorySnapshots = [];
-let rolimonsSalesBlockedUntil = 0;
+// State Variables (Global)
+let rolimonsEnrichedCache = null; // NEW: Cache for bulk metrics data
+let lastRolimonsEnrichmentAt = 0; // NEW: Timestamp for bulk metrics cache
+let rolimonsCache = null;         // ORIGINAL
+let robloxCsrfToken = "";         // ORIGINAL
+let lastSnapshotRunAt = 0;        // ORIGINAL
+let lastSnapshotAttemptAt = 0;    // ORIGINAL
+let snapshotRunning = false;      // ORIGINAL
+let memorySnapshots = [];         // ORIGINAL
+let rolimonsSalesBlockedUntil = 0;// ORIGINAL
 
 function makePageCacheKey({
   marketType,
