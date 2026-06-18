@@ -7,6 +7,7 @@
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "sales-point-fallback-2026-06-17-11";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
+const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000); 
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -1759,40 +1760,58 @@ async function mapWithConcurrency(items, limit, mapper) {
 }
 
 async function fetchRolimonsItemsWithMetrics() {
+  // Use a separate cache so we don't break the main index
   if (rolimonsEnrichedCache && Date.now() - rolimonsEnrichedCache.fetchedAt < ROLIMONS_ENRICH_CACHE_TTL_MS) {
     return rolimonsEnrichedCache.items;
   }
 
-  const rawItems = await fetchRolimonsItems();
-  if (!rawItems || rawItems.length === 0) return [];
+  // Fetch directly from Rolimons API (Embedded to avoid dependency errors)
+  const data = await fetchJson(ROLIMONS_ITEM_DETAILS_URL, { retries: 1, timeoutMs: 5000 });
+  const rawItems = data && typeof data.items === "object" ? data.items : {};
+  
+  // Standardize the item format
+  const items = Object.entries(rawItems).map(([assetId, values]) => ({
+    assetId: Number(assetId),
+    name: String(values[0] || "Unknown Limited"),
+    acronym: String(values[1] || ""),
+    rap: Number(values[2]) > 0 ? Number(values[2]) : null,
+    value: Number(values[3]) > 0 ? Number(values[3]) : null,
+    lowestPrice: 0,
+    availableCopies: null,
+    totalCopies: null,
+    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    creatorName: "Roblox",
+    itemType: "Asset",
+    marketType: "roblox",
+  })).filter((item) => item.assetId > 0 && item.rap);
 
-  // 1. Merge with snapshot data for historical profit/loss/volume
+  if (items.length === 0) return [];
+
+  // Merge with your existing snapshot data for history/sales info
   const snapshotData = await fetchLatestItemSnapshotItems();
   const snapshotMap = new Map(snapshotData.map(i => [i.assetId, i]));
 
-  let enrichedItems = rawItems.map(item => {
+  let enrichedItems = items.map(item => {
     const snap = snapshotMap.get(item.assetId);
     return {
       ...item,
       sales24h: snap?.volume_24h || item.sales24h || null,
       sales7d: snap?.volume_7d || item.sales7d || null,
       sales30d: snap?.volume_30d || item.sales30d || null,
-      sales1y: snap?.volume_1y || item.sales1y || null,
-      salesAllTime: snap?.sales_all_time || item.salesAllTime || null,
-      profit24h: null, loss24h: null, profit7d: null, loss7d: null,
-      profit30d: null, loss30d: null, profit1y: null, loss1y: null,
-      change24h: null, change7d: null, change30d: null, change1y: null, changeAllTime: null,
+      profit24h: null, loss24h: null, profit7d: null, loss7d: null, change24h: null, change7d: null, // Initialize metric fields
     };
   });
 
-  // 2. Batch fetch missing resale history safely
+  // 2. Batch fetch missing resale history safely (Rate Limit Safe)
   const itemsNeedingResale = enrichedItems.filter(i => !i.sales24h && !i.sales7d);
   if (itemsNeedingResale.length > 0) {
-    console.log(`[Enrich] Fetching resale history for ${itemsNeedingResale.length} limiteds...`);
+    console.log(`[Enrich] Fetching live resale data for ${itemsNeedingResale.length} limiteds...`);
     
-    const resaleByAssetId = await fetchMarketplaceItemDetailsBatch(itemsNeedingResale.map(i => i.collectibleItemId || i.assetId));
-    
-    enrichedItems = await mapWithConcurrency(enrichedItems, ROLIMONS_ENRICH_CONCURRENCY, async (item) => {
+    // Map assetId to collectibleItemId for fetch logic
+    const ids = itemsNeedingResale.map(i => i.collectibleItemId || i.assetId);
+    const resaleDataMap = await fetchMarketplaceItemDetailsBatch(ids);
+
+    enrichedItems = await mapWithConcurrency(enrichedItems, 10, async (item) => {
       let resale = {};
       if (item.collectibleItemId && item.assetId > 10_000_000_000) {
         resale = await fetchCollectibleResaleData(item.collectibleItemId);
@@ -1800,38 +1819,30 @@ async function fetchRolimonsItemsWithMetrics() {
         resale = await fetchResaleData(item.assetId);
       }
 
+      // Calculate volume and history metrics from this new data
       const history = normalizeHistoryPoints(resale.priceDataPoints);
       const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
-      const metrics24h = calculateSalesMetrics(salesHistory, 1);
-      const metrics7d = calculateSalesMetrics(salesHistory, 7);
-      const metrics30d = calculateSalesMetrics(salesHistory, 30);
-      const metrics1y = calculateSalesMetrics(salesHistory, 365);
+      const m24h = calculateSalesMetrics(salesHistory, 1);
+      const m7d = calculateSalesMetrics(salesHistory, 7);
 
-      // Use snapshot data if available, fallback to calculated
-      const sales24h = item.sales24h || metrics24h.salesCount;
-      const sales7d = item.sales7d || metrics7d.salesCount;
-      const sales30d = item.sales30d || metrics30d.salesCount;
+      // Use live data if snapshot didn't have it
+      const sales24h = item.sales24h || m24h.salesCount;
+      const sales7d = item.sales7d || m7d.salesCount;
 
-      // Calculate profit/loss from history baseline
-      const baseline24h = findPeriodBaselineValue(history, 1);
-      const baseline7d = findPeriodBaselineValue(history, 7);
-      const baseline30d = findPeriodBaselineValue(history, 30);
-      const baseline1y = findPeriodBaselineValue(history, 365);
+      // Calculate profit/loss based on baseline changes
+      const bp24h = findPeriodBaselineValue(history, 1);
+      const bp7d = findPeriodBaselineValue(history, 7);
 
       return {
         ...item,
         rap: firstPositiveNumber(item.rap, resale.recentAveragePrice),
         lowestPrice: clearPriceWithoutSellers(firstPositiveNumber(resale.lowestResalePrice, item.lowestPrice), item.availableCopies),
-        sales24h, sales7d, sales30d,
-        profit24h: baseline24h ? percentGain(baseline24h, metrics24h.averageSalePrice) : null,
-        loss24h: baseline24h ? percentDrop(baseline24h, metrics24h.averageSalePrice) : null,
-        profit7d: baseline7d ? percentGain(baseline7d, metrics7d.averageSalePrice) : null,
-        loss7d: baseline7d ? percentDrop(baseline7d, metrics7d.averageSalePrice) : null,
-        profit30d: baseline30d ? percentGain(baseline30d, metrics30d.averageSalePrice) : null,
-        loss30d: baseline30d ? percentDrop(baseline30d, metrics30d.averageSalePrice) : null,
-        change24h: baseline24h ? percentChange(baseline24h, item.rap) : null,
-        change7d: baseline7d ? percentChange(baseline7d, item.rap) : null,
-        change30d: baseline30d ? percentChange(baseline30d, item.rap) : null,
+        sales24h, sales7d,
+        profit24h: bp24h ? percentGain(bp24h, m24h.averageSalePrice) : null,
+        loss24h: bp24h ? percentDrop(bp24h, m24h.averageSalePrice) : null,
+        profit7d: bp7d ? percentGain(bp7d, m7d.averageSalePrice) : null,
+        loss7d: bp7d ? percentDrop(bp7d, m7d.averageSalePrice) : null,
+        change24h: bp24h ? percentChange(bp24h, item.rap) : null,
       };
     });
   }
@@ -3776,37 +3787,32 @@ async function handleRequest(req, res) {
     return;
   }
 
- if (url.pathname === "/api/limiteds") {
+if (url.pathname === "/api/limiteds") {
   try {
-    const forceFullMetrics = url.searchParams.get("full") === "true";
-    let items = await fetchRolimonsItemsWithMetrics();
+    // Use the new bulk fetcher!
+    let items = await fetchRolimonsItemsWithMetrics(); 
 
-    // Apply filters & sorting
-    const safeSort = ["price_asc","price_desc","rap_desc","deal_desc","overpriced_desc","bought_24h","bought_7d","bought_30d","bought_1y","loss_24h","loss_7d","loss_30d","loss_1y","loss_all","profit_24h","profit_7d","profit_30d","profit_1y","profit_all","updated"].includes(url.searchParams.get("sort")) ? url.searchParams.get("sort") : "updated";
-    
-    if (safeSort === "profit_24h" || safeSort === "loss_24h" || safeSort === "bought_24h" || safeSort === "sales_24h") {
+    // Filter & Sort Logic
+    const sort = url.searchParams.get("sort") || "updated";
+    if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought")) {
       items = items.filter(i => i.sales24h > 0).sort((a,b) => (b.sales24h||0) - (a.sales24h||0));
-    } else if (safeSort === "profit_7d" || safeSort === "loss_7d") {
-      items = items.filter(i => i.sales7d > 0).sort((a,b) => (b.sales7d||0) - (a.sales7d||0));
-    } else if (safeSort === "rap_desc") {
+    } else if (sort === "rap_desc") {
       items.sort((a,b) => (b.rap||0) - (a.rap||0));
-    } else if (safeSort === "deal_desc") {
+    } else if (sort === "deal_desc") {
       items = items.filter(hasMinimumDeal).sort(compareDealItems);
-    } else {
-      items.sort((a,b) => b.assetId - a.assetId); // Default: newest/most active
     }
 
     sendJson(res, 200, {
       items: items.slice(0, Number(url.searchParams.get("limit") || 30)),
       totalAvailable: items.length,
-      updatedAt: new Date().toISOString(),
-      note: "All fields include profit/loss, sales volume, and change metrics from Rolimons + Roblox resale history."
+      updatedAt: new Date().toISOString()
     });
   } catch (error) {
-    sendJson(res, 502, { error: "Could not load limiteds with metrics.", detail: error.message });
+    sendJson(res, 502, { error: "Error loading limiteds.", detail: error.message });
   }
   return;
 }
+
 
 if (url.pathname === "/api/rolimons-all-metrics") {
   try {
