@@ -1,13 +1,7 @@
-// Local/prod backend for the Roblox Limiteds Live UI.
-// Run with: node live-limiteds-server.mjs
-//
-// The Roblox client calls this server, not Roblox marketplace APIs directly.
-// Deploy it to a public HTTPS host before using it in a published Roblox game.
-
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "sales-point-fallback-2026-06-17-11";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
-const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000); 
+const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -23,31 +17,12 @@ const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails"
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 18);
+const ROLIMONS_ENRICH_CONCURRENCY = Number(process.env.ROLIMONS_ENRICH_CONCURRENCY || 10);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
-const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [
-  450557238,
-  20011925,
-  1080949,
-  1098282,
-  14463095,
-];
-const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
-  "8-Bit Clockwork Shades",
-  "Oozing Oscar",
-  "Bunny Ears",
-  "Lampshade",
-  "Pinstripe Fedora",
-  "Clockwork's Golden Shades",
-  "Fall Fairy",
-];
-const ROBLOX_RECENT_SEARCH_ALIASES = new Map([
-  [450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]],
-  [20011925, ["oozing oscar", "oscar"]],
-  [1080949, ["lampshade", "lamp shade"]],
-  [1098282, ["santa hat"]],
-  [14463095, ["classic fedora", "roblox fedora"]],
-]);
+const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [450557238, 20011925, 1080949, 1098282, 14463095];
+const ROBLOX_RECENT_DISCOVERY_KEYWORDS = ["8-Bit Clockwork Shades", "Oozing Oscar", "Bunny Ears", "Lampshade", "Pinstripe Fedora", "Clockwork's Golden Shades", "Fall Fairy"];
+const ROBLOX_RECENT_SEARCH_ALIASES = new Map([[450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]], [20011925, ["oozing oscar", "oscar"]], [1080949, ["lampshade", "lamp shade"]], [1098282, ["santa hat"]], [14463095, ["classic fedora", "roblox fedora"]]]);
 
 const pageCache = new Map();
 const pagePrefetches = new Set();
@@ -60,9 +35,16 @@ const detailCache = new Map();
 const portfolioCache = new Map();
 const rolimonsSalesCache = new Map();
 const latestItemSnapshotCache = new Map();
-const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000); // 15 min cache
-const ROLIMONS_ENRICH_CONCURRENCY = Number(process.env.ROLIMONS_ENRICH_CONCURRENCY || 10);     // Safe for Roblox resale API
 let rolimonsEnrichedCache = null;
+let lastRolimonsEnrichmentAt = 0;
+let rolimonsCache = null;
+let robloxCsrfToken = "";
+let lastSnapshotRunAt = 0;
+let lastSnapshotAttemptAt = 0;
+let snapshotRunning = false;
+let memorySnapshots = [];
+let rolimonsSalesBlockedUntil = 0;
+
 let lastRolimonsEnrichmentAt = 0;
 let rolimonsCache = null;
 let robloxCsrfToken = "";
@@ -3789,11 +3771,9 @@ async function handleRequest(req, res) {
 
 if (url.pathname === "/api/limiteds") {
   try {
-    // Use the new bulk fetcher!
-    let items = await fetchRolimonsItemsWithMetrics(); 
-
-    // Filter & Sort Logic
+    let items = await fetchRolimonsItemsWithMetrics();
     const sort = url.searchParams.get("sort") || "updated";
+    
     if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought")) {
       items = items.filter(i => i.sales24h > 0).sort((a,b) => (b.sales24h||0) - (a.sales24h||0));
     } else if (sort === "rap_desc") {
@@ -3812,6 +3792,25 @@ if (url.pathname === "/api/limiteds") {
   }
   return;
 }
+
+if (url.pathname === "/api/rolimons-all-metrics") {
+  try {
+    const items = await fetchRolimonsItemsWithMetrics();
+    const safeItems = items.map(i => ({
+      assetId: i.assetId, name: i.name, acronym: i.acronym, thumbnail: i.thumbnail,
+      rap: i.rap, lowestPrice: i.lowestPrice, availableCopies: i.availableCopies, totalCopies: i.totalCopies,
+      sales24h: Number(i.sales24h) || 0, sales7d: Number(i.sales7d) || 0, sales30d: Number(i.sales30d) || 0,
+      profit24h: i.profit24h || null, loss24h: i.loss24h || null,
+      profit7d: i.profit7d || null, loss7d: i.loss7d || null,
+      change24h: i.change24h || null, change7d: i.change7d || null, change30d: i.change30d || null,
+    }));
+    sendJson(res, 200, { items: safeItems, total: safeItems.length, updatedAt: new Date().toISOString() });
+  } catch (error) {
+    sendJson(res, 502, { error: "Metric enrichment failed.", detail: error.message });
+  }
+  return;
+}
+
 
 
 if (url.pathname === "/api/rolimons-all-metrics") {
