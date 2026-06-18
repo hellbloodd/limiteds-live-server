@@ -3815,7 +3815,7 @@ async function handleRequest(req, res) {
 
 if (url.pathname === "/api/limiteds") {
   try {
-    // 1. Get base items from our cache or index
+    // 1. Start with our cached items
     let items = await fetchRolimonsItemsWithMetrics();
     
     if (!items || items.length === 0) {
@@ -3825,64 +3825,72 @@ if (url.pathname === "/api/limiteds") {
 
     const sort = url.searchParams.get("sort") || "updated";
     
-    // --- FIX FOR DEALS & OVERPRICED: Fetch live prices if needed ---
+    // --- HANDLE DEALS AND OVERPRICED (Requires Live Price) ---
     if (sort === "deal_desc" || sort === "overpriced_desc") {
-      console.log(`[Sort] Enriching for ${sort}...`);
+      console.log(`[Sort] Fetching live prices for ${sort}...`);
       
-      // We need lowestPrice to calculate deals. Rolimons API is slow for this, so we fetch it live for the current page.
+      // Map assetId to its lowest resale price
+      let priceMap = new Map();
       const idsToFetch = items.slice(0, 30).map(i => i.assetId).filter(a => a > 0);
       
-      // Fetch resale data (prices)
-      let priceMap = new Map();
       if (idsToFetch.length > 0) {
-        // Use batch fetching for speed
-        const fetchedData = await fetchCatalogDetailsBatch(idsToFetch);
-        fetchedData.forEach((data, id) => {
-          priceMap.set(id, data.lowestResalePrice || 0);
+        // Fetch details in batches from Roblox
+        const data = await fetchCatalogDetailsBatch(idsToFetch);
+        data.forEach((itemData, id) => {
+          priceMap.set(id, itemData.lowestResalePrice || 0);
         });
       }
 
       items = items.map(item => {
-        if (!priceMap.has(item.assetId)) return item;
-        
-        const livePrice = priceMap.get(item.assetId);
+        let livePrice = priceMap.get(item.assetId);
+        if (!livePrice || livePrice <= 0) return item; // Skip if we can't find a price
+
         const rap = item.rap;
         
-        // Calculate Deal or Overpriced based on this specific sort
         if (sort === "deal_desc") {
-          if (livePrice > 0 && rap > livePrice) {
-            const dealValue = rap - livePrice;
-            const dealPercent = Math.round((dealValue / rap) * 100);
-            return { ...item, lowestPrice: livePrice, dealValue, dealPercent };
-          }
-        } else if (sort === "overpriced_desc") {
-          if (livePrice > 0 && rap < livePrice) {
-            const overpriceValue = livePrice - rap;
-            const overpricedPercent = Math.round((overpriceValue / rap) * 100);
-            return { ...item, lowestPrice: livePrice, overpricedValue: overpriceValue, overpricedPercent };
-          }
+          // Only show if there is a deal (price < RAP)
+          if (livePrice >= rap) return item; 
+          
+          const value = rap - livePrice;
+          const percent = Math.round((value / rap) * 100);
+          return { ...item, lowestPrice: livePrice, dealValue: value, dealPercent: percent };
+        } 
+        
+        if (sort === "overpriced_desc") {
+          // Only show if it is overpriced (price > RAP)
+          if (livePrice <= rap) return item; 
+          
+          const value = livePrice - rap;
+          const percent = Math.round((value / rap) * 100);
+          return { ...item, lowestPrice: livePrice, overpricedValue: value, overpricedPercent: percent };
         }
+
         return item;
       });
 
-      // Apply specific filter/sort for these tabs
+      // Sort and filter only for these specific tabs
       if (sort === "deal_desc") {
-        items = items.filter(i => i.dealPercent >= 10).sort((a, b) => b.dealPercent - a.dealPercent);
+        items = items.filter(i => i.dealPercent >= 10).sort((a,b) => b.dealPercent - a.dealPercent);
       } else {
-        items = items.filter(i => i.overpricedPercent >= 10).sort((a, b) => b.overpricedPercent - a.overpricedPercent);
+        items = items.filter(i => i.overpricedPercent >= 10).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
       }
-      
-    // --- STANDARD SORTING ---
-    } else if (sort === "profit_24h" || sort === "loss_24h") {
-       items = items.filter(i => i.sales24h > 0).sort((a,b) => (b.sales24h||0) - (a.sales24h||0));
+
+    // --- HANDLE PROFIT / LOSS (Requires Volume Data) ---
+    } else if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought_")) {
+      items = items.filter(i => i.sales24h && i.sales24h > 0).sort((a,b) => b.sales24h - a.sales24h);
+    
+    // --- HANDLE STANDARD SORTING (RAP or Price) ---
     } else if (sort === "rap_desc") {
-      items.sort((a,b) => (b.rap||0) - (a.rap||0));
-    } else if (sort === "price_asc" || sort === "lowest_price") { // Handle client side naming
+      items.sort((a,b) => (b.rap || 0) - (a.rap || 0));
+      
+    } else if (sort === "price_asc" || sort === "lowest_price") {
       items = items.filter(i => i.lowestPrice > 0).sort((a, b) => a.lowestPrice - b.lowestPrice);
+      
     } else if (sort === "price_desc") { 
        items = items.filter(i => i.lowestPrice > 0).sort((a, b) => b.lowestPrice - a.lowestPrice);
-    } else if (sort === "updated" || sort === "recent") {
-      // Default to most recent based on asset ID or name since we don't have timestamps in cache
+
+    // --- DEFAULT: RECENT / NAME ---
+    } else {
       items.sort((a,b) => b.assetId - a.assetId); 
     }
 
@@ -3892,7 +3900,7 @@ if (url.pathname === "/api/limiteds") {
       updatedAt: new Date().toISOString()
     });
   } catch (error) {
-    console.error(error); // Debugging log
+    console.error("[API Error]", error); 
     sendJson(res, 502, { error: "Error loading limiteds.", detail: error.message });
   }
   return;
