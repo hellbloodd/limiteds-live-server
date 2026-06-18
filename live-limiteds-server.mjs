@@ -1749,6 +1749,42 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
+// Original fetch function required for Market Index & Snapshots
+async function fetchRolimonsItems() {
+  if (rolimonsCache && Date.now() - rolimonsCache.fetchedAt < ROLIMONS_CACHE_TTL_MS) {
+    return rolimonsCache.items;
+  }
+
+  const data = await fetchJson(ROLIMONS_ITEM_DETAILS_URL, {
+    retries: 1,
+    timeoutMs: 5000,
+  });
+  const rawItems = data && typeof data.items === "object" ? data.items : {};
+  
+  // Map Rolimons JSON to your internal item structure
+  const items = Object.entries(rawItems).map(([assetId, values]) => ({
+    assetId: Number(assetId),
+    name: String(values[0] || "Unknown Limited"),
+    acronym: String(values[1] || ""),
+    rap: Number(values[2]) > 0 ? Number(values[2]) : null,
+    value: Number(values[3]) > 0 ? Number(values[3]) : null,
+    lowestPrice: 0, // No price in basic item details
+    availableCopies: null,
+    totalCopies: null,
+    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
+    creatorName: "Roblox",
+    itemType: "Asset",
+    marketType: "roblox",
+  })).filter((item) => item.assetId > 0 && item.rap);
+
+  rolimonsCache = {
+    fetchedAt: Date.now(),
+    items,
+  };
+
+  return items;
+}
+
 async function fetchRolimonsItemsWithMetrics() {
   // Use a separate cache so we don't break the main index
   if (rolimonsEnrichedCache && Date.now() - rolimonsEnrichedCache.fetchedAt < ROLIMONS_ENRICH_CACHE_TTL_MS) {
