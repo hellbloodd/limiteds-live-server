@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "sales-and-rap-metrics-2026-06-19-12";
+const SERVER_VERSION = "complete-rolimons-catalog-2026-06-19-13";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -21,7 +21,9 @@ const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
-const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 18);
+const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 4);
+const SNAPSHOT_SALES_BATCH_SIZE = Number(process.env.SNAPSHOT_SALES_BATCH_SIZE || 100);
+const SNAPSHOT_SALES_BATCH_DELAY_MS = Number(process.env.SNAPSHOT_SALES_BATCH_DELAY_MS || 500);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
 const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [
@@ -1094,7 +1096,11 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
 }
 
 async function addSnapshotSalesMetrics(items) {
-  return mapWithConcurrency(items, SNAPSHOT_SALES_CONCURRENCY, async (item) => {
+  const results = [];
+
+  for (let index = 0; index < items.length; index += SNAPSHOT_SALES_BATCH_SIZE) {
+    const batch = items.slice(index, index + SNAPSHOT_SALES_BATCH_SIZE);
+    const enrichedBatch = await mapWithConcurrency(batch, SNAPSHOT_SALES_CONCURRENCY, async (item) => {
     if (!item || !item.assetId) {
       return item;
     }
@@ -1131,7 +1137,17 @@ async function addSnapshotSalesMetrics(items) {
     } catch {
       return item;
     }
-  });
+    });
+
+    results.push(...enrichedBatch);
+    console.log(`Snapshot sales enriched ${Math.min(index + batch.length, items.length)}/${items.length}.`);
+
+    if (index + batch.length < items.length && SNAPSHOT_SALES_BATCH_DELAY_MS > 0) {
+      await sleep(SNAPSHOT_SALES_BATCH_DELAY_MS);
+    }
+  }
+
+  return results;
 }
 
 function snapshotStorageEnabled() {
@@ -1232,6 +1248,39 @@ function normalizeItemSnapshotRows(rows) {
     .filter((item) => item.assetId > 0 && item.rap > 0);
 }
 
+async function fetchCurrentLimitedItems() {
+  if (!snapshotStorageEnabled()) {
+    return [];
+  }
+
+  const rows = [];
+  const select = "asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,volume_24h,volume_7d,volume_30d,volume_1y,sales_all_time,saved_at";
+
+  try {
+    for (let offset = 0; offset < 10000; offset += 1000) {
+      const page = await supabaseRequest(
+        `limited_items?select=${select}&order=asset_id.asc&limit=1000&offset=${offset}`,
+        { headers: { Prefer: "" } }
+      );
+
+      if (!Array.isArray(page) || page.length === 0) {
+        break;
+      }
+
+      rows.push(...page);
+
+      if (page.length < 1000) {
+        break;
+      }
+    }
+  } catch (error) {
+    console.warn(`limited_items read skipped: ${error.message}`);
+    return [];
+  }
+
+  return normalizeItemSnapshotRows(rows);
+}
+
 async function fetchLatestItemSnapshotItems() {
   const cacheKey = "latest";
   const cached = latestItemSnapshotCache.get(cacheKey);
@@ -1242,6 +1291,13 @@ async function fetchLatestItemSnapshotItems() {
 
   if (!snapshotStorageEnabled()) {
     return [];
+  }
+
+  const currentItems = await fetchCurrentLimitedItems();
+
+  if (currentItems.length > 0) {
+    latestItemSnapshotCache.set(cacheKey, { fetchedAt: Date.now(), items: currentItems });
+    return currentItems;
   }
 
   async function fetchItemSnapshotPage(offset, includeVolumeColumns) {
@@ -1599,6 +1655,25 @@ async function saveItemSnapshotRows(rows) {
   return rows.length;
 }
 
+async function saveCurrentLimitedItems(rows) {
+  if (rows.length === 0 || !snapshotStorageEnabled()) {
+    return 0;
+  }
+
+  for (let index = 0; index < rows.length; index += 250) {
+    await supabaseRequest("limited_items?on_conflict=asset_id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(rows.slice(index, index + 250)),
+    });
+  }
+
+  latestItemSnapshotCache.clear();
+  marketIndexCache.clear();
+  pageCache.clear();
+  return rows.length;
+}
+
 async function runSnapshotJob() {
   if (snapshotRunning) {
     return { ok: true, skipped: true, reason: "Snapshot already running." };
@@ -1612,12 +1687,13 @@ async function runSnapshotJob() {
     let items;
 
     try {
-      const [rolimonsItems, discoveryItems] = await Promise.all([
+      const [rolimonsItems, discoveryItems, storedItems] = await Promise.all([
         fetchRolimonsItems(),
         fetchRobloxRecentDiscoveryItems().catch(() => []),
+        fetchLatestItemSnapshotItems().catch(() => []),
       ]);
 
-      items = mergeMarketItems(discoveryItems, rolimonsItems);
+      items = mergeMarketItems([...storedItems, ...discoveryItems], rolimonsItems);
     } catch (error) {
       throw new Error(`Rolimons snapshot fetch failed: ${error.message}`);
     }
@@ -1644,10 +1720,8 @@ async function runSnapshotJob() {
       };
     });
 
-    pricedItems = await addSnapshotSalesMetrics(pricedItems);
-
     const savedAt = new Date().toISOString();
-    const itemRows = pricedItems
+    const toItemRows = (sourceItems) => sourceItems
       .filter((item) => item.assetId > 0 && item.rap > 0)
       .map((item) => ({
         asset_id: item.assetId,
@@ -1665,6 +1739,24 @@ async function runSnapshotJob() {
         sales_all_time: item.salesAllTime ?? null,
         saved_at: savedAt,
       }));
+    const catalogRows = toItemRows(pricedItems);
+
+    try {
+      await saveCurrentLimitedItems(catalogRows);
+      console.log(`Current catalog upserted ${catalogRows.length} Rolimons/Roblox limiteds.`);
+    } catch (error) {
+      console.warn(`limited_items upsert skipped: ${error.message}`);
+    }
+
+    pricedItems = await addSnapshotSalesMetrics(pricedItems);
+
+    const itemRows = toItemRows(pricedItems);
+
+    try {
+      await saveCurrentLimitedItems(itemRows);
+    } catch (error) {
+      console.warn(`limited_items metric update skipped: ${error.message}`);
+    }
     const rows = itemRows.map((item) => ({
       asset_id: item.asset_id,
       name: item.name,
@@ -3107,10 +3199,9 @@ async function fetchFastRobloxIndexPage({
           averageSalePrice,
         };
       })
-      .filter((item) => Number(item.salesCount) > 0)
       .sort(compareBoughtItems);
 
-    if (salesFromSnapshot.length > 0) {
+    if (salesFromSnapshot.some((item) => Number(item.salesCount) > 0)) {
       return {
         items: salesFromSnapshot.slice(offset, offset + limit),
         nextPageCursor: cursorFromOffset(offset + limit, salesFromSnapshot.length),
