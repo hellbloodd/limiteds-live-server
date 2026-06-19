@@ -1,14 +1,17 @@
+// Local/prod backend for the Roblox Limiteds Live UI.
+// Run with: node live-limiteds-server.mjs
+//
+// The Roblox client calls this server, not Roblox marketplace APIs directly.
+// Deploy it to a public HTTPS host before using it in a published Roblox game.
+
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "sales-point-fallback-2026-06-17-11";
+const SERVER_VERSION = "sales-and-rap-metrics-2026-06-19-12";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
-const ROLIMONS_ENRICH_CACHE_TTL_MS = Number(process.env.ROLIMONS_ENRICH_CACHE_TTL_MS || 900_000);
-const ROLIMONS_ENRICH_CONCURRENCY = Number(process.env.ROLIMONS_ENRICH_CONCURRENCY || 10); 
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
 const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
-
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
@@ -16,15 +19,27 @@ const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales
 const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/v1/items/details";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
-
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 const SNAPSHOT_SALES_CONCURRENCY = Number(process.env.SNAPSHOT_SALES_CONCURRENCY || 18);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
-const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [450557238, 20011925, 1080949, 1098282, 14463095];
-const ROBLOX_RECENT_DISCOVERY_KEYWORDS = ["8-Bit Clockwork Shades", "Oozing Oscar", "Bunny Ears", "Lampshade", "Pinstripe Fedora", "Clockwork's Golden Shades", "Fall Fairy"];
-
+const ROBLOX_RECENT_DISCOVERY_ASSET_IDS = [
+  450557238,
+  20011925,
+  1080949,
+  1098282,
+  14463095,
+];
+const ROBLOX_RECENT_DISCOVERY_KEYWORDS = [
+  "8-Bit Clockwork Shades",
+  "Oozing Oscar",
+  "Bunny Ears",
+  "Lampshade",
+  "Pinstripe Fedora",
+  "Clockwork's Golden Shades",
+  "Fall Fairy",
+];
 const ROBLOX_RECENT_SEARCH_ALIASES = new Map([
   [450557238, ["8-bit clockwork shades", "8 bit clockwork shades", "8-bit clockwork", "8 bit clockwork", "clockwork shades"]],
   [20011925, ["oozing oscar", "oscar"]],
@@ -44,9 +59,6 @@ const detailCache = new Map();
 const portfolioCache = new Map();
 const rolimonsSalesCache = new Map();
 const latestItemSnapshotCache = new Map();
-
-let rolimonsEnrichedCache = null;
-let lastRolimonsEnrichmentAt = 0;
 let rolimonsCache = null;
 let robloxCsrfToken = "";
 let lastSnapshotRunAt = 0;
@@ -674,7 +686,9 @@ function findPeriodBaselineValue(history, days) {
   }
 
   const targetTime = getPeriodStartTime(days);
+  let latestBeforePeriod = null;
   let firstInsidePeriod = null;
+  let latestTime = 0;
 
   for (const point of history) {
     const value = Number(point.value);
@@ -685,13 +699,20 @@ function findPeriodBaselineValue(history, days) {
       continue;
     }
 
-    if (time >= targetTime && source !== "current") {
+    latestTime = Math.max(latestTime, time);
+
+    if (time <= targetTime && source !== "current") {
+      latestBeforePeriod = value;
+    } else if (time > targetTime && source !== "current" && firstInsidePeriod === null) {
       firstInsidePeriod = value;
-      break;
     }
   }
 
-  return firstInsidePeriod;
+  if (latestTime > 0 && latestTime < targetTime) {
+    return null;
+  }
+
+  return latestBeforePeriod ?? firstInsidePeriod;
 }
 
 function getStartOfTodayTime() {
@@ -1742,7 +1763,6 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-// Original fetch function required for Market Index & Snapshots
 async function fetchRolimonsItems() {
   if (rolimonsCache && Date.now() - rolimonsCache.fetchedAt < ROLIMONS_CACHE_TTL_MS) {
     return rolimonsCache.items;
@@ -1753,42 +1773,6 @@ async function fetchRolimonsItems() {
     timeoutMs: 5000,
   });
   const rawItems = data && typeof data.items === "object" ? data.items : {};
-  
-  // Map Rolimons JSON to your internal item structure
-  const items = Object.entries(rawItems).map(([assetId, values]) => ({
-    assetId: Number(assetId),
-    name: String(values[0] || "Unknown Limited"),
-    acronym: String(values[1] || ""),
-    rap: Number(values[2]) > 0 ? Number(values[2]) : null,
-    value: Number(values[3]) > 0 ? Number(values[3]) : null,
-    lowestPrice: 0, // No price in basic item details
-    availableCopies: null,
-    totalCopies: null,
-    thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
-    creatorName: "Roblox",
-    itemType: "Asset",
-    marketType: "roblox",
-  })).filter((item) => item.assetId > 0 && item.rap);
-
-  rolimonsCache = {
-    fetchedAt: Date.now(),
-    items,
-  };
-
-  return items;
-}
-
-async function fetchRolimonsItemsWithMetrics() {
-  // Use a separate cache so we don't break the main index
-  if (rolimonsEnrichedCache && Date.now() - rolimonsEnrichedCache.fetchedAt < ROLIMONS_ENRICH_CACHE_TTL_MS) {
-    return rolimonsEnrichedCache.items;
-  }
-
-  // Fetch directly from Rolimons API (Embedded to avoid dependency errors)
-  const data = await fetchJson(ROLIMONS_ITEM_DETAILS_URL, { retries: 1, timeoutMs: 5000 });
-  const rawItems = data && typeof data.items === "object" ? data.items : {};
-  
-  // Standardize the item format
   const items = Object.entries(rawItems).map(([assetId, values]) => ({
     assetId: Number(assetId),
     name: String(values[0] || "Unknown Limited"),
@@ -1804,72 +1788,13 @@ async function fetchRolimonsItemsWithMetrics() {
     marketType: "roblox",
   })).filter((item) => item.assetId > 0 && item.rap);
 
-  if (items.length === 0) return [];
+  rolimonsCache = {
+    fetchedAt: Date.now(),
+    items,
+  };
 
-  // Merge with your existing snapshot data for history/sales info
-  const snapshotData = await fetchLatestItemSnapshotItems();
-  const snapshotMap = new Map(snapshotData.map(i => [i.assetId, i]));
-
-  let enrichedItems = items.map(item => {
-    const snap = snapshotMap.get(item.assetId);
-    return {
-      ...item,
-      sales24h: snap?.volume_24h || item.sales24h || null,
-      sales7d: snap?.volume_7d || item.sales7d || null,
-      sales30d: snap?.volume_30d || item.sales30d || null,
-      profit24h: null, loss24h: null, profit7d: null, loss7d: null, change24h: null, change7d: null, // Initialize metric fields
-    };
-  });
-
-  // 2. Batch fetch missing resale history safely (Rate Limit Safe)
-  const itemsNeedingResale = enrichedItems.filter(i => !i.sales24h && !i.sales7d);
-  if (itemsNeedingResale.length > 0) {
-    console.log(`[Enrich] Fetching live resale data for ${itemsNeedingResale.length} limiteds...`);
-    
-    // Map assetId to collectibleItemId for fetch logic
-    const ids = itemsNeedingResale.map(i => i.collectibleItemId || i.assetId);
-    const resaleDataMap = await fetchMarketplaceItemDetailsBatch(ids);
-
-    enrichedItems = await mapWithConcurrency(enrichedItems, 10, async (item) => {
-      let resale = {};
-      if (item.collectibleItemId && item.assetId > 10_000_000_000) {
-        resale = await fetchCollectibleResaleData(item.collectibleItemId);
-      } else if (item.assetId > 0) {
-        resale = await fetchResaleData(item.assetId);
-      }
-
-      // Calculate volume and history metrics from this new data
-      const history = normalizeHistoryPoints(resale.priceDataPoints);
-      const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
-      const m24h = calculateSalesMetrics(salesHistory, 1);
-      const m7d = calculateSalesMetrics(salesHistory, 7);
-
-      // Use live data if snapshot didn't have it
-      const sales24h = item.sales24h || m24h.salesCount;
-      const sales7d = item.sales7d || m7d.salesCount;
-
-      // Calculate profit/loss based on baseline changes
-      const bp24h = findPeriodBaselineValue(history, 1);
-      const bp7d = findPeriodBaselineValue(history, 7);
-
-      return {
-        ...item,
-        rap: firstPositiveNumber(item.rap, resale.recentAveragePrice),
-        lowestPrice: clearPriceWithoutSellers(firstPositiveNumber(resale.lowestResalePrice, item.lowestPrice), item.availableCopies),
-        sales24h, sales7d,
-        profit24h: bp24h ? percentGain(bp24h, m24h.averageSalePrice) : null,
-        loss24h: bp24h ? percentDrop(bp24h, m24h.averageSalePrice) : null,
-        profit7d: bp7d ? percentGain(bp7d, m7d.averageSalePrice) : null,
-        loss7d: bp7d ? percentDrop(bp7d, m7d.averageSalePrice) : null,
-        change24h: bp24h ? percentChange(bp24h, item.rap) : null,
-      };
-    });
-  }
-
-  rolimonsEnrichedCache = { fetchedAt: Date.now(), items: enrichedItems };
-  return enrichedItems;
+  return items;
 }
-
 
 async function fetchRolimonsItemSales(assetId) {
   const safeAssetId = Math.floor(Number(assetId) || 0);
@@ -3209,10 +3134,6 @@ async function fetchFastRobloxIndexPage({
 
   if (metricKey) {
     items = await addHistoryMetricsBatch(items);
-    // Stored snapshots may be sparse for profit/loss sorts; re-check a broad
-    // candidate set with live resale history (same approach as Rolimon path).
-    const candidatePool = interleaveForCoverage(items).slice(0, Math.max(limit * 12, 360));
-    items = await addLiveHistoryMetricsBatch(candidatePool);
     items = items
       .filter((item) => Number(item[metricKey]) > 0)
       .sort((a, b) => compareChangeMetric(a, b, metricKey, String(sort).startsWith("loss_")));
@@ -3806,180 +3727,30 @@ async function handleRequest(req, res) {
     return;
   }
 
-    if (url.pathname === "/api/limiteds") {
+  if (url.pathname === "/api/limiteds") {
     try {
-      const sort = url.searchParams.get("sort") || "updated";
-      
-      // --- STEP 1: GET THE BASE LIST (RAP & PRICE) ---
-      let items = await getRobloxMarketIndex();
-      
-      // Fallback safety
-      if (!items || !Array.isArray(items) || items.length === 0) {
-        sendJson(res, 200, { ok: true, items: [], nextPageCursor: "", updatedAt: new Date().toISOString() });
-        return;
-      }
-
-      // --- STEP 2: HANDLE HEAVY CATEGORIES (SALES & CHANGES) ---
-      // If they want changes/sales, we MUST fetch the actual history first.
-      if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought_")) {
-        console.log(`[API] Fetching sales data for ${sort}...`);
-        
-        // 1. Get our Rolimons index which has the raw sales counts
-        const rolimons = await fetchRolimonsItemsWithMetrics();
-        
-        // 2. Map the Rolimons sales count to our items
-        items = items.map(item => {
-          // Find the matching item in the fresh Rolimons list
-          const match = rolimons.find(r => Number(r.assetId) === item.assetId);
-          
-          // Calculate metrics based on history
-          let volume = 0;
-          let profit = null;
-
-          if (match) {
-            volume = match.volume24h || match.volume7d || match.volume30d || match.salesAllTime || 0;
-            profit = match.profit24h || match.profit7d || match.profit30d || match.profit1y || match.profitAllTime;
-          }
-
-          return {
-            ...item,
-            salesCount: Number(volume),
-            volume24h: Number(match?.volume24h || 0),
-            profit7d: Number(profit || 0) // Use the best available profit metric
-          };
-        });
-      }
-
-      // --- STEP 3: NORMALIZE ALL ITEMS (Ensure data exists for display) ---
-      const safeItems = items.map(item => {
-        const rap = Number(item.rap) || 0;
-        const price = Number(item.lowestPrice) || 0;
-
-        return {
-          ...item,
-          rap: rap,
-          lowestPrice: price,
-          
-          // Calculate Deals/Overpriced if they aren't already calculated
-          dealPercent: (item.dealPercent != null) ? Number(item.dealPercent) : (price > 0 && rap > price ? Math.round(((rap - price) / rap) * 100) : 0),
-          overpricedPercent: (item.overpricedPercent != null) ? Number(item.overpricedPercent) : (price > 0 && rap < price ? Math.round(((price - rap) / rap) * 100) : 0),
-          
-          // Ensure Sales/Profit are numbers
-          salesCount: Number(item.salesCount || item.volume24h || 0),
-          profit7d: Number(item.profit7d || 0),
-        };
+      const data = await fetchCatalogPage({
+        cursor: url.searchParams.get("cursor") || "",
+        limit: url.searchParams.get("limit") || "30",
+        keyword: url.searchParams.get("keyword") || "",
+        marketType: url.searchParams.get("type") || "ugc",
+        sort: url.searchParams.get("sort") || "updated",
+        minPrice: url.searchParams.get("minPrice"),
+        maxPrice: url.searchParams.get("maxPrice"),
+        minRap: url.searchParams.get("minRap"),
+        maxRap: url.searchParams.get("maxRap"),
       });
 
-      let results = [];
-      const limit = Number(url.searchParams.get("limit") || 30);
-      
-      // --- STEP 4: SORT BY CATEGORY ---
-      switch(sort) {
-        case "name_asc":
-          results = [...safeItems].sort((a,b) => a.name.localeCompare(b.name));
-          break;
-        
-        case "rap_desc":
-          results = [...safeItems].sort((a,b) => b.rap - a.rap);
-          break;
-          
-        case "price_asc" || "lowest_price":
-          // Must have a price > 0 to be a deal
-          results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
-          break;
-          
-        case "highest_price" || "price_desc":
-          // Must have a price > 0
-          results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
-          break;
-          
-        case "deal_desc":
-          // Only show items that are actually cheaper than their RAP
-          results = safeItems.filter(i => i.dealPercent > 1).sort((a,b) => b.dealPercent - a.dealPercent);
-          break;
-          
-        case "overpriced_desc":
-          // Only show items that are actually more expensive than their RAP
-          results = safeItems.filter(i => i.overpricedPercent > 1).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
-          break;
-
-        case "profit_24h" || "changes_profit_24h":
-          // Filter for actual positive changes
-          results = safeItems.filter(i => i.profit7d > 0).sort((a,b) => b.profit7d - a.profit7d);
-          break;
-
-        case "loss_24h" || "changes_loss_24h":
-           // Filter for actual negative changes
-          results = safeItems.filter(i => i.loss7d > 0).sort((a,b) => b.loss7d - a.loss7d);
-          break;
-
-        case "bought_24h" || "sales_24h":
-          // Filter for items that actually moved (1+ sales)
-          results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
-          break;
-
-        default:
-          // Recent/Updated
-          results = [...safeItems].sort((a,b) => Number(b.assetId) - Number(a.assetId));
-      }
-
-      sendJson(res, 200, {
-        ok: true,
-        items: results.slice(0, limit),
-        nextPageCursor: "",
-        updatedAt: new Date().toISOString()
+      sendJson(res, 200, data);
+    } catch (error) {
+      sendJson(res, 502, {
+        error: "Could not load Roblox limiteds right now.",
+        detail: error.message,
       });
-
-    } catch (e) {
-      console.error("[LIMITEDS API ERROR]", e);
-      sendJson(res, 200, { ok: false, error: e.message || "Failed to load limiteds", items: [], nextPageCursor: "" });
     }
+
     return;
   }
-
-if (url.pathname === "/api/rolimons-all-metrics") {
-  try {
-    const items = await fetchRolimonsItemsWithMetrics();
-    const safeItems = items.map(i => ({
-      assetId: i.assetId, name: i.name, acronym: i.acronym, thumbnail: i.thumbnail,
-      rap: i.rap, lowestPrice: i.lowestPrice, availableCopies: i.availableCopies, totalCopies: i.totalCopies,
-      sales24h: Number(i.sales24h) || 0, sales7d: Number(i.sales7d) || 0, sales30d: Number(i.sales30d) || 0,
-      profit24h: i.profit24h || null, loss24h: i.loss24h || null,
-      profit7d: i.profit7d || null, loss7d: i.loss7d || null,
-      change24h: i.change24h || null, change7d: i.change7d || null, change30d: i.change30d || null,
-    }));
-    sendJson(res, 200, { items: safeItems, total: safeItems.length, updatedAt: new Date().toISOString() });
-  } catch (error) {
-    sendJson(res, 502, { error: "Metric enrichment failed.", detail: error.message });
-  }
-  return;
-}
-
-
-
-if (url.pathname === "/api/rolimons-all-metrics") {
-  try {
-    const items = await fetchRolimonsItemsWithMetrics();
-    // Guarantee every single field exists for frontend consumption
-    const safeItems = items.map(i => ({
-      assetId: i.assetId, name: i.name, acronym: i.acronym, thumbnail: i.thumbnail,
-      rap: i.rap, lowestPrice: i.lowestPrice, availableCopies: i.availableCopies, totalCopies: i.totalCopies,
-      // Sales
-      sales24h: Number(i.sales24h) || 0, sales7d: Number(i.sales7d) || 0, sales30d: Number(i.sales30d) || 0,
-      // Profit/Loss
-      profit24h: i.profit24h || null, loss24h: i.loss24h || null,
-      profit7d: i.profit7d || null, loss7d: i.loss7d || null,
-      // Changes (Movers)
-      change24h: i.change24h || null, change7d: i.change7d || null, change30d: i.change30d || null,
-    }));
-    
-    sendJson(res, 200, { items: safeItems, total: safeItems.length, updatedAt: new Date().toISOString() });
-  } catch (error) {
-    sendJson(res, 502, { error: "Metric enrichment failed.", detail: error.message });
-  }
-  return;
-}
-
 
   if (url.pathname === "/api/item") {
     try {
