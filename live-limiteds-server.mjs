@@ -3809,86 +3809,89 @@ async function handleRequest(req, res) {
 if (url.pathname === "/api/limiteds") {
   try {
     const sort = url.searchParams.get("sort") || "updated";
-    let items;
     
-    // --- STEP 1: Get the Master List (from Rolimons) ---
-    if (sort === "name_asc" || sort === "rap_desc") {
-      // For Name and Highest RAP, we just use our cached Rolimons list. It is fast.
-      items = await fetchRolimonsItems();
+    // Use the pre-warmed index that's already running in the background
+    let items = await getRobloxMarketIndex();
+    
+    // Fallback safety
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      sendJson(res, 200, { ok: true, items: [], nextPageCursor: "", updatedAt: new Date().toISOString() });
+      return;
+    }
+
+    // Guarantee every item has the exact fields your Lua script expects
+    const safeItems = items.map(item => ({
+      assetId: Number(item.assetId) || 0,
+      name: String(item.name || "Unknown Limited"),
+      rap: Number(item.rap) || 0,
+      lowestPrice: Number(item.lowestPrice) || 0,
+      totalCopies: Number(item.totalCopies) || 0,
+      availableCopies: Number(item.availableCopies) || 0,
+      creatorName: String(item.creatorName || ""),
+      itemType: String(item.itemType || "Asset"),
+      thumbnail: item.thumbnail || `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`,
       
-      if (sort === "name_asc") {
-        items.sort((a, b) => a.name.localeCompare(b.name));
-      } else {
-        items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
-      }
-    } 
-    
-    // --- STEP 2: For everything else (Prices/Deals), we need Roblox Catalog data ---
-    else {
-      console.log(`[Sort] Fetching Roblox Catalog for ${sort}...`);
-      
-      // We fetch the raw catalog data directly to get the real prices
-      const res = await fetchCatalogPage({ 
-        cursor: "", limit: 30, marketType: "roblox", sort: "price_desc" 
-      });
+      // Calculate missing metrics in-memory (fast & safe)
+      dealPercent: item.dealPercent != null ? Number(item.dealPercent) : (Number((item.rap - item.lowestPrice) / Math.max(1, item.rap) * 100)),
+      overpricedPercent: item.overpricedPercent != null ? Number(item.overpricedPercent) : (Number((item.lowestPrice - item.rap) / Math.max(1, item.rap) * 100)),
+      salesCount: Number(item.salesCount || item.volume24h || item.bought_24h || 0),
+      volume24h: Number(item.volume24h || item.bought_24h || 0),
+      profit24h: Number(item.profit24h || 0),
+      loss24h: Number(item.loss24h || 0),
+      profit7d: Number(item.profit7d || 0),
+      loss7d: Number(item.loss7d || 0),
+    }));
 
-      // Map Roblox data to our standard format
-      items = (res.items || []).map(i => ({
-        assetId: Number(i.id),
-        name: i.name,
-        rap: Number(i.recentAveragePrice) || 0,
-        lowestPrice: Number(i.lowestResalePrice) || 0,
-        totalCopies: Number(i.totalQuantity),
-        thumbnail: `rbxthumb://type=Asset&id=${i.id}&w=420&h=420`,
-        itemType: i.itemType,
-      }));
+    let results = [];
+    const limit = Number(url.searchParams.get("limit") || 30);
+
+    // Map frontend sort keys to exact backend logic
+    switch(sort) {
+      case "name_asc":
+        results = [...safeItems].sort((a,b) => a.name.localeCompare(b.name));
+        break;
+      case "rap_desc":
+        results = [...safeItems].sort((a,b) => b.rap - a.rap);
+        break;
+      case "price_asc" || "lowest_price":
+        results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
+        break;
+      case "highest_price" || "price_desc":
+        results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
+        break;
+      case "deal_desc":
+        results = safeItems.filter(i => i.dealPercent > 1).sort((a,b) => b.dealPercent - a.dealPercent);
+        break;
+      case "overpriced_desc":
+        results = safeItems.filter(i => i.overpricedPercent > 1).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
+        break;
+      case "profit_24h" || "changes_profit_24h":
+        results = safeItems.filter(i => i.profit24h > 0).sort((a,b) => b.profit24h - a.profit24h);
+        break;
+      case "loss_24h" || "changes_loss_24h":
+        results = safeItems.filter(i => i.loss24h > 0).sort((a,b) => b.loss24h - a.loss24h);
+        break;
+      case "bought_24h" || "sales_24h":
+        results = safeItems.filter(i => Number(i.salesCount || i.volume24h) > 0).sort((a,b) => (Number(b.salesCount || b.volume24h)) - (Number(a.salesCount || a.volume24h)));
+        break;
+      default: // recent / updated / name fallback
+        results = [...safeItems].sort((a,b) => Number(b.assetId) - Number(a.assetId));
     }
 
-    // --- STEP 3: Handle Specific Logic for "Deals", "Sales", etc. ---
-    if (sort === "deal_desc") {
-      items = items.filter(i => i.lowestPrice > 0 && i.rap > i.lowestPrice).map(i => ({
-        ...i, dealPercent: Math.round(((i.rap - i.lowestPrice) / i.rap) * 100)
-      }));
-      items.sort((a,b) => b.dealPercent - a.dealPercent);
-    } 
-    
-    else if (sort === "overpriced_desc") {
-      items = items.filter(i => i.lowestPrice > 0 && i.rap < i.lowestPrice).map(i => ({
-        ...i, overpricedPercent: Math.round(((i.lowestPrice - i.rap) / i.rap) * 100)
-      }));
-      items.sort((a,b) => b.overpricedPercent - a.overpricedPercent);
-    } 
-    
-    else if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought_")) {
-      // Use the enriched cache we built earlier for sales/volume metrics
-      items = await fetchRolimonsItemsWithMetrics();
-      items = items.filter(i => i.salesCount > 0);
-      items.sort((a,b) => (b.salesCount || 0) - (a.salesCount || 0));
-    }
-
-    else if (sort === "price_asc") {
-      // Sort by lowest price (Cheapest first)
-      items = items.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
-    }
-    
-    else if (sort === "highest_price") {
-       // Sort by highest price (Expensive first)
-       items = items.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
-    }
-
-    // --- RETURN: Ensure we return the EXACT format your Lua script needs ---
     sendJson(res, 200, {
-      ok: true, 
-      items: items.slice(0, Number(url.searchParams.get("limit") || 30)),
+      ok: true,
+      items: results.slice(0, limit),
       nextPageCursor: "",
       updatedAt: new Date().toISOString()
     });
 
-  } catch (error) {
-    sendJson(res, 502, { error: "Error loading limiteds.", detail: error.message });
+  } catch (e) {
+    console.error("[LIMITEDS API ERROR]", e);
+    sendJson(res, 200, { ok: false, error: e.message || "Failed to load limiteds", items: [], nextPageCursor: "" });
   }
   return;
 }
+
 
 
 
