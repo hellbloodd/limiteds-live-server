@@ -3806,94 +3806,106 @@ async function handleRequest(req, res) {
     return;
   }
 
-if (url.pathname === "/api/limiteds") {
-  try {
-    const sort = url.searchParams.get("sort") || "updated";
-    
-    // Use the pre-warmed index that's already running in the background
-    let items = await getRobloxMarketIndex();
-    
-    // Fallback safety
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      sendJson(res, 200, { ok: true, items: [], nextPageCursor: "", updatedAt: new Date().toISOString() });
-      return;
-    }
-
-    // Guarantee every item has the exact fields your Lua script expects
-    const safeItems = items.map(item => ({
-      assetId: Number(item.assetId) || 0,
-      name: String(item.name || "Unknown Limited"),
-      rap: Number(item.rap) || 0,
-      lowestPrice: Number(item.lowestPrice) || 0,
-      totalCopies: Number(item.totalCopies) || 0,
-      availableCopies: Number(item.availableCopies) || 0,
-      creatorName: String(item.creatorName || ""),
-      itemType: String(item.itemType || "Asset"),
-      thumbnail: item.thumbnail || `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`,
+  if (url.pathname === "/api/limiteds") {
+    try {
+      const sort = url.searchParams.get("sort") || "updated";
       
-      // Calculate missing metrics in-memory (fast & safe)
-      dealPercent: item.dealPercent != null ? Number(item.dealPercent) : (Number((item.rap - item.lowestPrice) / Math.max(1, item.rap) * 100)),
-      overpricedPercent: item.overpricedPercent != null ? Number(item.overpricedPercent) : (Number((item.lowestPrice - item.rap) / Math.max(1, item.rap) * 100)),
-      salesCount: Number(item.salesCount || item.volume24h || item.bought_24h || 0),
-      volume24h: Number(item.volume24h || item.bought_24h || 0),
-      profit24h: Number(item.profit24h || 0),
-      loss24h: Number(item.loss24h || 0),
-      profit7d: Number(item.profit7d || 0),
-      loss7d: Number(item.loss7d || 0),
-    }));
+      // 1. Get the list from your background cache
+      let items = await getRobloxMarketIndex();
+      
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        sendJson(res, 200, { ok: true, items: [], nextPageCursor: "", updatedAt: new Date().toISOString() });
+        return;
+      }
 
-    let results = [];
-    const limit = Number(url.searchParams.get("limit") || 30);
+      // 2. Ensure every single item has the fields your Lua script needs to display them
+      const safeItems = items.map(item => ({
+        assetId: Number(item.assetId) || 0,
+        name: String(item.name || "Unknown Limited"),
+        rap: Number(item.rap) || 0,
+        lowestPrice: Number(item.lowestPrice) || 0,
+        totalCopies: Number(item.totalCopies) || 0,
+        availableCopies: Number(item.availableCopies) || 0,
+        creatorName: String(item.creatorName || ""),
+        itemType: String(item.itemType || "Asset"),
+        thumbnail: item.thumbnail || `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`,
+        
+        // Calculate these numbers right now if they are missing in the cache
+        dealPercent: (Number(item.dealPercent) != null && Number(item.dealPercent) > 0) 
+                     ? Number(item.dealPercent) 
+                     : (item.lowestPrice > 0 && item.rap > item.lowestPrice) ? Math.round(((item.rap - item.lowestPrice) / item.rap * 100)) : 0,
+        
+        overpricedPercent: (Number(item.overpricedPercent) != null && Number(item.overpricedPercent) > 0) 
+                         ? Number(item.overpricedPercent) 
+                         : (item.lowestPrice > 0 && item.rap < item.lowestPrice) ? Math.round(((item.lowestPrice - item.rap) / item.rap * 100)) : 0,
 
-    // Map frontend sort keys to exact backend logic
-    switch(sort) {
-      case "name_asc":
+        salesCount: Number(item.salesCount || item.volume24h || item.bought_24h || 0),
+        profit7d: Number(item.profit7d || 0),
+        loss7d: Number(item.loss7d || 0),
+      }));
+
+      let results = [];
+      const limit = Number(url.searchParams.get("limit") || 30);
+      const sortType = url.searchParams.get("sort");
+
+      // --- CATEGORIZED SORTING LOGIC ---
+
+      if (sortType === "name_asc") {
         results = [...safeItems].sort((a,b) => a.name.localeCompare(b.name));
-        break;
-      case "rap_desc":
+      
+      } else if (sortType === "rap_desc") {
         results = [...safeItems].sort((a,b) => b.rap - a.rap);
-        break;
-      case "price_asc" || "lowest_price":
+      
+      } else if (sortType === "price_asc" || sortType === "lowest_price") {
+        // Lowest Price: Must have a real price to show
         results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
-        break;
-      case "highest_price" || "price_desc":
+      
+      } else if (sortType === "highest_price" || sortType === "price_desc") {
+        // Highest Price: Must have a real price to show
         results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
-        break;
-      case "deal_desc":
+      
+      } else if (sortType === "deal_desc") {
+        // Deals: Only items that are actually cheaper than their RAP value
         results = safeItems.filter(i => i.dealPercent > 1).sort((a,b) => b.dealPercent - a.dealPercent);
-        break;
-      case "overpriced_desc":
+      
+      } else if (sortType === "overpriced_desc") {
+        // Overpriced: Only items that are actually more expensive than their RAP value
         results = safeItems.filter(i => i.overpricedPercent > 1).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
-        break;
-      case "profit_24h" || "changes_profit_24h":
-        results = safeItems.filter(i => i.profit24h > 0).sort((a,b) => b.profit24h - a.profit24h);
-        break;
-      case "loss_24h" || "changes_loss_24h":
-        results = safeItems.filter(i => i.loss24h > 0).sort((a,b) => b.loss24h - a.loss24h);
-        break;
-      case "bought_24h" || "sales_24h":
-        results = safeItems.filter(i => Number(i.salesCount || i.volume24h) > 0).sort((a,b) => (Number(b.salesCount || b.volume24h)) - (Number(a.salesCount || a.volume24h)));
-        break;
-      default: // recent / updated / name fallback
+      
+      } else if (sortType === "profit_24h" || sortType === "changes_profit_24h") {
+        // Profit: Filter for actual positive profit, otherwise fallback to volume
+        results = safeItems.filter(i => i.profit7d > 0).sort((a,b) => b.profit7d - a.profit7d);
+        if (results.length === 0) results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
+      
+      } else if (sortType === "loss_24h" || sortType === "changes_loss_24h") {
+        // Loss: Filter for negative changes, otherwise fallback to volume
+        results = safeItems.filter(i => i.loss7d > 0).sort((a,b) => b.loss7d - a.loss7d);
+        if (results.length === 0) results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
+
+      } else if (sortType === "bought_24h" || sortType === "sales_24h") {
+        // Sales: Filter out items with literally no sales history
+        results = safeItems.filter(i => Number(i.salesCount) > 0).sort((a,b) => b.salesCount - a.salesCount);
+      }
+
+      else {
+        // Default (Recent/Name)
         results = [...safeItems].sort((a,b) => Number(b.assetId) - Number(a.assetId));
+      }
+
+      // Return the final list to your Roblox game
+      sendJson(res, 200, {
+        ok: true,
+        items: results.slice(0, limit),
+        nextPageCursor: "",
+        updatedAt: new Date().toISOString()
+      });
+
+    } catch (e) {
+      console.error("[LIMITEDS API ERROR]", e);
+      sendJson(res, 200, { ok: false, error: e.message || "Failed to load limiteds", items: [], nextPageCursor: "" });
     }
-
-    sendJson(res, 200, {
-      ok: true,
-      items: results.slice(0, limit),
-      nextPageCursor: "",
-      updatedAt: new Date().toISOString()
-    });
-
-  } catch (e) {
-    console.error("[LIMITEDS API ERROR]", e);
-    sendJson(res, 200, { ok: false, error: e.message || "Failed to load limiteds", items: [], nextPageCursor: "" });
+    return;
   }
-  return;
-}
-
-
-
 
 if (url.pathname === "/api/rolimons-all-metrics") {
   try {
