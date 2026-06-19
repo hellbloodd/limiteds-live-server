@@ -3810,136 +3810,86 @@ if (url.pathname === "/api/limiteds") {
   try {
     const sort = url.searchParams.get("sort") || "updated";
     let items;
-
-    // --- CATEGORY 1: CHANGES & SALES (Uses Cached Rolimons Data) ---
-    // These rely on the metrics we calculated in fetchRolomonsItemsWithMetrics
-    if (sort.startsWith("profit_") || sort.startsWith("loss_") || sort.startsWith("bought_")) {
-      items = await fetchRolimonsItemsWithMetrics();
+    
+    // --- STEP 1: Get the Master List (from Rolimons) ---
+    if (sort === "name_asc" || sort === "rap_desc") {
+      // For Name and Highest RAP, we just use our cached Rolimons list. It is fast.
+      items = await fetchRolimonsItems();
       
-      const metricMap = {
-        "profit_24h": "profit24h", "loss_24h": "loss24h", "bought_24h": "salesCount",
-        "profit_7d": "profit7d", "loss_7d": "loss7d", "bought_7d": "salesCount",
-        "profit_30d": "profit30d", "loss_30d": "loss30d", "bought_30d": "salesCount",
-        "profit_1y": "profit1y", "loss_1y": "loss1y", "bought_1y": "salesCount",
-        "profit_all": "profitAllTime", "loss_all": "lossAllTime", "bought_all": "salesCount"
-      };
-      
-      const metricKey = metricMap[sort];
-      
-      // Filter out items with no sales or metrics (as requested)
-      items = items.filter(i => i[metricKey] && i[metricKey] > 0);
-      
-      // Sort by that metric descending
-      items.sort((a, b) => (b[metricKey] || 0) - (a[metricKey] || 0));
+      if (sort === "name_asc") {
+        items.sort((a, b) => a.name.localeCompare(b.name));
+      } else {
+        items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
+      }
     } 
     
-    // --- CATEGORY 2: NAME (Alphabetical) ---
-    else if (sort === "name_asc") {
-       items = await fetchRolimonsItems();
-       items.sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    // --- CATEGORY 3: HIGHEST RAP (Sorts Rolimons Data directly) ---
-    else if (sort === "rap_desc") {
-      items = await fetchRolimonsItems();
-      items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
-    }
-
-    // --- CATEGORY 4: PRICES (Uses Roblox Catalog API for speed/accuracy) ---
-    else if (sort === "price_asc" || sort === "price_desc") {
-      const data = await fetchCatalogPage({
-        cursor: "", limit: 30, marketType: "roblox", sort: sort
+    // --- STEP 2: For everything else (Prices/Deals), we need Roblox Catalog data ---
+    else {
+      console.log(`[Sort] Fetching Roblox Catalog for ${sort}...`);
+      
+      // We fetch the raw catalog data directly to get the real prices
+      const res = await fetchCatalogPage({ 
+        cursor: "", limit: 30, marketType: "roblox", sort: "price_desc" 
       });
-      // Map the Catalog API response to our standard item format
-      items = (data.items || []).map(i => ({
+
+      // Map Roblox data to our standard format
+      items = (res.items || []).map(i => ({
         assetId: Number(i.id),
         name: i.name,
         rap: Number(i.recentAveragePrice) || 0,
         lowestPrice: Number(i.lowestResalePrice) || 0,
-        availableCopies: Number(i.unitsAvailableForConsumption),
         totalCopies: Number(i.totalQuantity),
         thumbnail: `rbxthumb://type=Asset&id=${i.id}&w=420&h=420`,
-        creatorName: i.creatorName || "Roblox",
         itemType: i.itemType,
       }));
     }
 
-    // --- CATEGORY 5: DEALS & OVERPRICED (Needs RAP + Price) ---
-    else if (sort === "deal_desc" || sort === "overpriced_desc") {
-      // We fetch the top candidates from Rolimons and check their prices live
-      const rolimonsItems = await fetchRolimonsItems();
-      
-      // Fetch details for the top 50 high-RAP items to find deals/overprice
-      const candidateIds = rolimonsItems.slice(0, 50).map(i => i.assetId);
-      const detailsBatch = await fetchCatalogDetailsBatch(candidateIds);
-      
-      let enrichedDeals = [];
-      for (const item of rolimonsItems) {
-        // Only process the candidates we just fetched data for
-        if (!detailsBatch.has(item.assetId)) continue;
-        
-        const catalogData = detailsBatch.get(item.assetId);
-        const livePrice = Number(catalogData.lowestResalePrice) || 0;
-        const rap = item.rap;
+    // --- STEP 3: Handle Specific Logic for "Deals", "Sales", etc. ---
+    if (sort === "deal_desc") {
+      items = items.filter(i => i.lowestPrice > 0 && i.rap > i.lowestPrice).map(i => ({
+        ...i, dealPercent: Math.round(((i.rap - i.lowestPrice) / i.rap) * 100)
+      }));
+      items.sort((a,b) => b.dealPercent - a.dealPercent);
+    } 
+    
+    else if (sort === "overpriced_desc") {
+      items = items.filter(i => i.lowestPrice > 0 && i.rap < i.lowestPrice).map(i => ({
+        ...i, overpricedPercent: Math.round(((i.lowestPrice - i.rap) / i.rap) * 100)
+      }));
+      items.sort((a,b) => b.overpricedPercent - a.overpricedPercent);
+    } 
+    
+    else if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought_")) {
+      // Use the enriched cache we built earlier for sales/volume metrics
+      items = await fetchRolimonsItemsWithMetrics();
+      items = items.filter(i => i.salesCount > 0);
+      items.sort((a,b) => (b.salesCount || 0) - (a.salesCount || 0));
+    }
 
-        if (livePrice <= 0 || rap <= 0) continue;
-
-        let dealValue = 0;
-        let dealPercent = 0;
-
-        if (sort === "deal_desc") {
-          if (livePrice < rap) {
-             dealValue = rap - livePrice;
-             dealPercent = Math.round((dealValue / rap) * 100);
-             // Only show deals > 10%
-             if (dealPercent >= 10) {
-               enrichedDeals.push({ ...item, lowestPrice: livePrice, dealValue, dealPercent });
-             }
-          }
-        } else if (sort === "overpriced_desc") {
-           if (livePrice > rap) {
-             const overpriceValue = livePrice - rap;
-             const overpricedPercent = Math.round((overpriceValue / rap) * 100);
-             // Only show overpriced > 10%
-             if (overpricedPercent >= 10) {
-               enrichedDeals.push({ ...item, lowestPrice: livePrice, overpricedValue: overpriceValue, overpricedPercent });
-             }
-           }
-        }
-      }
-
-      items = enrichedDeals.sort((a,b) => (b.dealPercent || 0) - (a.dealPercent || 0));
+    else if (sort === "price_asc") {
+      // Sort by lowest price (Cheapest first)
+      items = items.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
     }
     
-    // --- CATEGORY 6: RECENT (Newest to Oldest via Catalog API) ---
-    else if (sort === "recent" || sort === "updated") {
-      const data = await fetchCatalogPage({
-        cursor: "", limit: 30, marketType: "roblox", sort: "price_desc" // Catalog API doesn't support 'newest' directly in all scopes, price_desc often aligns with recent high-value
-      });
-       items = (data.items || []).map(i => ({
-        assetId: Number(i.id),
-        name: i.name,
-        rap: Number(i.recentAveragePrice) || 0,
-        lowestPrice: Number(i.lowestResalePrice) || 0,
-        thumbnail: `rbxthumb://type=Asset&id=${i.id}&w=420&h=420`,
-        itemType: i.itemType,
-      }));
+    else if (sort === "highest_price") {
+       // Sort by highest price (Expensive first)
+       items = items.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
     }
 
-    // --- RETURN RESULT ---
-    if (!items) items = [];
+    // --- RETURN: Ensure we return the EXACT format your Lua script needs ---
     sendJson(res, 200, {
+      ok: true, 
       items: items.slice(0, Number(url.searchParams.get("limit") || 30)),
-      totalAvailable: items.length,
+      nextPageCursor: "",
       updatedAt: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error(error);
     sendJson(res, 502, { error: "Error loading limiteds.", detail: error.message });
   }
   return;
 }
+
 
 
 if (url.pathname === "/api/rolimons-all-metrics") {
