@@ -3806,93 +3806,123 @@ async function handleRequest(req, res) {
     return;
   }
 
-  if (url.pathname === "/api/limiteds") {
+    if (url.pathname === "/api/limiteds") {
     try {
       const sort = url.searchParams.get("sort") || "updated";
       
-      // 1. Get the list from your background cache
+      // --- STEP 1: GET THE BASE LIST (RAP & PRICE) ---
       let items = await getRobloxMarketIndex();
       
+      // Fallback safety
       if (!items || !Array.isArray(items) || items.length === 0) {
         sendJson(res, 200, { ok: true, items: [], nextPageCursor: "", updatedAt: new Date().toISOString() });
         return;
       }
 
-      // 2. Ensure every single item has the fields your Lua script needs to display them
-      const safeItems = items.map(item => ({
-        assetId: Number(item.assetId) || 0,
-        name: String(item.name || "Unknown Limited"),
-        rap: Number(item.rap) || 0,
-        lowestPrice: Number(item.lowestPrice) || 0,
-        totalCopies: Number(item.totalCopies) || 0,
-        availableCopies: Number(item.availableCopies) || 0,
-        creatorName: String(item.creatorName || ""),
-        itemType: String(item.itemType || "Asset"),
-        thumbnail: item.thumbnail || `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`,
+      // --- STEP 2: HANDLE HEAVY CATEGORIES (SALES & CHANGES) ---
+      // If they want changes/sales, we MUST fetch the actual history first.
+      if (sort === "profit_24h" || sort === "loss_24h" || sort.startsWith("bought_")) {
+        console.log(`[API] Fetching sales data for ${sort}...`);
         
-        // Calculate these numbers right now if they are missing in the cache
-        dealPercent: (Number(item.dealPercent) != null && Number(item.dealPercent) > 0) 
-                     ? Number(item.dealPercent) 
-                     : (item.lowestPrice > 0 && item.rap > item.lowestPrice) ? Math.round(((item.rap - item.lowestPrice) / item.rap * 100)) : 0,
+        // 1. Get our Rolimons index which has the raw sales counts
+        const rolimons = await fetchRolimonsItemsWithMetrics();
         
-        overpricedPercent: (Number(item.overpricedPercent) != null && Number(item.overpricedPercent) > 0) 
-                         ? Number(item.overpricedPercent) 
-                         : (item.lowestPrice > 0 && item.rap < item.lowestPrice) ? Math.round(((item.lowestPrice - item.rap) / item.rap * 100)) : 0,
+        // 2. Map the Rolimons sales count to our items
+        items = items.map(item => {
+          // Find the matching item in the fresh Rolimons list
+          const match = rolimons.find(r => Number(r.assetId) === item.assetId);
+          
+          // Calculate metrics based on history
+          let volume = 0;
+          let profit = null;
 
-        salesCount: Number(item.salesCount || item.volume24h || item.bought_24h || 0),
-        profit7d: Number(item.profit7d || 0),
-        loss7d: Number(item.loss7d || 0),
-      }));
+          if (match) {
+            volume = match.volume24h || match.volume7d || match.volume30d || match.salesAllTime || 0;
+            profit = match.profit24h || match.profit7d || match.profit30d || match.profit1y || match.profitAllTime;
+          }
+
+          return {
+            ...item,
+            salesCount: Number(volume),
+            volume24h: Number(match?.volume24h || 0),
+            profit7d: Number(profit || 0) // Use the best available profit metric
+          };
+        });
+      }
+
+      // --- STEP 3: NORMALIZE ALL ITEMS (Ensure data exists for display) ---
+      const safeItems = items.map(item => {
+        const rap = Number(item.rap) || 0;
+        const price = Number(item.lowestPrice) || 0;
+
+        return {
+          ...item,
+          rap: rap,
+          lowestPrice: price,
+          
+          // Calculate Deals/Overpriced if they aren't already calculated
+          dealPercent: (item.dealPercent != null) ? Number(item.dealPercent) : (price > 0 && rap > price ? Math.round(((rap - price) / rap) * 100) : 0),
+          overpricedPercent: (item.overpricedPercent != null) ? Number(item.overpricedPercent) : (price > 0 && rap < price ? Math.round(((price - rap) / rap) * 100) : 0),
+          
+          // Ensure Sales/Profit are numbers
+          salesCount: Number(item.salesCount || item.volume24h || 0),
+          profit7d: Number(item.profit7d || 0),
+        };
+      });
 
       let results = [];
       const limit = Number(url.searchParams.get("limit") || 30);
-      const sortType = url.searchParams.get("sort");
+      
+      // --- STEP 4: SORT BY CATEGORY ---
+      switch(sort) {
+        case "name_asc":
+          results = [...safeItems].sort((a,b) => a.name.localeCompare(b.name));
+          break;
+        
+        case "rap_desc":
+          results = [...safeItems].sort((a,b) => b.rap - a.rap);
+          break;
+          
+        case "price_asc" || "lowest_price":
+          // Must have a price > 0 to be a deal
+          results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
+          break;
+          
+        case "highest_price" || "price_desc":
+          // Must have a price > 0
+          results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
+          break;
+          
+        case "deal_desc":
+          // Only show items that are actually cheaper than their RAP
+          results = safeItems.filter(i => i.dealPercent > 1).sort((a,b) => b.dealPercent - a.dealPercent);
+          break;
+          
+        case "overpriced_desc":
+          // Only show items that are actually more expensive than their RAP
+          results = safeItems.filter(i => i.overpricedPercent > 1).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
+          break;
 
-      // --- CATEGORIZED SORTING LOGIC ---
+        case "profit_24h" || "changes_profit_24h":
+          // Filter for actual positive changes
+          results = safeItems.filter(i => i.profit7d > 0).sort((a,b) => b.profit7d - a.profit7d);
+          break;
 
-      if (sortType === "name_asc") {
-        results = [...safeItems].sort((a,b) => a.name.localeCompare(b.name));
-      
-      } else if (sortType === "rap_desc") {
-        results = [...safeItems].sort((a,b) => b.rap - a.rap);
-      
-      } else if (sortType === "price_asc" || sortType === "lowest_price") {
-        // Lowest Price: Must have a real price to show
-        results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => a.lowestPrice - b.lowestPrice);
-      
-      } else if (sortType === "highest_price" || sortType === "price_desc") {
-        // Highest Price: Must have a real price to show
-        results = safeItems.filter(i => i.lowestPrice > 0).sort((a,b) => b.lowestPrice - a.lowestPrice);
-      
-      } else if (sortType === "deal_desc") {
-        // Deals: Only items that are actually cheaper than their RAP value
-        results = safeItems.filter(i => i.dealPercent > 1).sort((a,b) => b.dealPercent - a.dealPercent);
-      
-      } else if (sortType === "overpriced_desc") {
-        // Overpriced: Only items that are actually more expensive than their RAP value
-        results = safeItems.filter(i => i.overpricedPercent > 1).sort((a,b) => b.overpricedPercent - a.overpricedPercent);
-      
-      } else if (sortType === "profit_24h" || sortType === "changes_profit_24h") {
-        // Profit: Filter for actual positive profit, otherwise fallback to volume
-        results = safeItems.filter(i => i.profit7d > 0).sort((a,b) => b.profit7d - a.profit7d);
-        if (results.length === 0) results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
-      
-      } else if (sortType === "loss_24h" || sortType === "changes_loss_24h") {
-        // Loss: Filter for negative changes, otherwise fallback to volume
-        results = safeItems.filter(i => i.loss7d > 0).sort((a,b) => b.loss7d - a.loss7d);
-        if (results.length === 0) results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
+        case "loss_24h" || "changes_loss_24h":
+           // Filter for actual negative changes
+          results = safeItems.filter(i => i.loss7d > 0).sort((a,b) => b.loss7d - a.loss7d);
+          break;
 
-      } else if (sortType === "bought_24h" || sortType === "sales_24h") {
-        // Sales: Filter out items with literally no sales history
-        results = safeItems.filter(i => Number(i.salesCount) > 0).sort((a,b) => b.salesCount - a.salesCount);
+        case "bought_24h" || "sales_24h":
+          // Filter for items that actually moved (1+ sales)
+          results = safeItems.filter(i => i.salesCount > 0).sort((a,b) => b.salesCount - a.salesCount);
+          break;
+
+        default:
+          // Recent/Updated
+          results = [...safeItems].sort((a,b) => Number(b.assetId) - Number(a.assetId));
       }
 
-      else {
-        // Default (Recent/Name)
-        results = [...safeItems].sort((a,b) => Number(b.assetId) - Number(a.assetId));
-      }
-
-      // Return the final list to your Roblox game
       sendJson(res, 200, {
         ok: true,
         items: results.slice(0, limit),
