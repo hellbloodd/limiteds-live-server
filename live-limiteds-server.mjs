@@ -5,7 +5,7 @@
 // Deploy it to a public HTTPS host before using it in a published Roblox game.
 
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "complete-rolimons-catalog-2026-06-19-13";
+const SERVER_VERSION = "sales-source-fallbacks-2026-06-20-14";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -1015,6 +1015,8 @@ function salesMetricToActivity(metric) {
     averageActivePrice: metric.averageSalePrice,
     salesCount: metric.salesCount,
     averageSalePrice: metric.averageSalePrice,
+    salesSource: metric.salesSource || null,
+    salesEstimated: metric.salesEstimated === true,
   };
 }
 
@@ -1032,14 +1034,37 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
   const candidates = items
     .filter((item) => item.assetId > 0)
     .slice(0, maxItems);
+  const ownHistoryByAssetId = await fetchStoredSnapshotsForAssets(candidates.map((item) => item.assetId));
 
   const enriched = await mapWithConcurrency(candidates, 24, async (item) => {
     let resale = {};
     let latestHistoryPrice = null;
-    let sales = {
-      salesCount: itemSnapshotSalesForDays(item, days),
-      averageSalePrice: firstPositiveNumber(item.lowestPrice),
-    };
+    let sales = { salesCount: null, averageSalePrice: null, salesSource: null, salesEstimated: false };
+
+    // Prefer Rolimon's tracked transactions when its HTML is reachable.
+    const rolimonsSales = await fetchRolimonsItemSales(item.assetId);
+    const rolimonsHistory = Array.isArray(rolimonsSales.history) ? rolimonsSales.history : [];
+
+    if (rolimonsHistory.length > 0) {
+      sales = {
+        ...calculateSalesMetrics(rolimonsHistory, days),
+        salesSource: "rolimons",
+        salesEstimated: false,
+      };
+    }
+
+    if (!sales.salesCount) {
+      const rolimonsCount = rolimonsSalesForDays(rolimonsSales, days);
+
+      if (rolimonsCount) {
+        sales = {
+          salesCount: rolimonsCount,
+          averageSalePrice: firstPositiveNumber(item.lowestPrice),
+          salesSource: "rolimons",
+          salesEstimated: false,
+        };
+      }
+    }
 
     if (!sales.salesCount) {
       resale = item.collectibleItemId && item.assetId > 10_000_000_000
@@ -1052,7 +1077,11 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
         firstNonNegativeNumber(item.availableCopies, resale.numberRemaining)
       );
       const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, liveLowestPrice);
-      sales = calculateSalesMetrics(salesHistory, days);
+      sales = {
+        ...calculateSalesMetrics(salesHistory, days),
+        salesSource: "roblox",
+        salesEstimated: false,
+      };
 
       if (sales.salesCount && !sales.averageSalePrice) {
         sales.averageSalePrice = firstPositiveNumber(liveLowestPrice, latestHistoryPrice);
@@ -1060,13 +1089,28 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
     }
 
     if (!sales.salesCount) {
-      const rolimonsSales = await fetchRolimonsItemSales(item.assetId);
-      const rolimonsCount = rolimonsSalesForDays(rolimonsSales, days);
+      const ownHistory = ownHistoryByAssetId.get(item.assetId) || [];
+      const estimated = calculateActivityMetrics(ownHistory, days, item.rap, item.lowestPrice);
 
-      if (rolimonsCount) {
+      if (estimated.activityCount) {
         sales = {
-          salesCount: rolimonsCount,
+          salesCount: estimated.activityCount,
+          averageSalePrice: firstPositiveNumber(estimated.averageActivePrice, item.lowestPrice, latestHistoryPrice),
+          salesSource: "snapshots",
+          salesEstimated: true,
+        };
+      }
+    }
+
+    if (!sales.salesCount) {
+      const cachedCount = itemSnapshotSalesForDays(item, days);
+
+      if (cachedCount) {
+        sales = {
+          salesCount: cachedCount,
           averageSalePrice: firstPositiveNumber(item.lowestPrice, latestHistoryPrice),
+          salesSource: "cached",
+          salesEstimated: true,
         };
       }
     }
@@ -1087,12 +1131,12 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
       averageActivePrice: activity.averageActivePrice,
       salesCount: activity.activityCount,
       averageSalePrice: activity.averageActivePrice,
+      salesSource: activity.salesSource,
+      salesEstimated: activity.salesEstimated,
     };
   });
 
-  return enriched
-    .filter((item) => Number(item.salesCount ?? item.activityCount) > 0)
-    .sort(compareBoughtItems);
+  return enriched.sort(compareBoughtItems);
 }
 
 async function addSnapshotSalesMetrics(items) {
@@ -2723,6 +2767,10 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
     : resaleSalesHistory;
   const makeSalesActivity = (days) => {
     let sales = calculateSalesMetrics(salesHistory, days);
+    let salesSource = Array.isArray(rolimonsSales.history) && rolimonsSales.history.length > 0
+      ? "rolimons"
+      : (resaleSalesHistory.length > 0 ? "roblox" : null);
+    let salesEstimated = false;
 
     if (!sales.salesCount) {
       const count = rolimonsSalesForDays(rolimonsSales, days);
@@ -2732,10 +2780,24 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
           salesCount: count,
           averageSalePrice: firstPositiveNumber(lowestPrice, rawLowestPrice),
         };
+        salesSource = "rolimons";
       }
     }
 
-    return salesMetricToActivity(sales);
+    if (!sales.salesCount) {
+      const estimated = calculateActivityMetrics(ownHistory, days, rap, lowestPrice);
+
+      if (estimated.activityCount) {
+        sales = {
+          salesCount: estimated.activityCount,
+          averageSalePrice: firstPositiveNumber(estimated.averageActivePrice, lowestPrice, rawLowestPrice),
+        };
+        salesSource = "snapshots";
+        salesEstimated = true;
+      }
+    }
+
+    return salesMetricToActivity({ ...sales, salesSource, salesEstimated });
   };
   const activity24h = makeSalesActivity(1);
   const activity7d = makeSalesActivity(7);
@@ -3226,38 +3288,7 @@ async function fetchFastRobloxIndexPage({
       return true;
     });
 
-    const salesFromSnapshot = activeItems
-      .map((item) => {
-        const salesCount = itemSnapshotSalesForDays(item, boughtRangeDays);
-        const averageSalePrice = firstPositiveNumber(
-          boughtRangeDays <= 1 ? item.averageSalePrice24h : null,
-          boughtRangeDays <= 7 ? item.averageSalePrice7d : null,
-          boughtRangeDays <= 30 ? item.averageSalePrice30d : null,
-          item.averageSalePrice1y,
-          item.lowestPrice
-        );
-
-        return {
-          ...item,
-          activityCount: salesCount,
-          activityScore: salesCount,
-          averageActivePrice: averageSalePrice,
-          salesCount,
-          averageSalePrice,
-        };
-      })
-      .sort(compareBoughtItems);
-
-    if (salesFromSnapshot.some((item) => Number(item.salesCount) > 0)) {
-      return {
-        items: salesFromSnapshot.slice(offset, offset + limit),
-        nextPageCursor: cursorFromOffset(offset + limit, salesFromSnapshot.length),
-        previousPageCursor: offset > 0 ? cursorFromOffset(Math.max(0, offset - limit), salesFromSnapshot.length) : "",
-        updatedAt: new Date().toISOString(),
-      };
-    }
-
-    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays, Math.max(limit * 12, 360));
+    activeItems = await addResaleActivityMetrics(activeItems, boughtRangeDays, activeItems.length);
 
     return {
       items: activeItems.slice(offset, offset + limit),
