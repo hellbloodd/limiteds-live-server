@@ -1922,20 +1922,64 @@ async function fetchRolimonsItemSales(assetId) {
       return {};
     }
 
-    const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
-    const parseNum = (value) => value ? Number(String(value).replace(/,/g, "")) : null;
-    const data = {
-      sales24h: parseNum(text.match(/Past Day Sales\s*([\d,]+)/)?.[1]),
-      sales7d: parseNum(text.match(/Past Week Sales\s*([\d,]+)/)?.[1]),
-      sales30d: parseNum(text.match(/Past Month Sales\s*([\d,]+)/)?.[1]),
-      salesAllTime: parseNum(text.match(/All Tracked Sales\s*([\d,]+)/)?.[1]),
-    };
+    const data = parseRolimonsItemSalesHtml(html);
 
     rolimonsSalesCache.set(safeAssetId, { fetchedAt: Date.now(), data });
     return data;
   } catch {
     return {};
   }
+}
+
+function parseRolimonsItemSalesHtml(html) {
+  const source = String(html || "");
+  const text = source.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  const parseNum = (value) => value ? Number(String(value).replace(/,/g, "")) : null;
+  const data = {
+    sales24h: parseNum(text.match(/Past Day Sales\s*([\d,]+)/)?.[1]),
+    sales7d: parseNum(text.match(/Past Week Sales\s*([\d,]+)/)?.[1]),
+    sales30d: parseNum(text.match(/Past Month Sales\s*([\d,]+)/)?.[1]),
+    salesAllTime: parseNum(text.match(/All Tracked Sales\s*([\d,]+)/)?.[1]),
+    history: [],
+  };
+  const objectMatch = source.match(/var\s+item_sales\s*=\s*(\{[\s\S]*?\})\s*;/);
+
+  if (!objectMatch) {
+    return data;
+  }
+
+  try {
+    const sales = JSON.parse(objectMatch[1]);
+    const timestamps = Array.isArray(sales.timestamp_list) ? sales.timestamp_list : [];
+    const saleIds = Array.isArray(sales.sale_id_list) ? sales.sale_id_list : [];
+    const prices = Array.isArray(sales.sale_price_list) ? sales.sale_price_list : [];
+    const raps = Array.isArray(sales.sale_rap_list) ? sales.sale_rap_list : [];
+    const values = Array.isArray(sales.sale_value_list) ? sales.sale_value_list : [];
+    const pointCount = Math.min(timestamps.length, prices.length);
+
+    for (let index = 0; index < pointCount; index += 1) {
+      const timestamp = Number(timestamps[index]);
+      const price = Number(prices[index]);
+
+      if (!Number.isFinite(timestamp) || timestamp <= 0 || !Number.isFinite(price) || price <= 0) {
+        continue;
+      }
+
+      data.history.push({
+        value: Math.round(price),
+        date: new Date(timestamp * 1000).toISOString(),
+        source: "rolimons-sales",
+        salesVolume: 1,
+        saleId: firstPositiveNumber(Number(saleIds[index])),
+        rap: firstPositiveNumber(Number(raps[index])),
+        assignedValue: firstPositiveNumber(Number(values[index])),
+      });
+    }
+  } catch {
+    // Keep the page-level totals when Rolimon changes the embedded chart shape.
+  }
+
+  return data;
 }
 
 function rolimonsSalesForDays(sales, days) {
@@ -2672,8 +2716,11 @@ async function fetchItemDetails(assetId, marketType = "ugc", collectibleItemId =
   );
   const sellerSignal = marketplaceDetails.hasResellers ? 1 : availableCopies;
   const lowestPrice = clearPriceWithoutSellers(rawLowestPrice, sellerSignal);
-  const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, lowestPrice);
   const rolimonsSales = marketType === "roblox" ? await fetchRolimonsItemSales(safeAssetId) : {};
+  const resaleSalesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, lowestPrice);
+  const salesHistory = Array.isArray(rolimonsSales.history) && rolimonsSales.history.length > 0
+    ? rolimonsSales.history
+    : resaleSalesHistory;
   const makeSalesActivity = (days) => {
     let sales = calculateSalesMetrics(salesHistory, days);
 
