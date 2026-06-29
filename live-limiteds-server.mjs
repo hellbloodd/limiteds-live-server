@@ -598,7 +598,7 @@ async function upsertLimitedItemsTable(items) {
       await supabaseRequest("limited_items?on_conflict=asset_id", {
         method: "POST",
         body: JSON.stringify(items.slice(i, i + 500)),
-        headers: { "Prefer": "resolution=merge-duplicate-updates,return=minimal" }
+        headers: { "Prefer": "resolution=merge-duplicates,return=minimal" }
       });
     } catch (e) {
       console.warn(`Upsert skipped: ${e.message}`);
