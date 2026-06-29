@@ -1440,6 +1440,7 @@ const server = http.createServer(async (req, res) => {
 
 // FIX FOR RENDER DNS ISSUE: Wait 5 seconds for network to connect before starting
 import http from "http";
+import { URL } from "url";
 
 async function startServer() {
   console.log("Waiting for Render network to be ready...");
