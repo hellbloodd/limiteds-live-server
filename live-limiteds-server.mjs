@@ -1,40 +1,67 @@
 import http from "http";
 import { URL } from "url";
 
+// ============================================================================
+// ARCHITECTURE
+// ----------------------------------------------------------------------------
+// Classic limiteds' RAP/Value are sourced from Rolimons' public bulk catalog
+// endpoint (one request returns every tracked classic limited's RAP, Value,
+// demand and trend). This is the same data Rolimons itself is built on, and
+// it's what makes this reliable:
+//   - ONE request covers the whole catalog (no per-item Roblox rate limiting)
+//   - Every list, the item-detail popup, and portfolios all read from this
+//     exact same map, so numbers can never disagree with each other
+//   - New limiteds Roblox releases show up automatically as soon as Rolimons
+//     picks them up, with no guessing at Roblox catalog-search parameters
+//
+// Roblox's own APIs are still used for what Rolimons doesn't provide:
+//   - Current lowest resale price / available copies / total copies, via a
+//     single batched POST to catalog.roblox.com (up to 100 ids per request)
+//   - A player's owned items, for the portfolio view (unavoidable - this is
+//     per-user data only Roblox has)
+//   - Historical daily price points for the detail chart, as a supplement to
+//     our own hourly snapshots (which only start accumulating from today)
+//
+// Our own hourly snapshots (Supabase) are what let 24h/7d/30d/1y RAP %
+// change be reported honestly - see findPeriodBaselineValue, which reports
+// "no data" rather than fabricating a change over a shorter, mislabeled
+// window when we don't have real history that far back yet.
+// ============================================================================
+
 const PORT = Number(process.env.PORT || 8787);
-const SERVER_VERSION = "fully-fixed-v2";
+const SERVER_VERSION = "rolimons-source-v3";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
-const SNAPSHOT_SECRET = String(process.env.SNAPSHOT_SECRET || "");
 const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
-const ROBLOX_MARKETPLACE_ITEMS_URL = "https://apis.roblox.com/marketplace-items/v1/items/details";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
-const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
-const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
+
+// Rolimons' itemdetails array positions (community-documented convention).
+const RL_NAME = 0, RL_ACRONYM = 1, RL_RAP = 2, RL_VALUE = 3, RL_DEFAULT_VALUE = 4,
+  RL_DEMAND = 5, RL_TREND = 6, RL_PROJECTED = 7, RL_HYPED = 8, RL_RARE = 9;
+const DEMAND_LABELS = { "-1": null, "0": "Terrible", "1": "Low", "2": "Normal", "3": "High", "4": "Amazing" };
+const TREND_LABELS = { "-1": null, "0": "Lowering", "1": "Unstable", "2": "Stable", "3": "Raising", "4": "Fluctuating" };
 
 const pageCache = new Map();
 const marketIndexCache = new Map();
 const resaleCache = new Map();
-const economyCache = new Map();
 const catalogDetailCache = new Map();
 const detailCache = new Map();
 const portfolioCache = new Map();
 const rolimonsSalesCache = new Map();
-const latestItemSnapshotCache = new Map();
 let robloxCsrfToken = "";
-let lastSnapshotRunAt = 0;
 let snapshotRunning = false;
 let memorySnapshots = [];
 let rolimonsSalesBlockedUntil = 0;
+let rolimonsCatalogCache = { fetchedAt: 0, items: new Map() };
 
 function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap }) {
   return [marketType, sort, keyword, cursor || "", limit, minPrice ?? "", maxPrice ?? "", minRap ?? "", maxRap ?? ""].join(":");
@@ -160,20 +187,6 @@ async function fetchCatalogDetailsBatch(assetIds) {
   return result;
 }
 
-function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
-  const url = new URL(ROBLOX_CATALOG_URL);
-  const metricSorts = ["price_desc", "rap_desc", "deal_desc", "overpriced_desc", "bought_24h", "bought_7d", "bought_30d", "bought_1y", "loss_24h", "loss_7d", "loss_30d", "loss_1y", "loss_all", "profit_24h", "profit_7d", "profit_30d", "profit_1y", "profit_all"];
-  const sortType = marketType === "ugc" ? "2" : marketType === "roblox" && sort === "updated" ? "3" : sort === "price_asc" || sort === "deal_desc" ? "4" : metricSorts.includes(sort) ? "5" : "3";
-  url.searchParams.set("category", "All");
-  url.searchParams.set("salesTypeFilter", "2");
-  url.searchParams.set("sortType", sortType);
-  url.searchParams.set("limit", String(limit));
-  if (marketType === "roblox") { url.searchParams.set("creatorTargetId", "1"); url.searchParams.set("creatorType", "User"); }
-  if (cursor) url.searchParams.set("cursor", cursor);
-  if (keyword) url.searchParams.set("keyword", keyword);
-  return url;
-}
-
 async function fetchResaleData(assetId) {
   const c = resaleCache.get(assetId);
   if (c && Date.now() - c.fetchedAt < CACHE_TTL_MS) return c.data;
@@ -193,16 +206,6 @@ async function fetchCollectibleResaleData(cid) {
   try {
     const d = await fetchJson(`${ROBLOX_COLLECTIBLE_RESALE_URL}/${encodeURIComponent(s)}/resale-data`, { retries: 2, timeoutMs: 3000 });
     resaleCache.set(k, { fetchedAt: Date.now(), data: d });
-    return d;
-  } catch { return {}; }
-}
-
-async function fetchEconomyDetails(assetId) {
-  const c = economyCache.get(assetId);
-  if (c && Date.now() - c.fetchedAt < CACHE_TTL_MS) return c.data;
-  try {
-    const d = await fetchJson(`https://economy.roblox.com/v2/assets/${assetId}/details`, { retries: 1, timeoutMs: 3000 });
-    economyCache.set(assetId, { fetchedAt: Date.now(), data: d });
     return d;
   } catch { return {}; }
 }
@@ -273,9 +276,10 @@ function findPeriodBaselineValue(history, days) {
   if (!days) return history[0].value;
   const target = getPeriodStartTime(days);
   const earliestTime = Date.parse(history[0].date);
-  // If we don't have any snapshot old enough to actually represent "N days ago",
-  // there is no honest baseline for this period yet - report no data instead of
-  // silently comparing against a too-recent point and mislabeling the timeframe.
+  // If we don't have any snapshot old enough to actually represent "N days
+  // ago", there is no honest baseline for this period yet - report no data
+  // instead of silently comparing against a too-recent point and
+  // mislabeling the timeframe.
   if (!Number.isFinite(earliestTime) || earliestTime > target) return null;
   let before = null;
   for (const p of history) {
@@ -424,21 +428,6 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
   };
 }
 
-async function addSnapshotSalesMetrics(items) {
-  console.log(`Snapshot prepared ${items.length} items for database.`);
-  return items.map(item => {
-    const rap = firstPositiveNumber(item.rap);
-    const lowestPrice = firstPositiveNumber(item.lowestPrice);
-    return {
-      ...item,
-      dealValue: calculateDealValue(rap, lowestPrice),
-      dealPercent: calculateDealPercent(rap, lowestPrice),
-      overpricedValue: calculateOverpricedValue(rap, lowestPrice),
-      overpricedPercent: calculateOverpricedPercent(rap, lowestPrice)
-    };
-  });
-}
-
 function snapshotStorageEnabled() {
   return SUPABASE_URL !== "" && SUPABASE_SERVICE_ROLE_KEY !== "";
 }
@@ -478,71 +467,6 @@ function normalizeSnapshotRows(rows) {
   })).filter(p => p.value > 0 && Number.isFinite(Date.parse(p.date)));
 }
 
-function normalizeItemSnapshotRows(rows) {
-  if (!Array.isArray(rows)) return [];
-  return rows.map(r => ({
-    assetId: normalizeNumber(r.asset_id),
-    collectibleItemId: String(r.collectible_item_id || ""),
-    name: String(r.name || "Unknown"),
-    rap: firstPositiveNumber(r.rap),
-    lowestPrice: firstPositiveNumber(r.lowest_price),
-    totalCopies: firstPositiveNumber(r.total_copies),
-    availableCopies: firstNonNegativeNumber(r.available_copies),
-    savedAt: String(r.saved_at || ""),
-    thumbnail: `rbxthumb://type=Asset&id=${normalizeNumber(r.asset_id)}&w=420&h=420`,
-    creatorName: "Roblox",
-    itemType: "Asset",
-    marketType: "roblox"
-  })).filter(i => i.assetId > 0 && i.rap > 0);
-}
-
-async function fetchCurrentLimitedItems() {
-  if (!snapshotStorageEnabled()) return [];
-  try {
-    const rows = [];
-    for (let o = 0; o < 10000; o += 1000) {
-      const p = await supabaseRequest(
-        `limited_items?select=asset_id,collectible_item_id,name,rap,value,lowest_price,available_copies,total_copies,saved_at&order=asset_id.asc&limit=1000&offset=${o}`,
-        { headers: { Prefer: "" } }
-      );
-      if (!Array.isArray(p) || p.length === 0) break;
-      rows.push(...p);
-      if (p.length < 1000) break;
-    }
-    return normalizeItemSnapshotRows(rows);
-  } catch (e) {
-    console.warn(`Read skipped: ${e.message}`);
-    return [];
-  }
-}
-
-function mergeMarketItems(primary, secondary) {
-  const byId = new Map();
-  for (const item of [...secondary, ...primary]) {
-    const id = normalizeNumber(item.assetId);
-    if (id <= 0) continue;
-    const ex = byId.get(id) || {};
-    const rap = firstPositiveNumber(item.rap, ex.rap);
-    const price = firstPositiveNumber(item.lowestPrice, ex.lowestPrice);
-    byId.set(id, {
-      ...ex, ...item, assetId: id, rap, lowestPrice: price,
-      value: firstPositiveNumber(item.value, ex.value),
-      availableCopies: firstNonNegativeNumber(item.availableCopies, ex.availableCopies),
-      totalCopies: firstPositiveNumber(item.totalCopies, ex.totalCopies),
-      collectibleItemId: String(item.collectibleItemId || ex.collectibleItemId || ""),
-      name: String(item.name || ex.name || "Unknown"),
-      thumbnail: item.thumbnail || ex.thumbnail || `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
-      creatorName: String(item.creatorName || ex.creatorName || "Roblox"),
-      marketType: "roblox",
-      dealValue: calculateDealValue(rap, price),
-      dealPercent: calculateDealPercent(rap, price),
-      overpricedValue: calculateOverpricedValue(rap, price),
-      overpricedPercent: calculateOverpricedPercent(rap, price)
-    });
-  }
-  return [...byId.values()].filter(i => i.assetId > 0 && i.rap > 0);
-}
-
 async function fetchStoredSnapshots(assetId) {
   if (!snapshotStorageEnabled()) return normalizeSnapshotRows(memorySnapshots.filter(r => r.asset_id === assetId));
   try {
@@ -551,37 +475,6 @@ async function fetchStoredSnapshots(assetId) {
       { headers: { Prefer: "" } }
     ));
   } catch { return []; }
-}
-
-async function fetchStoredSnapshotsForAssets(assetIds) {
-  const ids = [...new Set(assetIds)];
-  const byId = new Map(ids.map(id => [id, []]));
-  
-  if (!snapshotStorageEnabled()) {
-    for (const r of memorySnapshots) {
-      const l = byId.get(r.asset_id);
-      if (l) l.push(...normalizeSnapshotRows([r]));
-    }
-    return byId;
-  }
-  
-  for (let i = 0; i < ids.length; i += 80) {
-    try {
-      const chunkIds = ids.slice(i, i + 80);
-      const rows = await supabaseRequest(
-        `limited_snapshots?asset_id=in.(${chunkIds.join(",")})&select=asset_id,rap,lowest_price,saved_at&order=saved_at.asc&limit=20000`,
-        { headers: { Prefer: "" } }
-      ) || [];
-      
-      for (const r of rows) {
-        const l = byId.get(r.asset_id);
-        if (l) l.push(...normalizeSnapshotRows([r]));
-      }
-    } catch (e) {
-      // Continue on error
-    }
-  }
-  return byId;
 }
 
 async function saveSnapshotRows(rows) {
@@ -611,101 +504,87 @@ async function upsertLimitedItemsTable(items) {
   }
 }
 
-let rolimonsCatalogCache = { fetchedAt: 0, map: new Map() };
-
-async function fetchRolimonsCatalogRapMap() {
-  if (rolimonsCatalogCache.map.size > 0 && Date.now() - rolimonsCatalogCache.fetchedAt < ROLIMONS_CACHE_TTL_MS) {
-    return rolimonsCatalogCache.map;
+// ----------------------------------------------------------------------------
+// Rolimons: the single source of truth for classic-limiteds RAP/Value/demand.
+// ----------------------------------------------------------------------------
+async function fetchRolimonsCatalog() {
+  if (rolimonsCatalogCache.items.size > 0 && Date.now() - rolimonsCatalogCache.fetchedAt < ROLIMONS_CACHE_TTL_MS) {
+    return rolimonsCatalogCache.items;
   }
   try {
-    const data = await fetchJson(ROLIMONS_ITEM_DETAILS_URL, { timeoutMs: 10000, retries: 2 });
-    const map = new Map();
+    const data = await fetchJson(ROLIMONS_ITEM_DETAILS_URL, { timeoutMs: 15000, retries: 2 });
+    const items = new Map();
     for (const [idStr, arr] of Object.entries(data.items || {})) {
       const id = Number(idStr);
-      const rap = Number(Array.isArray(arr) ? arr[2] : NaN);
-      if (id > 0 && Number.isFinite(rap) && rap > 0) map.set(id, rap);
+      if (id <= 0 || !Array.isArray(arr)) continue;
+      const rap = Number(arr[RL_RAP]);
+      if (!Number.isFinite(rap) || rap <= 0) continue;
+      const rlValue = Number(arr[RL_VALUE]);
+      const demand = arr[RL_DEMAND] ?? -1;
+      const trend = arr[RL_TREND] ?? -1;
+      items.set(id, {
+        assetId: id,
+        name: String(arr[RL_NAME] || "Unknown"),
+        acronym: String(arr[RL_ACRONYM] || ""),
+        rap,
+        value: Number.isFinite(rlValue) && rlValue > 0 ? rlValue : null,
+        demand: Number(demand),
+        demandLabel: DEMAND_LABELS[String(demand)] ?? null,
+        trend: Number(trend),
+        trendLabel: TREND_LABELS[String(trend)] ?? null,
+        projected: arr[RL_PROJECTED] === 1,
+        hyped: arr[RL_HYPED] === 1,
+        rare: arr[RL_RARE] === 1,
+      });
     }
-    if (map.size > 0) rolimonsCatalogCache = { fetchedAt: Date.now(), map };
-    return rolimonsCatalogCache.map;
-  } catch {
-    return rolimonsCatalogCache.map;
+    if (items.size > 0) {
+      rolimonsCatalogCache = { fetchedAt: Date.now(), items };
+      console.log(`Rolimons catalog refreshed: ${items.size} classic limiteds.`);
+    } else {
+      console.warn("Rolimons catalog fetch returned 0 items - keeping previous cache.");
+    }
+    return rolimonsCatalogCache.items;
+  } catch (e) {
+    console.warn(`Rolimons catalog fetch failed: ${e.message} - keeping previous cache (${rolimonsCatalogCache.items.size} items).`);
+    return rolimonsCatalogCache.items;
   }
 }
 
-async function enrichWithRealRap(items) {
-  // The catalog search endpoint's "price" field is the item's original launch
-  // price, not its Recent Average Price - using it produces numbers that don't
-  // match the real RAP shown in item details. Doing an individual Roblox API
-  // lookup per item here doesn't scale (thousands of items = thousands of
-  // requests every hour = silent rate-limit failures for some of them, which
-  // is exactly what was happening). Rolimons exposes every classic limited's
-  // RAP in a single bulk request - use that as the primary source, and only
-  // fall back to a slower per-item Roblox lookup for anything it's missing.
-  const rolimonsMap = await fetchRolimonsCatalogRapMap();
-  console.log(`Rolimons catalog map has ${rolimonsMap.size} items.`);
-  const missing = [];
-  const enriched = items.map((item) => {
-    const rap = rolimonsMap.get(item.assetId);
-    if (rap) return { ...item, rap, rapSource: "rolimons" };
-    missing.push(item);
-    return item;
-  });
-  console.log(`RAP enrichment: ${items.length - missing.length} from rolimons, ${missing.length} need per-item lookup.`);
-  if (missing.length === 0) return enriched;
+// Builds the full classic-limiteds catalog: Rolimons for RAP/Value/demand
+// (the whole catalog, one request), Roblox's batched catalog-details for
+// current lowest price / availability (fast: ~1 request per 100 items).
+async function buildClassicLimitedsCatalog() {
+  const rolimonsItems = await fetchRolimonsCatalog();
+  if (rolimonsItems.size === 0) return [];
 
-  const byId = new Map(enriched.map((i) => [i.assetId, i]));
-  let resolvedCount = 0;
-  const fixedUp = await mapWithConcurrency(missing, 10, async (item) => {
-    try {
-      const resale = await fetchResaleData(item.assetId);
-      const realRap = firstPositiveNumber(resale.recentAveragePrice);
-      if (realRap) resolvedCount += 1;
-      return realRap ? { ...item, rap: realRap, rapSource: "resale" } : { ...item, rapSource: "raw_fallback" };
-    } catch {
-      return { ...item, rapSource: "raw_fallback_error" };
-    }
-  });
-  console.log(`Per-item RAP fallback resolved ${resolvedCount} of ${missing.length}.`);
-  for (const item of fixedUp) byId.set(item.assetId, item);
-  return [...byId.values()];
-}
+  const assetIds = [...rolimonsItems.keys()];
+  const priceDetails = await fetchCatalogDetailsBatch(assetIds);
 
-async function discoverAllRobloxLimiteds() {
-  const all = new Map();
-  for (const sortType of ROBLOX_DISCOVERY_SORT_TYPES) {
-    let cursor = "";
-    for (let p = 0; p < ROBLOX_RECENT_DISCOVERY_PAGES; p++) {
-      try {
-        const url = new URL(ROBLOX_CATALOG_URL);
-        url.searchParams.set("category", "All");
-        url.searchParams.set("salesTypeFilter", "2");
-        url.searchParams.set("sortType", sortType);
-        url.searchParams.set("limit", "120");
-        url.searchParams.set("creatorTargetId", "1");
-        url.searchParams.set("creatorType", "User");
-        if (cursor) url.searchParams.set("cursor", cursor);
-        const data = await fetchJson(url.toString(), { retries: 2, timeoutMs: 8000 });
-        for (const item of (data.data || [])) {
-          const id = normalizeNumber(item.id);
-          if (id > 0) all.set(id, {
-            assetId: id, name: item.name || "Unknown", rap: firstPositiveNumber(item.price),
-            lowestPrice: firstPositiveNumber(item.lowestPrice), availableCopies: firstNonNegativeNumber(item.available),
-            totalCopies: firstPositiveNumber(item.unitsAvailable), collectibleItemId: String(item.collectibleItemId || ""),
-            itemType: "Asset", marketType: "roblox", creatorName: item.creatorName || "Roblox"
-          });
-        }
-        cursor = data.nextPageCursor;
-        if (!cursor) break;
-      } catch { break; }
-      await sleep(250);
-    }
+  const items = [];
+  for (const [id, base] of rolimonsItems) {
+    const details = priceDetails.get(id) || {};
+    const lowestPrice = firstPositiveNumber(details.lowestPrice, details.price);
+    items.push({
+      ...base,
+      lowestPrice,
+      availableCopies: firstNonNegativeNumber(details.available),
+      totalCopies: firstPositiveNumber(details.unitsAvailable),
+      collectibleItemId: String(details.collectibleItemId || ""),
+      itemType: "Asset",
+      marketType: "roblox",
+      creatorName: details.creatorName || "Roblox",
+      thumbnail: `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
+      dealValue: calculateDealValue(base.rap, lowestPrice),
+      dealPercent: calculateDealPercent(base.rap, lowestPrice),
+      overpricedValue: calculateOverpricedValue(base.rap, lowestPrice),
+      overpricedPercent: calculateOverpricedPercent(base.rap, lowestPrice),
+    });
   }
-  return enrichWithRealRap([...all.values()]);
+  return items;
 }
 
 async function warmMarketIndex() {
-  let items = await discoverAllRobloxLimiteds();
-  items = mergeMarketItems(items, await fetchCurrentLimitedItems());
+  const items = await buildClassicLimitedsCatalog();
   if (items.length > 0) {
     marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
   }
@@ -715,10 +594,10 @@ async function warmMarketIndex() {
 
 async function getRobloxMarketIndex() {
   // The hourly runSnapshot() job keeps this cache fresh in the background.
-  // Only fall back to a live (slow) on-demand scan if nothing has been
-  // cached yet at all - e.g. right after a fresh deploy/restart, before
-  // the first snapshot has completed. This avoids blocking a visitor's
-  // request on a multi-second Roblox catalog scan every few minutes.
+  // Only fall back to a live (slow-ish) on-demand build if nothing has been
+  // cached yet at all - e.g. right after a fresh deploy/restart, before the
+  // first snapshot has completed. This avoids blocking a visitor's request
+  // on a live catalog build every few minutes.
   const cached = marketIndexCache.get("roblox");
   if (cached && cached.items.length > 0) {
     return cached.items;
@@ -737,12 +616,14 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   const maxPrice = parseOptionalNumber(p.get("maxPrice"));
   const minRap = parseOptionalNumber(p.get("minRap"));
   const maxRap = parseOptionalNumber(p.get("maxRap"));
-  
+
   const cacheKey = makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap });
   const cached = pageCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
 
   if (marketType === "ugc") {
+    // UGC limiteds are a separate, newer Roblox marketplace category that
+    // Rolimons does not track - this path stays on live Roblox catalog data.
     const url = new URL(ROBLOX_CATALOG_URL);
     url.searchParams.set("category", "All");
     url.searchParams.set("salesTypeFilter", "2");
@@ -775,6 +656,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
 
   if (sort === "price_asc") items.sort((a, b) => (a.lowestPrice || Infinity) - (b.lowestPrice || Infinity));
   else if (sort === "rap_desc") items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
+  else if (sort === "value_desc") items.sort((a, b) => (b.value || 0) - (a.value || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
   else if (sort.startsWith("bought_")) {
@@ -808,35 +690,50 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
   const assetId = normalizeNumber(Number(p.get("assetId")));
   const collectibleItemId = (p.get("collectibleItemId") || "").trim();
   if (assetId <= 0) return sendJson(res, 400, { ok: false, error: "Missing assetId" });
-  
+
   const cacheKey = `details:${assetId}:${collectibleItemId}`;
   const cached = detailCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
-  
+
   try {
-    const [catalogDetails, economyDetails, resaleDetails, rolimonsMap] = await Promise.all([
+    const rolimonsItems = await fetchRolimonsCatalog();
+    const rolimonsItem = rolimonsItems.get(assetId);
+
+    const [catalogDetails, resaleDetails] = await Promise.all([
       fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {}),
-      fetchEconomyDetails(assetId),
-      collectibleItemId && assetId > 10_000_000_000 ? fetchCollectibleResaleData(collectibleItemId) : fetchResaleData(assetId),
-      fetchRolimonsCatalogRapMap()
+      collectibleItemId && assetId > 10_000_000_000 ? fetchCollectibleResaleData(collectibleItemId) : fetchResaleData(assetId)
     ]);
-    // Use the same RAP source/priority as the catalog list (Rolimons bulk data
-    // first) so an item's RAP always matches between the list and its detail
-    // view. catalogDetails.price is the item's launch price, not RAP - it's
-    // only used here as a last-resort fallback, never as the primary value.
-    const rap = firstPositiveNumber(rolimonsMap.get(assetId), resaleDetails.recentAveragePrice, economyDetails.Rap, catalogDetails.price);
+
+    // Same RAP/Value source as the catalog list, so a given item's numbers
+    // can never disagree between the list and its own detail popup. Live
+    // Roblox data is only used as a last resort for items Rolimons doesn't
+    // track (very rare for classic limiteds).
+    const rap = firstPositiveNumber(rolimonsItem?.rap, resaleDetails.recentAveragePrice, catalogDetails.price);
     const lowestPrice = firstPositiveNumber(catalogDetails.lowestPrice, resaleDetails.lowestResalePrice);
+
     let item = {
-      assetId, name: catalogDetails.name || economyDetails.Name || "Unknown", rap, lowestPrice,
+      assetId,
+      name: rolimonsItem?.name || catalogDetails.name || "Unknown",
+      rap,
+      value: rolimonsItem?.value ?? null,
+      demand: rolimonsItem?.demand ?? null,
+      demandLabel: rolimonsItem?.demandLabel ?? null,
+      trend: rolimonsItem?.trend ?? null,
+      trendLabel: rolimonsItem?.trendLabel ?? null,
+      projected: rolimonsItem?.projected ?? false,
+      hyped: rolimonsItem?.hyped ?? false,
+      rare: rolimonsItem?.rare ?? false,
+      lowestPrice,
       availableCopies: firstNonNegativeNumber(catalogDetails.available, resaleDetails.numberRemaining),
-      totalCopies: firstPositiveNumber(catalogDetails.unitsAvailable, economyDetails.Sales),
+      totalCopies: firstPositiveNumber(catalogDetails.unitsAvailable),
       collectibleItemId: String(catalogDetails.collectibleItemId || collectibleItemId),
       itemType: catalogDetails.itemType || "Asset", marketType: "roblox",
-      creatorName: catalogDetails.creatorName || economyDetails.Creator?.Name || "Unknown",
+      creatorName: catalogDetails.creatorName || "Roblox",
       thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`,
       dealValue: calculateDealValue(rap, lowestPrice), dealPercent: calculateDealPercent(rap, lowestPrice),
       overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice)
     };
+
     const ownHistory = await fetchStoredSnapshots(assetId);
     const resaleHistory = normalizeHistoryPoints(resaleDetails.priceDataPoints);
     const combinedHistory = [...ownHistory, ...resaleHistory].sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(-5000);
@@ -856,33 +753,34 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
 async function handlePortfolioRequest(req, res, parsedUrl) {
   const userId = parsedUrl.searchParams.get("userId");
   if (!userId) return sendJson(res, 400, { ok: false, error: "Missing userId" });
-  
+
   const cacheKey = `portfolio:${userId}`;
   const cached = portfolioCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
-  
+
   try {
     const data = await fetchJson(`${ROBLOX_INVENTORY_URL}/${userId}/assets/collectibles?limit=100&sortOrder=Asc`, { retries: 2, timeoutMs: 5000 });
     const rawItems = data.data || [];
     if (!rawItems.length) return sendJson(res, 200, { ok: true, items: [], stats: {}, charts: {} });
-    
+
     const assetIds = rawItems.map(i => normalizeNumber(i.assetId)).filter(id => id > 0);
-    const [catalogDetails, rolimonsMap] = await Promise.all([
+    const [catalogDetails, rolimonsItems] = await Promise.all([
       fetchCatalogDetailsBatch(assetIds),
-      fetchRolimonsCatalogRapMap()
+      fetchRolimonsCatalog()
     ]);
 
     const items = await Promise.all(rawItems.map(async (raw) => {
       const assetId = normalizeNumber(raw.assetId);
       const details = catalogDetails.get(assetId) || {};
-      // Same RAP source/priority as the catalog list and item details, so a
-      // player's portfolio always agrees with what those views show for the
-      // same item. details.price is a launch price, kept only as last resort.
-      const rap = firstPositiveNumber(rolimonsMap.get(assetId), raw.recentAveragePrice, details.price);
+      const rolimonsItem = rolimonsItems.get(assetId);
+      // Same RAP/Value source as the catalog list and item details, so a
+      // player's portfolio always agrees with what those views show.
+      const rap = firstPositiveNumber(rolimonsItem?.rap, raw.recentAveragePrice, details.price);
       const lowestPrice = firstPositiveNumber(raw.price, details.lowestPrice);
       const ownHistory = await fetchStoredSnapshots(assetId);
       return {
-        assetId, name: details.name || raw.name || "Unknown", rap, lowestPrice,
+        assetId, name: rolimonsItem?.name || details.name || raw.name || "Unknown", rap,
+        value: rolimonsItem?.value ?? null, lowestPrice,
         quantity: raw.owned || 1, collectibleItemId: String(raw.collectibleItemId || details.collectibleItemId || ""),
         marketType: assetId > 10_000_000_000 ? "ugc" : "roblox",
         ...buildRapChangeMetrics(ownHistory, rap)
@@ -901,12 +799,10 @@ async function runSnapshot() {
   snapshotRunning = true;
   console.log("Snapshot started.");
   try {
-    let items = await discoverAllRobloxLimiteds();
-    items = mergeMarketItems(items, await fetchCurrentLimitedItems());
-    items = await addSnapshotSalesMetrics(items);
+    const items = await buildClassicLimitedsCatalog();
     await saveSnapshotRows(items.map(i => ({ asset_id: i.assetId, rap: i.rap, lowest_price: i.lowestPrice || null, saved_at: new Date().toISOString() })));
     await upsertLimitedItemsTable(items.map(i => ({
-      asset_id: i.assetId, collectible_item_id: i.collectibleItemId, name: i.name, rap: i.rap, value: i.rap,
+      asset_id: i.assetId, collectible_item_id: i.collectibleItemId, name: i.name, rap: i.rap, value: i.value,
       lowest_price: i.lowestPrice || null, available_copies: i.availableCopies || 0, total_copies: i.totalCopies || 0,
       saved_at: new Date().toISOString()
     })));
