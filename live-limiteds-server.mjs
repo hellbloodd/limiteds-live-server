@@ -513,6 +513,11 @@ async function upsertLimitedItemsTable(items) {
   if (!items.length || !snapshotStorageEnabled()) return;
   for (let i = 0; i < items.length; i += 500) {
     try {
+      // Note: items intentionally omit first_seen_at - on_conflict merge only
+      // touches columns present in the payload, so a fresh row gets the
+      // column's own default (now()) while an existing row's first_seen_at
+      // is left untouched. That gives every item a true "first tracked by
+      // us" timestamp, which is what the "Recent" sort is built on.
       await supabaseRequest("limited_items?on_conflict=asset_id", {
         method: "POST",
         body: JSON.stringify(items.slice(i, i + 500)),
@@ -521,6 +526,33 @@ async function upsertLimitedItemsTable(items) {
     } catch (e) {
       console.warn(`Upsert skipped: ${e.message}`);
     }
+  }
+}
+
+// Cached (asset_id -> first_seen_at ms) used to power the "Recent" sort.
+// Raw Roblox assetId order is not a reliable proxy for "recently became a
+// limited" - Roblox's ID space is shared across everything it creates, so a
+// years-old item can have a far larger ID than a limited from last week
+// (e.g. a 2024 "Innovation Awards" item vs. a brand-new classic limited).
+// first_seen_at instead reflects when OUR snapshot pipeline first saw the
+// item, which correctly floats genuinely new discoveries to the top.
+let firstSeenCache = { fetchedAt: 0, map: new Map() };
+async function fetchFirstSeenMap() {
+  if (!snapshotStorageEnabled()) return firstSeenCache.map;
+  if (Date.now() - firstSeenCache.fetchedAt < CACHE_TTL_MS && firstSeenCache.map.size > 0) return firstSeenCache.map;
+  try {
+    const rows = await supabaseRequest("limited_items?select=asset_id,first_seen_at&limit=20000", { headers: { Prefer: "" } });
+    const map = new Map();
+    for (const row of (rows || [])) {
+      const id = Number(row.asset_id);
+      const ts = Date.parse(row.first_seen_at);
+      if (id > 0 && Number.isFinite(ts)) map.set(id, ts);
+    }
+    if (map.size > 0) firstSeenCache = { fetchedAt: Date.now(), map };
+    return firstSeenCache.map;
+  } catch (e) {
+    console.warn(`first_seen_at fetch failed: ${e.message}`);
+    return firstSeenCache.map;
   }
 }
 
@@ -741,7 +773,13 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       const r = b[isLoss ? `loss${fieldSuffix}` : `profit${fieldSuffix}`] || 0;
       return r - l;
     });
-  } else items.sort((a, b) => b.assetId - a.assetId);
+  } else {
+    // "Recent" - order by when OUR pipeline first saw the item, not raw
+    // assetId (Roblox's ID space is global and unrelated to Limited status -
+    // a years-old item can have a far larger ID than a brand-new limited).
+    const firstSeen = await fetchFirstSeenMap();
+    items.sort((a, b) => (firstSeen.get(b.assetId) || 0) - (firstSeen.get(a.assetId) || 0));
+  }
 
   const startIdx = cursor ? parseInt(cursor, 10) || 0 : 0;
   const pagedItems = items.slice(startIdx, startIdx + limit);
