@@ -418,16 +418,21 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
 function buildRapChangeMetrics(ownHistory, currentRap) {
   const rawHistory = ownHistory.slice(-5000);
   if (rawHistory.length < 2) return {
-    history: rawHistory, lossAllTime: null, loss24h: null, loss7d: null, loss30d: null, loss1y: null,
-    profitAllTime: null, profit24h: null, profit7d: null, profit30d: null, profit1y: null,
-    changeAllTime: null, change24h: null, change7d: null, change30d: null, change1y: null
+    history: rawHistory, lossAllTime: null, loss1h: null, loss24h: null, loss7d: null, loss30d: null, loss1y: null,
+    profitAllTime: null, profit1h: null, profit24h: null, profit7d: null, profit30d: null, profit1y: null,
+    changeAllTime: null, change1h: null, change24h: null, change7d: null, change30d: null, change1y: null
   };
   const bAll = rawHistory[0].value;
+  // 1h uses a true rolling window (now - 1 hour), unlike the calendar-based
+  // "24h" baseline below - this is the fastest period to have honest data,
+  // since it only needs one earlier hourly snapshot rather than a full day.
+  const b1h = findPeriodBaselineValue(rawHistory, 1 / 24);
   const b24 = findPeriodBaselineValue(rawHistory, 1);
   const b7 = findPeriodBaselineValue(rawHistory, 7);
   const b30 = findPeriodBaselineValue(rawHistory, 30);
   const b1y = findPeriodBaselineValue(rawHistory, 365);
   const cAll = percentChange(bAll, currentRap);
+  const c1h = percentChange(b1h, currentRap);
   const c24 = percentChange(b24, currentRap);
   const c7 = percentChange(b7, currentRap);
   const c30 = percentChange(b30, currentRap);
@@ -435,16 +440,18 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
   return {
     history: rawHistory.slice(-1000),
     lossAllTime: cAll !== null && cAll < 0 ? Math.abs(cAll) : null,
+    loss1h: c1h !== null && c1h < 0 ? Math.abs(c1h) : null,
     loss24h: c24 !== null && c24 < 0 ? Math.abs(c24) : null,
     loss7d: c7 !== null && c7 < 0 ? Math.abs(c7) : null,
     loss30d: c30 !== null && c30 < 0 ? Math.abs(c30) : null,
     loss1y: c1y !== null && c1y < 0 ? Math.abs(c1y) : null,
     profitAllTime: cAll !== null && cAll > 0 ? cAll : null,
+    profit1h: c1h !== null && c1h > 0 ? c1h : null,
     profit24h: c24 !== null && c24 > 0 ? c24 : null,
     profit7d: c7 !== null && c7 > 0 ? c7 : null,
     profit30d: c30 !== null && c30 > 0 ? c30 : null,
     profit1y: c1y !== null && c1y > 0 ? c1y : null,
-    changeAllTime: cAll, change24h: c24, change7d: c7, change30d: c30, change1y: c1y,
+    changeAllTime: cAll, change1h: c1h, change24h: c24, change7d: c7, change30d: c30, change1y: c1y,
   };
 }
 
@@ -762,7 +769,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   } else if (sort.startsWith("loss_") || sort.startsWith("profit_")) {
     const isLoss = sort.startsWith("loss_");
     const suffix = sort.replace("loss_", "").replace("profit_", "");
-    const days = { "_24h": 1, "_7d": 7, "_30d": 30, "_1y": 365, "_all": null }[`_${suffix}`];
+    const days = { "_1h": 1 / 24, "_24h": 1, "_7d": 7, "_30d": 30, "_1y": 365, "_all": null }[`_${suffix}`];
     const fieldSuffix = suffix === "all" ? "AllTime" : suffix;
     for (const item of items) {
       const history = await fetchStoredSnapshots(item.assetId);
