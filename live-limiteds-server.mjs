@@ -650,8 +650,13 @@ async function warmMarketIndex() {
 }
  
 async function getRobloxMarketIndex() {
+  // The hourly runSnapshot() job keeps this cache fresh in the background.
+  // Only fall back to a live (slow) on-demand scan if nothing has been
+  // cached yet at all - e.g. right after a fresh deploy/restart, before
+  // the first snapshot has completed. This avoids blocking a visitor's
+  // request on a multi-second Roblox catalog scan every few minutes.
   const cached = marketIndexCache.get("roblox");
-  if (cached && cached.items.length > 0 && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+  if (cached && cached.items.length > 0) {
     return cached.items;
   }
   return warmMarketIndex();
