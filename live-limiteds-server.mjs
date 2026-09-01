@@ -40,6 +40,13 @@ const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
+const ROBLOX_SEARCH_URL = "https://catalog.roblox.com/v1/search/items/details";
+// How many pages (30 items each) of Roblox's own "Bestselling, Past Week"
+// feed to scan per snapshot for brand-new classic limiteds that Rolimons
+// hasn't added to its tracked list yet. A newly-converted Limited item
+// reliably spikes into weekly bestsellers within hours, so this catches new
+// items fast without scanning (or rate-limiting against) the whole catalog.
+const NEW_LIMITED_DISCOVERY_PAGES = Number(process.env.NEW_LIMITED_DISCOVERY_PAGES || 20);
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 
@@ -207,6 +214,22 @@ async function fetchCollectibleResaleData(cid) {
     resaleCache.set(k, { fetchedAt: Date.now(), data: d });
     return d;
   } catch { return {}; }
+}
+
+// Roblox has migrated resale-history data to the collectibleItemId-based API
+// for most items now, regardless of assetId size (the old "assetId > 10B
+// means UGC" heuristic no longer reliably predicts which API an item needs -
+// newly-converted classic Limiteds can have large assetIds too). Prefer
+// collectibleItemId when present, and fall back to the legacy per-assetId
+// endpoint if that comes back empty or no collectibleItemId is known.
+async function fetchAnyResaleData(assetId, collectibleItemId) {
+  if (collectibleItemId) {
+    const viaCollectible = await fetchCollectibleResaleData(collectibleItemId);
+    if (viaCollectible && (viaCollectible.priceDataPoints?.length || viaCollectible.recentAveragePrice)) {
+      return viaCollectible;
+    }
+  }
+  return fetchResaleData(assetId);
 }
 
 function getPointVolume(p, useVal = false) {
@@ -384,9 +407,7 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
       sales = { ...calculateSalesMetrics(rolimonsSales.history, days), salesSource: "rolimons", salesEstimated: false };
     }
     if (!sales.salesCount) {
-      const resale = item.collectibleItemId && item.assetId > 10_000_000_000
-        ? await fetchCollectibleResaleData(item.collectibleItemId)
-        : await fetchResaleData(item.assetId);
+      const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
       const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
       sales = { ...calculateSalesMetrics(salesHistory, days), salesSource: "roblox", salesEstimated: false };
     }
@@ -549,9 +570,48 @@ async function fetchRolimonsCatalog() {
   }
 }
 
+// Rolimons only adds an item to its tracked list some time after Roblox
+// converts it to a Limited - in the meantime, scan a bounded slice of
+// Roblox's own "Bestselling, Past Week" feed (filtered to real classic
+// Limiteds, not UGC Collectibles) to catch brand-new items immediately.
+async function discoverNewRobloxLimiteds(knownAssetIds) {
+  const discovered = [];
+  let cursor = "";
+  for (let page = 0; page < NEW_LIMITED_DISCOVERY_PAGES; page++) {
+    const url = new URL(ROBLOX_SEARCH_URL);
+    url.searchParams.set("category", "All");
+    url.searchParams.set("salesTypeFilter", "2");
+    url.searchParams.set("sortType", "2");
+    url.searchParams.set("sortAggregation", "3");
+    url.searchParams.set("limit", "30");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    let data;
+    try {
+      data = await fetchJson(url.toString(), { timeoutMs: 8000, retries: 1 });
+    } catch (e) {
+      console.warn(`New-limited discovery stopped early at page ${page}: ${e.message}`);
+      break;
+    }
+    for (const row of (data.data || [])) {
+      const id = normalizeNumber(row.id);
+      if (id <= 0 || knownAssetIds.has(id)) continue;
+      // Only real classic Limiteds - "Collectible" restriction is the newer
+      // UGC-limited category, which stays excluded per classic-only scope.
+      if (!(row.itemRestrictions || []).includes("Limited")) continue;
+      discovered.push(row);
+    }
+    cursor = data.nextPageCursor || "";
+    if (!cursor) break;
+    await sleep(150);
+  }
+  return discovered;
+}
+
 // Builds the full classic-limiteds catalog: Rolimons for RAP/Value/demand
 // (the whole catalog, one request), Roblox's batched catalog-details for
-// current lowest price / availability (fast: ~1 request per 100 items).
+// current lowest price / availability (fast: ~1 request per 100 items),
+// plus a bounded Roblox-side scan to catch brand-new limiteds Rolimons
+// hasn't picked up yet.
 async function buildClassicLimitedsCatalog() {
   const rolimonsItems = await fetchRolimonsCatalog();
   if (rolimonsItems.size === 0) return [];
@@ -579,6 +639,36 @@ async function buildClassicLimitedsCatalog() {
       overpricedPercent: calculateOverpricedPercent(base.rap, lowestPrice),
     });
   }
+
+  try {
+    const newlyLimited = await discoverNewRobloxLimiteds(rolimonsItems);
+    for (const row of newlyLimited) {
+      const id = normalizeNumber(row.id);
+      const resale = await fetchAnyResaleData(id, row.collectibleItemId);
+      const rap = firstPositiveNumber(resale.recentAveragePrice, row.price);
+      if (!(rap > 0)) continue;
+      const lowestPrice = firstPositiveNumber(row.lowestPrice, row.price);
+      items.push({
+        assetId: id, name: row.name || "Unknown", acronym: "", rap,
+        value: null, demand: -1, demandLabel: null, trend: -1, trendLabel: null,
+        projected: false, hyped: false, rare: false,
+        lowestPrice,
+        availableCopies: firstNonNegativeNumber(row.unitsAvailableForConsumption),
+        totalCopies: firstPositiveNumber(row.totalQuantity),
+        collectibleItemId: String(row.collectibleItemId || ""),
+        itemType: "Asset", marketType: "roblox", creatorName: row.creatorName || "Roblox",
+        thumbnail: `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
+        dealValue: calculateDealValue(rap, lowestPrice), dealPercent: calculateDealPercent(rap, lowestPrice),
+        overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
+      });
+    }
+    if (newlyLimited.length > 0) {
+      console.log(`Discovered ${newlyLimited.length} newly-limited item(s) not yet tracked by Rolimons.`);
+    }
+  } catch (e) {
+    console.warn(`New-limited discovery failed: ${e.message}`);
+  }
+
   return items;
 }
 
@@ -677,7 +767,7 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
 
     const [catalogDetails, resaleDetails] = await Promise.all([
       fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {}),
-      collectibleItemId && assetId > 10_000_000_000 ? fetchCollectibleResaleData(collectibleItemId) : fetchResaleData(assetId)
+      fetchAnyResaleData(assetId, collectibleItemId)
     ]);
 
     // Same RAP/Value source as the catalog list, so a given item's numbers
@@ -748,9 +838,11 @@ async function handlePortfolioRequest(req, res, parsedUrl) {
     const items = (await Promise.all(rawItems.map(async (raw) => {
       const assetId = normalizeNumber(raw.assetId);
       const rolimonsItem = rolimonsItems.get(assetId);
-      // Classic Roblox limiteds only - skip anything Rolimons doesn't track
-      // (UGC limiteds and other non-limited collectibles aren't supported).
-      if (!rolimonsItem) return null;
+      // Classic Roblox limiteds only. Rolimons is the primary check, but a
+      // brand-new Limited Rolimons hasn't tracked yet still carries a real
+      // recentAveragePrice from Roblox's own inventory endpoint, so accept
+      // that too rather than hiding a player's genuinely-owned new limited.
+      if (!rolimonsItem && !(raw.recentAveragePrice > 0)) return null;
       const details = catalogDetails.get(assetId) || {};
       // Same RAP/Value source as the catalog list and item details, so a
       // player's portfolio always agrees with what those views show.
