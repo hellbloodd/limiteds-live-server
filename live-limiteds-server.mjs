@@ -611,6 +611,23 @@ async function upsertLimitedItemsTable(items) {
   }
 }
  
+async function enrichWithRealRap(items) {
+  // The catalog search endpoint's "price" field is the item's original launch
+  // price, not its Recent Average Price - using it as "rap" produces numbers
+  // that don't match the real RAP shown by the per-item details endpoint
+  // (which correctly reads economy.roblox.com's actual Rap field). Look up
+  // the real RAP for every discovered item so the list matches item details.
+  return mapWithConcurrency(items, 20, async (item) => {
+    try {
+      const economyDetails = await fetchEconomyDetails(item.assetId);
+      const realRap = firstPositiveNumber(economyDetails.Rap);
+      return realRap ? { ...item, rap: realRap } : item;
+    } catch {
+      return item;
+    }
+  });
+}
+ 
 async function discoverAllRobloxLimiteds() {
   const all = new Map();
   for (const sortType of ROBLOX_DISCOVERY_SORT_TYPES) {
@@ -641,7 +658,7 @@ async function discoverAllRobloxLimiteds() {
       await sleep(250);
     }
   }
-  return [...all.values()];
+  return enrichWithRealRap([...all.values()]);
 }
  
 async function warmMarketIndex() {
