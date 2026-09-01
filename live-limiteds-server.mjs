@@ -1,6 +1,6 @@
 import http from "http";
 import { URL } from "url";
-
+ 
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "fully-fixed-v2";
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
@@ -20,7 +20,7 @@ const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 const ROBLOX_RECENT_DISCOVERY_PAGES = Number(process.env.ROBLOX_RECENT_DISCOVERY_PAGES || 4);
 const ROBLOX_DISCOVERY_SORT_TYPES = ["0", "1", "2", "3", "4", "5"];
-
+ 
 const pageCache = new Map();
 const marketIndexCache = new Map();
 const resaleCache = new Map();
@@ -35,11 +35,11 @@ let lastSnapshotRunAt = 0;
 let snapshotRunning = false;
 let memorySnapshots = [];
 let rolimonsSalesBlockedUntil = 0;
-
+ 
 function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap }) {
   return [marketType, sort, keyword, cursor || "", limit, minPrice ?? "", maxPrice ?? "", minRap ?? "", maxRap ?? ""].join(":");
 }
-
+ 
 function sendJson(res, status, body) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "*",
@@ -50,40 +50,40 @@ function sendJson(res, status, body) {
   });
   res.end(JSON.stringify(body));
 }
-
+ 
 function normalizeNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
-
+ 
 function firstPositiveNumber(...values) {
   for (const v of values) {
     if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
   }
   return null;
 }
-
+ 
 function firstNonNegativeNumber(...values) {
   for (const v of values) {
     if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v;
   }
   return null;
 }
-
+ 
 function parseOptionalNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
-
+ 
 function normalizeLimit(limit) {
   const r = Number(limit) || 30;
   return ALLOWED_LIMITS.reduce((b, c) => Math.abs(c - r) < Math.abs(b - r) ? c : b, 30);
 }
-
+ 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
-
+ 
 async function fetchJson(url, options = {}) {
   const retries = options.retries ?? 2;
   const timeoutMs = options.timeoutMs ?? 5000;
@@ -111,7 +111,7 @@ async function fetchJson(url, options = {}) {
   if (!text.trim()) throw new Error(`Empty JSON response for ${url}`);
   try { return JSON.parse(text); } catch (error) { throw new Error(`Bad JSON response for ${url}: ${error.message}`); }
 }
-
+ 
 async function fetchCatalogDetailsChunk(assetIds) {
   const body = JSON.stringify({ items: assetIds.map(id => ({ itemType: "Asset", id })) });
   let response;
@@ -128,7 +128,7 @@ async function fetchCatalogDetailsChunk(assetIds) {
   if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${ROBLOX_CATALOG_BATCH_URL}`);
   return response.json();
 }
-
+ 
 async function fetchCatalogDetailsBatch(assetIds) {
   const result = new Map();
   const missing = [];
@@ -159,7 +159,7 @@ async function fetchCatalogDetailsBatch(assetIds) {
   }
   return result;
 }
-
+ 
 function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   const url = new URL(ROBLOX_CATALOG_URL);
   const metricSorts = ["price_desc", "rap_desc", "deal_desc", "overpriced_desc", "bought_24h", "bought_7d", "bought_30d", "bought_1y", "loss_24h", "loss_7d", "loss_30d", "loss_1y", "loss_all", "profit_24h", "profit_7d", "profit_30d", "profit_1y", "profit_all"];
@@ -173,7 +173,7 @@ function buildCatalogUrl({ cursor, limit, keyword, marketType, sort }) {
   if (keyword) url.searchParams.set("keyword", keyword);
   return url;
 }
-
+ 
 async function fetchResaleData(assetId) {
   const c = resaleCache.get(assetId);
   if (c && Date.now() - c.fetchedAt < CACHE_TTL_MS) return c.data;
@@ -183,7 +183,7 @@ async function fetchResaleData(assetId) {
     return d;
   } catch { return {}; }
 }
-
+ 
 async function fetchCollectibleResaleData(cid) {
   const s = String(cid || "").trim();
   if (!s) return {};
@@ -196,7 +196,7 @@ async function fetchCollectibleResaleData(cid) {
     return d;
   } catch { return {}; }
 }
-
+ 
 async function fetchEconomyDetails(assetId) {
   const c = economyCache.get(assetId);
   if (c && Date.now() - c.fetchedAt < CACHE_TTL_MS) return c.data;
@@ -206,12 +206,12 @@ async function fetchEconomyDetails(assetId) {
     return d;
   } catch { return {}; }
 }
-
+ 
 function getPointVolume(p, useVal = false) {
   const v = Number(p?.salesVolume ?? p?.volume ?? p?.sales ?? p?.count ?? p?.quantity ?? (useVal ? p?.value : null));
   return Number.isFinite(v) && v > 0 ? Math.round(v) : null;
 }
-
+ 
 function normalizeHistoryPoints(points, source = "resale") {
   if (!Array.isArray(points)) return [];
   return points
@@ -221,7 +221,7 @@ function normalizeHistoryPoints(points, source = "resale") {
     .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
     .slice(-5000);
 }
-
+ 
 function buildSalesHistory(pricePoints, volumePoints = [], fallbackPrice = null) {
   const pH = normalizeHistoryPoints(pricePoints);
   const vH = normalizeHistoryPoints(volumePoints, "volume");
@@ -250,24 +250,24 @@ function buildSalesHistory(pricePoints, volumePoints = [], fallbackPrice = null)
   }
   return sales.sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(-5000);
 }
-
+ 
 function getStartOfTodayTime() {
   const n = new Date();
   n.setUTCHours(0, 0, 0, 0);
   return n.getTime();
 }
-
+ 
 function getPeriodStartTime(days) {
   if (!days) return 0;
   if (days === 1) return getStartOfTodayTime();
   return Date.now() - days * 86400000;
 }
-
+ 
 function getPeriodEndTime(days) {
   if (days === 1) return getStartOfTodayTime() + 86400000;
   return Date.now();
 }
-
+ 
 function findPeriodBaselineValue(history, days) {
   if (!days) return history.length > 0 ? history[0].value : null;
   const target = getPeriodStartTime(days);
@@ -280,42 +280,42 @@ function findPeriodBaselineValue(history, days) {
   }
   return (latest > 0 && latest < target) ? null : before ?? inside;
 }
-
+ 
 function percentChange(from, to) {
   if (!from || !to || from <= 0 || to <= 0) return null;
   return Math.round(((to - from) / from) * 10000) / 100;
 }
-
+ 
 function calculateDealValue(rap, price) {
   if (!rap || !price || rap <= 0 || price <= 0 || price >= rap) return null;
   return Math.round(rap - price);
 }
-
+ 
 function calculateDealPercent(rap, price) {
   const dv = calculateDealValue(rap, price);
   if (dv === null || rap <= 0) return null;
   return Math.round((dv / rap) * 10000) / 100;
 }
-
+ 
 function calculateOverpricedValue(rap, price) {
   if (!rap || !price || rap <= 0 || price <= rap) return null;
   return Math.round(price - rap);
 }
-
+ 
 function calculateOverpricedPercent(rap, price) {
   const ov = calculateOverpricedValue(rap, price);
   if (ov === null || rap <= 0) return null;
   return Math.round((ov / rap) * 10000) / 100;
 }
-
+ 
 function compareDealItems(a, b) {
   return ((b?.dealPercent || 0) - (a?.dealPercent || 0)) || ((b?.dealValue || 0) - (a?.dealValue || 0));
 }
-
+ 
 function compareOverpricedItems(a, b) {
   return ((b?.overpricedPercent || 0) - (a?.overpricedPercent || 0)) || ((b?.overpricedValue || 0) - (a?.overpricedValue || 0));
 }
-
+ 
 function calculateSalesMetrics(points, days) {
   if (!Array.isArray(points) || !days) return { salesCount: null, averageSalePrice: null };
   const s = getPeriodStartTime(days), e = getPeriodEndTime(days);
@@ -330,7 +330,7 @@ function calculateSalesMetrics(points, days) {
   }
   return c <= 0 ? { salesCount: null, averageSalePrice: null } : { salesCount: c, averageSalePrice: Math.round(t / c) };
 }
-
+ 
 async function mapWithConcurrency(items, concurrency, fn) {
   const results = [];
   for (let i = 0; i < items.length; i += concurrency) {
@@ -339,7 +339,7 @@ async function mapWithConcurrency(items, concurrency, fn) {
   }
   return results;
 }
-
+ 
 async function fetchRolimonsItemSales(assetId) {
   const cached = rolimonsSalesCache.get(assetId);
   if (cached && Date.now() - cached.fetchedAt < ROLIMONS_CACHE_TTL_MS) return cached.data;
@@ -366,7 +366,7 @@ async function fetchRolimonsItemSales(assetId) {
     return { history: [], totalSales: 0 };
   }
 }
-
+ 
 async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCAN_LIMIT) {
   const candidates = items.filter(i => i.assetId > 0).slice(0, maxItems);
   return mapWithConcurrency(candidates, 24, async (item) => {
@@ -385,7 +385,7 @@ async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCA
     return { ...item, salesCount: sales.salesCount, averageSalePrice: sales.averageSalePrice, salesSource: sales.salesSource, salesEstimated: sales.salesEstimated };
   }).then(r => r.sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0)));
 }
-
+ 
 function buildRapChangeMetrics(ownHistory, currentRap) {
   const rawHistory = ownHistory.slice(-5000);
   if (rawHistory.length < 2) return {
@@ -418,7 +418,7 @@ function buildRapChangeMetrics(ownHistory, currentRap) {
     changeAllTime: cAll, change24h: c24, change7d: c7, change30d: c30, change1y: c1y,
   };
 }
-
+ 
 async function addSnapshotSalesMetrics(items) {
   console.log(`Snapshot prepared ${items.length} items for database.`);
   return items.map(item => {
@@ -433,11 +433,11 @@ async function addSnapshotSalesMetrics(items) {
     };
   });
 }
-
+ 
 function snapshotStorageEnabled() {
   return SUPABASE_URL !== "" && SUPABASE_SERVICE_ROLE_KEY !== "";
 }
-
+ 
 async function supabaseRequest(path, options = {}) {
   if (!snapshotStorageEnabled()) return null;
   const requestUrl = `${SUPABASE_URL}/rest/v1/${path}`;
@@ -462,7 +462,7 @@ async function supabaseRequest(path, options = {}) {
     throw new Error(`Supabase network error for ${requestUrl}: ${error.cause?.message || error.message}`);
   }
 }
-
+ 
 function normalizeSnapshotRows(rows) {
   if (!Array.isArray(rows)) return [];
   return rows.map(r => ({
@@ -472,7 +472,7 @@ function normalizeSnapshotRows(rows) {
     source: "own"
   })).filter(p => p.value > 0 && Number.isFinite(Date.parse(p.date)));
 }
-
+ 
 function normalizeItemSnapshotRows(rows) {
   if (!Array.isArray(rows)) return [];
   return rows.map(r => ({
@@ -490,7 +490,7 @@ function normalizeItemSnapshotRows(rows) {
     marketType: "roblox"
   })).filter(i => i.assetId > 0 && i.rap > 0);
 }
-
+ 
 async function fetchCurrentLimitedItems() {
   if (!snapshotStorageEnabled()) return [];
   try {
@@ -510,7 +510,7 @@ async function fetchCurrentLimitedItems() {
     return [];
   }
 }
-
+ 
 function mergeMarketItems(primary, secondary) {
   const byId = new Map();
   for (const item of [...secondary, ...primary]) {
@@ -537,7 +537,7 @@ function mergeMarketItems(primary, secondary) {
   }
   return [...byId.values()].filter(i => i.assetId > 0 && i.rap > 0);
 }
-
+ 
 async function fetchStoredSnapshots(assetId) {
   if (!snapshotStorageEnabled()) return normalizeSnapshotRows(memorySnapshots.filter(r => r.asset_id === assetId));
   try {
@@ -547,7 +547,7 @@ async function fetchStoredSnapshots(assetId) {
     ));
   } catch { return []; }
 }
-
+ 
 async function fetchStoredSnapshotsForAssets(assetIds) {
   const ids = [...new Set(assetIds)];
   const byId = new Map(ids.map(id => [id, []]));
@@ -578,7 +578,7 @@ async function fetchStoredSnapshotsForAssets(assetIds) {
   }
   return byId;
 }
-
+ 
 async function saveSnapshotRows(rows) {
   if (!rows.length || !snapshotStorageEnabled()) return;
   memorySnapshots.push(...rows);
@@ -590,7 +590,7 @@ async function saveSnapshotRows(rows) {
     }
   }
 }
-
+ 
 async function upsertLimitedItemsTable(items) {
   if (!items.length || !snapshotStorageEnabled()) return;
   for (let i = 0; i < items.length; i += 500) {
@@ -605,7 +605,7 @@ async function upsertLimitedItemsTable(items) {
     }
   }
 }
-
+ 
 async function discoverAllRobloxLimiteds() {
   const all = new Map();
   for (const sortType of ROBLOX_DISCOVERY_SORT_TYPES) {
@@ -638,15 +638,25 @@ async function discoverAllRobloxLimiteds() {
   }
   return [...all.values()];
 }
-
+ 
 async function warmMarketIndex() {
   let items = await discoverAllRobloxLimiteds();
   items = mergeMarketItems(items, await fetchCurrentLimitedItems());
-  marketIndexCache.set("roblox", items);
+  if (items.length > 0) {
+    marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
+  }
   console.log(`Roblox market index warmed with ${items.length} priced limiteds.`);
   return items;
 }
-
+ 
+async function getRobloxMarketIndex() {
+  const cached = marketIndexCache.get("roblox");
+  if (cached && cached.items.length > 0 && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+  return warmMarketIndex();
+}
+ 
 async function handleLimitedsRequest(req, res, parsedUrl) {
   const p = parsedUrl.searchParams;
   const marketType = p.get("type") === "roblox" ? "roblox" : "ugc";
@@ -662,7 +672,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   const cacheKey = makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap });
   const cached = pageCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
-
+ 
   if (marketType === "ugc") {
     const url = new URL(ROBLOX_CATALOG_URL);
     url.searchParams.set("category", "All");
@@ -686,14 +696,14 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
     pageCache.set(cacheKey, { cachedAt: Date.now(), data: result });
     return sendJson(res, 200, result);
   }
-
-  let items = marketIndexCache.get("roblox") || await warmMarketIndex();
+ 
+  let items = await getRobloxMarketIndex();
   if (keyword) { const lk = keyword.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(lk)); }
   if (minPrice > 0) items = items.filter(i => !i.lowestPrice || i.lowestPrice >= minPrice);
   if (maxPrice > 0) items = items.filter(i => !i.lowestPrice || i.lowestPrice <= maxPrice);
   if (minRap > 0) items = items.filter(i => i.rap >= minRap);
   if (maxRap > 0) items = items.filter(i => i.rap <= maxRap);
-
+ 
   if (sort === "price_asc") items.sort((a, b) => (a.lowestPrice || Infinity) - (b.lowestPrice || Infinity));
   else if (sort === "rap_desc") items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
@@ -715,7 +725,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       return r - l;
     });
   } else items.sort((a, b) => b.assetId - a.assetId);
-
+ 
   const startIdx = cursor ? parseInt(cursor, 10) || 0 : 0;
   const pagedItems = items.slice(startIdx, startIdx + limit);
   const nextCursor = (startIdx + limit < items.length) ? String(startIdx + limit) : "";
@@ -723,7 +733,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   pageCache.set(cacheKey, { cachedAt: Date.now(), data: result });
   return sendJson(res, 200, result);
 }
-
+ 
 async function handleItemDetailsRequest(req, res, parsedUrl) {
   const p = parsedUrl.searchParams;
   const assetId = normalizeNumber(Number(p.get("assetId")));
@@ -768,7 +778,7 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
     return sendJson(res, 500, { ok: false, error: "Failed to load item details" });
   }
 }
-
+ 
 async function handlePortfolioRequest(req, res, parsedUrl) {
   const userId = parsedUrl.searchParams.get("userId");
   if (!userId) return sendJson(res, 400, { ok: false, error: "Missing userId" });
@@ -805,7 +815,7 @@ async function handlePortfolioRequest(req, res, parsedUrl) {
     return sendJson(res, 502, { ok: false, error: "Failed to fetch Roblox inventory" });
   }
 }
-
+ 
 async function runSnapshot() {
   if (snapshotRunning) return;
   snapshotRunning = true;
@@ -820,6 +830,10 @@ async function runSnapshot() {
       lowest_price: i.lowestPrice || null, available_copies: i.availableCopies || 0, total_copies: i.totalCopies || 0,
       saved_at: new Date().toISOString()
     })));
+    if (items.length > 0) {
+      marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
+      pageCache.clear();
+    }
     console.log(`Snapshot saved ${items.length} rows to supabase.`);
   } catch (e) {
     console.error(`Snapshot failed: ${e.message}`);
@@ -827,7 +841,7 @@ async function runSnapshot() {
     snapshotRunning = false;
   }
 }
-
+ 
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "OPTIONS") {
@@ -849,12 +863,16 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: "Internal server error" });
   }
 });
-
+ 
 async function startServer() {
   console.log("Waiting for Render network to be ready...");
   await new Promise(resolve => setTimeout(resolve, 5000));
   server.listen(PORT, () => console.log(`Limiteds Live server ${SERVER_VERSION} running on http://localhost:${PORT}`));
 }
-
+ 
 startServer();
-if (snapshotStorageEnabled()) setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
+if (snapshotStorageEnabled()) {
+  setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
+  setInterval(() => runSnapshot().catch(e => console.error(e.message)), SNAPSHOT_INTERVAL_MS);
+  console.log(`Recurring snapshots scheduled every ${Math.round(SNAPSHOT_INTERVAL_MS / 60000)} minute(s).`);
+}
