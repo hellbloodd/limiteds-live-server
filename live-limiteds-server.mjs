@@ -35,7 +35,6 @@ const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_00
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
-const ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
 const ROBLOX_CATALOG_BATCH_URL = "https://catalog.roblox.com/v1/catalog/items/details";
 const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
@@ -607,7 +606,9 @@ async function getRobloxMarketIndex() {
 
 async function handleLimitedsRequest(req, res, parsedUrl) {
   const p = parsedUrl.searchParams;
-  const marketType = p.get("type") === "roblox" ? "roblox" : "ugc";
+  // Classic Roblox limiteds only - UGC limiteds (a separate, newer Roblox
+  // marketplace category that Rolimons doesn't track) are not supported.
+  const marketType = "roblox";
   const sort = p.get("sort") || "updated";
   const keyword = (p.get("keyword") || "").trim();
   const cursor = (p.get("cursor") || "").trim();
@@ -620,32 +621,6 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   const cacheKey = makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap });
   const cached = pageCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
-
-  if (marketType === "ugc") {
-    // UGC limiteds are a separate, newer Roblox marketplace category that
-    // Rolimons does not track - this path stays on live Roblox catalog data.
-    const url = new URL(ROBLOX_CATALOG_URL);
-    url.searchParams.set("category", "All");
-    url.searchParams.set("salesTypeFilter", "2");
-    url.searchParams.set("sortType", "2");
-    url.searchParams.set("limit", String(limit));
-    if (cursor) url.searchParams.set("cursor", cursor);
-    if (keyword) url.searchParams.set("keyword", keyword);
-    const data = await fetchJson(url.toString());
-    const items = (data.data || []).map(i => {
-      const id = normalizeNumber(i.id), rap = firstPositiveNumber(i.price), lp = firstPositiveNumber(i.lowestPrice);
-      return {
-        assetId: id, name: i.name, rap, lowestPrice: lp, availableCopies: firstNonNegativeNumber(i.available),
-        totalCopies: firstPositiveNumber(i.unitsAvailable), collectibleItemId: String(i.collectibleItemId || ""),
-        itemType: "Asset", marketType: "ugc", creatorName: i.creatorName || "UGC",
-        dealValue: calculateDealValue(rap, lp), dealPercent: calculateDealPercent(rap, lp),
-        overpricedValue: calculateOverpricedValue(rap, lp), overpricedPercent: calculateOverpricedPercent(rap, lp)
-      };
-    }).filter(i => i.assetId > 0 && i.rap > 0);
-    const result = { ok: true, items, nextPageCursor: data.nextPageCursor || "", updatedAt: new Date().toISOString() };
-    pageCache.set(cacheKey, { cachedAt: Date.now(), data: result });
-    return sendJson(res, 200, result);
-  }
 
   let items = await getRobloxMarketIndex();
   if (keyword) { const lk = keyword.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(lk)); }
@@ -770,10 +745,13 @@ async function handlePortfolioRequest(req, res, parsedUrl) {
       fetchRolimonsCatalog()
     ]);
 
-    const items = await Promise.all(rawItems.map(async (raw) => {
+    const items = (await Promise.all(rawItems.map(async (raw) => {
       const assetId = normalizeNumber(raw.assetId);
-      const details = catalogDetails.get(assetId) || {};
       const rolimonsItem = rolimonsItems.get(assetId);
+      // Classic Roblox limiteds only - skip anything Rolimons doesn't track
+      // (UGC limiteds and other non-limited collectibles aren't supported).
+      if (!rolimonsItem) return null;
+      const details = catalogDetails.get(assetId) || {};
       // Same RAP/Value source as the catalog list and item details, so a
       // player's portfolio always agrees with what those views show.
       const rap = firstPositiveNumber(rolimonsItem?.rap, raw.recentAveragePrice, details.price);
@@ -783,10 +761,10 @@ async function handlePortfolioRequest(req, res, parsedUrl) {
         assetId, name: rolimonsItem?.name || details.name || raw.name || "Unknown", rap,
         value: rolimonsItem?.value ?? null, lowestPrice,
         quantity: raw.owned || 1, collectibleItemId: String(raw.collectibleItemId || details.collectibleItemId || ""),
-        marketType: assetId > 10_000_000_000 ? "ugc" : "roblox",
+        marketType: "roblox",
         ...buildRapChangeMetrics(ownHistory, rap)
       };
-    }));
+    }))).filter(Boolean);
     const result = { ok: true, items };
     portfolioCache.set(cacheKey, { cachedAt: Date.now(), data: result });
     return sendJson(res, 200, result);
