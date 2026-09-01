@@ -269,16 +269,21 @@ function getPeriodEndTime(days) {
 }
  
 function findPeriodBaselineValue(history, days) {
-  if (!days) return history.length > 0 ? history[0].value : null;
+  if (!history.length) return null;
+  if (!days) return history[0].value;
   const target = getPeriodStartTime(days);
-  let before = null, inside = null, latest = 0;
+  const earliestTime = Date.parse(history[0].date);
+  // If we don't have any snapshot old enough to actually represent "N days ago",
+  // there is no honest baseline for this period yet - report no data instead of
+  // silently comparing against a too-recent point and mislabeling the timeframe.
+  if (!Number.isFinite(earliestTime) || earliestTime > target) return null;
+  let before = null;
   for (const p of history) {
     const t = Date.parse(p.date);
-    if (t > latest) latest = t;
     if (t <= target && p.source !== "current") before = p.value;
-    else if (t > target && p.source !== "current" && inside === null) inside = p.value;
+    else if (t > target) break;
   }
-  return (latest > 0 && latest < target) ? null : before ?? inside;
+  return before;
 }
  
 function percentChange(from, to) {
