@@ -642,25 +642,30 @@ async function enrichWithRealRap(items) {
   // RAP in a single bulk request - use that as the primary source, and only
   // fall back to a slower per-item Roblox lookup for anything it's missing.
   const rolimonsMap = await fetchRolimonsCatalogRapMap();
+  console.log(`Rolimons catalog map has ${rolimonsMap.size} items.`);
   const missing = [];
   const enriched = items.map((item) => {
     const rap = rolimonsMap.get(item.assetId);
-    if (rap) return { ...item, rap };
+    if (rap) return { ...item, rap, rapSource: "rolimons" };
     missing.push(item);
     return item;
   });
+  console.log(`RAP enrichment: ${items.length - missing.length} from rolimons, ${missing.length} need per-item lookup.`);
   if (missing.length === 0) return enriched;
 
   const byId = new Map(enriched.map((i) => [i.assetId, i]));
+  let resolvedCount = 0;
   const fixedUp = await mapWithConcurrency(missing, 10, async (item) => {
     try {
       const resale = await fetchResaleData(item.assetId);
       const realRap = firstPositiveNumber(resale.recentAveragePrice);
-      return realRap ? { ...item, rap: realRap } : item;
+      if (realRap) resolvedCount += 1;
+      return realRap ? { ...item, rap: realRap, rapSource: "resale" } : { ...item, rapSource: "raw_fallback" };
     } catch {
-      return item;
+      return { ...item, rapSource: "raw_fallback_error" };
     }
   });
+  console.log(`Per-item RAP fallback resolved ${resolvedCount} of ${missing.length}.`);
   for (const item of fixedUp) byId.set(item.assetId, item);
   return [...byId.values()];
 }
