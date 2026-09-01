@@ -666,13 +666,14 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
     const isLoss = sort.startsWith("loss_");
     const suffix = sort.replace("loss_", "").replace("profit_", "");
     const days = { "_24h": 1, "_7d": 7, "_30d": 30, "_1y": 365, "_all": null }[`_${suffix}`];
+    const fieldSuffix = suffix === "all" ? "AllTime" : suffix;
     for (const item of items) {
       const history = await fetchStoredSnapshots(item.assetId);
       Object.assign(item, buildRapChangeMetrics(history, item.rap));
     }
     items.sort((a, b) => {
-      const l = a[isLoss ? `loss${suffix}` : `profit${suffix}`] || 0;
-      const r = b[isLoss ? `loss${suffix}` : `profit${suffix}`] || 0;
+      const l = a[isLoss ? `loss${fieldSuffix}` : `profit${fieldSuffix}`] || 0;
+      const r = b[isLoss ? `loss${fieldSuffix}` : `profit${fieldSuffix}`] || 0;
       return r - l;
     });
   } else items.sort((a, b) => b.assetId - a.assetId);
