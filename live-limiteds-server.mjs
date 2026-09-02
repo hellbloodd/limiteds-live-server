@@ -1424,6 +1424,11 @@ async function mapWithConcurrency(items, concurrency, fn) {
 const SALES_PERIOD_DAYS = [1, 7, 30, 365]; // bought_24h / 7d / 30d / 1y
 const SALES_CACHE_TTL_MS = Number(process.env.SALES_CACHE_TTL_MS || 30 * 60 * 1000);
 let salesWarmupRunning = false;
+// Same in-flight-dedup problem as the market index build: a cold cache plus
+// concurrent visitors used to trigger multiple full ~2500-item sales scans at
+// once (40-way-concurrent each), which is what made "Sort by Sales" hang
+// forever under load. Every caller now shares one in-flight scan promise.
+let salesScanPromise = null;
 
 // Fetching resale history is the same live external call per item no matter
 // which period you're asking about - only the local time-window filter in
@@ -1432,25 +1437,40 @@ let salesWarmupRunning = false;
 // catalog scan per period) is what makes it possible to keep every bucket
 // warm without hammering Roblox's API four times as hard.
 async function scanAllSalesMetrics(maxItems = ACTIVE_SALES_SCAN_LIMIT) {
-  const allItems = await getRobloxMarketIndex();
-  const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
-  const maps = new Map(SALES_PERIOD_DAYS.map(d => [d, new Map()]));
+  // Share one in-flight scan across every caller (cold-cache requests and the
+  // proactive warm-up alike) instead of letting each start its own pass -
+  // running two ~2500-item scans at once was enough on its own to trip
+  // Roblox's rate limiting for the whole catalog build too.
+  if (salesScanPromise) return salesScanPromise;
+  salesScanPromise = (async () => {
+    try {
+      const allItems = await getRobloxMarketIndex();
+      const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
+      const maps = new Map(SALES_PERIOD_DAYS.map(d => [d, new Map()]));
 
-  await mapWithConcurrency(candidates, 40, async (item) => {
-    const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
-    const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
-    for (const days of SALES_PERIOD_DAYS) {
-      const sales = calculateSalesMetrics(salesHistory, days);
-      maps.get(days).set(item.assetId, {
-        salesCount: sales.salesCount,
-        averageSalePrice: sales.averageSalePrice,
-        salesSource: sales.salesCount ? "roblox" : null,
-        salesEstimated: false,
+      // Lower, gentler concurrency than before (was 40) - that was aggressive
+      // enough by itself to trip Roblox's per-IP rate limiting, which then
+      // cascaded into 429s on the unrelated catalog-details calls too.
+      await mapWithConcurrency(candidates, 12, async (item) => {
+        const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
+        const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
+        for (const days of SALES_PERIOD_DAYS) {
+          const sales = calculateSalesMetrics(salesHistory, days);
+          maps.get(days).set(item.assetId, {
+            salesCount: sales.salesCount,
+            averageSalePrice: sales.averageSalePrice,
+            salesSource: sales.salesCount ? "roblox" : null,
+            salesEstimated: false,
+          });
+        }
       });
-    }
-  });
 
-  return maps;
+      return maps;
+    } finally {
+      salesScanPromise = null;
+    }
+  })();
+  return salesScanPromise;
 }
 
 // Runs the full-catalog sales scan and refreshes every period bucket's cache
@@ -1863,13 +1883,29 @@ async function buildClassicLimitedsCatalog() {
   return items;
 }
 
+// In-flight build lock: right after a fresh deploy, several requests can land
+// before the cache is warm and each used to kick off its OWN full catalog
+// build (a full pass of Roblox catalog-detail batches) at the same time - the
+// direct cause of the mass 429 storms seen in production. Every caller that
+// arrives while a build is already running now awaits that SAME promise
+// instead of starting a duplicate one.
+let marketIndexBuildPromise = null;
+
 async function warmMarketIndex() {
-  const items = await buildClassicLimitedsCatalog();
-  if (items.length > 0) {
-    marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
-  }
-  console.log(`Roblox market index warmed with ${items.length} priced limiteds.`);
-  return items;
+  if (marketIndexBuildPromise) return marketIndexBuildPromise;
+  marketIndexBuildPromise = (async () => {
+    try {
+      const items = await buildClassicLimitedsCatalog();
+      if (items.length > 0) {
+        marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
+      }
+      console.log(`Roblox market index warmed with ${items.length} priced limiteds.`);
+      return items;
+    } finally {
+      marketIndexBuildPromise = null;
+    }
+  })();
+  return marketIndexBuildPromise;
 }
 
 async function getRobloxMarketIndex() {
@@ -2097,8 +2133,15 @@ async function runSnapshot() {
   console.log("Snapshot started.");
   try {
     const items = await buildClassicLimitedsCatalog();
-    await saveSnapshotRows(items.map(i => ({ asset_id: i.assetId, rap: i.rap, lowest_price: i.lowestPrice || null, saved_at: new Date().toISOString() })));
-    await upsertLimitedItemsTable(items.map(i => ({
+    // `rap` is a NOT NULL column in both tables. A handful of items (very
+    // rare, brand-new/untraded ones) still come back with no rap at all even
+    // after the Rolimons value fallback - previously those null values were
+    // sent to Supabase anyway, which rejects the WHOLE batch of 500 they
+    // happened to land in (a single bad row poisons the other ~499 good
+    // ones). Filter them out before saving instead of letting that happen.
+    const withRap = items.filter(i => i.rap > 0);
+    await saveSnapshotRows(withRap.map(i => ({ asset_id: i.assetId, rap: i.rap, lowest_price: i.lowestPrice || null, saved_at: new Date().toISOString() })));
+    await upsertLimitedItemsTable(withRap.map(i => ({
       asset_id: i.assetId, collectible_item_id: i.collectibleItemId, name: i.name, rap: i.rap, value: i.value,
       lowest_price: i.lowestPrice || null, available_copies: i.availableCopies || 0, total_copies: i.totalCopies || 0,
       saved_at: new Date().toISOString()
@@ -2107,7 +2150,7 @@ async function runSnapshot() {
       marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
       pageCache.clear();
     }
-    console.log(`Snapshot saved ${items.length} rows to supabase.`);
+    console.log(`Snapshot saved ${withRap.length}/${items.length} rows to supabase.`);
   } catch (e) {
     console.error(`Snapshot failed: ${e.message}`);
   } finally {
