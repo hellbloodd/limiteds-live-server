@@ -1667,10 +1667,13 @@ async function scanAllSalesMetrics(maxItems = ACTIVE_SALES_SCAN_LIMIT) {
       const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
       const maps = new Map(SALES_PERIOD_DAYS.map(d => [d, new Map()]));
 
-      // Lower, gentler concurrency than before (was 40) - that was aggressive
-      // enough by itself to trip Roblox's per-IP rate limiting, which then
-      // cascaded into 429s on the unrelated catalog-details calls too.
-      await mapWithConcurrency(candidates, 12, async (item) => {
+      // This hits a completely different Roblox host/endpoint
+      // (apis.roblox.com/marketplace-sales) than the catalog-details calls
+      // that were tripping 429s, so it doesn't share that rate limit -
+      // pushed back up from the very conservative 12 to get sales data ready
+      // faster on a cold start, while staying well under the 40 that was
+      // aggressive enough on its own to get rate-limited.
+      await mapWithConcurrency(candidates, 20, async (item) => {
         const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
         const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
         for (const days of SALES_PERIOD_DAYS) {
@@ -2050,8 +2053,12 @@ async function buildClassicLimitedsCatalog() {
     items.push({
       ...base,
       lowestPrice,
-      availableCopies: firstNonNegativeNumber(details.available),
-      totalCopies: firstPositiveNumber(details.unitsAvailable),
+      // Roblox's actual field names here are unitsAvailableForConsumption /
+      // totalQuantity - this was reading .available / .unitsAvailable, which
+      // don't exist on the response at all, so Available and Total copies
+      // silently showed 0 for every single item.
+      availableCopies: firstNonNegativeNumber(details.unitsAvailableForConsumption),
+      totalCopies: firstPositiveNumber(details.totalQuantity),
       collectibleItemId: String(details.collectibleItemId || ""),
       itemType: "Asset",
       marketType: "roblox",
@@ -2268,8 +2275,8 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       hyped: rolimonsItem?.hyped ?? false,
       rare: rolimonsItem?.rare ?? false,
       lowestPrice,
-      availableCopies: firstNonNegativeNumber(catalogDetails.available, resaleDetails.numberRemaining),
-      totalCopies: firstPositiveNumber(catalogDetails.unitsAvailable),
+      availableCopies: firstNonNegativeNumber(catalogDetails.unitsAvailableForConsumption, resaleDetails.numberRemaining),
+      totalCopies: firstPositiveNumber(catalogDetails.totalQuantity),
       collectibleItemId: String(catalogDetails.collectibleItemId || collectibleItemId),
       itemType: catalogDetails.itemType || "Asset", marketType: "roblox",
       creatorName: catalogDetails.creatorName || "Roblox",
@@ -2364,6 +2371,17 @@ async function runSnapshot() {
   console.log("Snapshot started.");
   try {
     const items = await buildClassicLimitedsCatalog();
+    if (items.length > 0) {
+      // Publish the fresh catalog - and kick off the sales warm-up against it
+      // - as soon as it's built, rather than waiting for the Supabase writes
+      // below to finish first. Those writes are just persistence for our own
+      // history; they don't need to block "sort by sales" from becoming
+      // available, and previously they did, adding several extra seconds to
+      // every cold start before sales data showed up at all.
+      marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
+      pageCache.clear();
+      warmSalesMetrics().catch(e => console.error(`Sales warm-up error: ${e.message}`));
+    }
     // `rap` is a NOT NULL column in both tables. A handful of items (very
     // rare, brand-new/untraded ones) still come back with no rap at all even
     // after the Rolimons value fallback - previously those null values were
@@ -2377,21 +2395,12 @@ async function runSnapshot() {
       lowest_price: i.lowestPrice || null, available_copies: i.availableCopies || 0, total_copies: i.totalCopies || 0,
       saved_at: new Date().toISOString()
     })));
-    if (items.length > 0) {
-      marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
-      pageCache.clear();
-    }
     console.log(`Snapshot saved ${withRap.length}/${items.length} rows to supabase.`);
   } catch (e) {
     console.error(`Snapshot failed: ${e.message}`);
   } finally {
     snapshotRunning = false;
   }
-  // Keep the "sort by sales" cache warm alongside the regular RAP snapshot,
-  // using whatever catalog just got refreshed above. Runs after, not in
-  // parallel with, the snapshot - both hit Roblox's API hard and shouldn't
-  // race each other for rate-limit headroom.
-  warmSalesMetrics().catch(e => console.error(`Sales warm-up error: ${e.message}`));
 }
 
 const server = http.createServer(async (req, res) => {
