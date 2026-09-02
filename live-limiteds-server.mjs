@@ -488,10 +488,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 </header>
 
 <div class="controls">
-  <div class="control-group">
-    <div class="label">View</div>
-    <div class="pill-row" id="view-row"></div>
-  </div>
   <div class="control-group" id="sort-group">
     <div class="label">Sort</div>
     <div class="pill-row" id="sort-row"></div>
@@ -516,10 +512,26 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       <input type="number" min="0" inputmode="numeric" class="range-input" id="price-max" placeholder="Max">
     </div>
   </div>
-  <div class="control-group" id="adurite-group" hidden>
+  <div class="control-group">
     <div class="label">Min Sales / Day</div>
     <div class="range-row">
-      <input type="number" min="0" inputmode="numeric" class="range-input" id="adurite-min-sales" placeholder="e.g. 10" value="5">
+      <input type="number" min="0" inputmode="numeric" class="range-input" id="min-sales-day" placeholder="e.g. 10">
+    </div>
+  </div>
+  <div class="control-group">
+    <div class="label">RAP vs Value %</div>
+    <div class="range-row">
+      <input type="number" inputmode="numeric" class="range-input" id="rap-vs-value-min" placeholder="Min">
+      <span class="range-sep">–</span>
+      <input type="number" inputmode="numeric" class="range-input" id="rap-vs-value-max" placeholder="Max">
+    </div>
+  </div>
+  <div class="control-group">
+    <div class="label">Price vs RAP %</div>
+    <div class="range-row">
+      <input type="number" inputmode="numeric" class="range-input" id="price-vs-rap-min" placeholder="Min">
+      <span class="range-sep">–</span>
+      <input type="number" inputmode="numeric" class="range-input" id="price-vs-rap-max" placeholder="Max">
     </div>
   </div>
 </div>
@@ -562,20 +574,19 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     { key: "deal_desc", label: "Best Deals" },
     { key: "overpriced_desc", label: "Overpriced" },
     { key: "overpriced_sales_desc", label: "Overpriced (Most Sales)" },
+    { key: "rap_above_value_desc", label: "RAP > Value" },
     { key: "changes", label: "Changes" },
     { key: "sales", label: "Sales" },
   ];
   var PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"];
   var PERIOD_LABEL = { "1h": "1h", "24h": "24h", "7d": "7d", "30d": "30d", "1y": "1y", all: "All" };
-  var VIEWS = [
-    { key: "catalog", label: "Catalog" },
-    { key: "adurite", label: "Adurite Deals" },
-  ];
 
   var state = {
-    view: "catalog", // catalog | adurite
-    minSalesPerDay: 5,
-    minSalesDebounce: null,
+    minSalesPerDay: null,
+    minRapVsValue: null,
+    maxRapVsValue: null,
+    minPriceVsRap: null,
+    maxPriceVsRap: null,
     sortKey: "rap_desc",
     changeMode: "profit", // profit | loss  (used only when sortKey === "changes")
     period: "24h",
@@ -593,15 +604,17 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   };
 
   var els = {
-    viewRow: document.getElementById("view-row"),
     sortGroup: document.getElementById("sort-group"),
     sortRow: document.getElementById("sort-row"),
     periodGroup: document.getElementById("period-group"),
     periodSelect: document.getElementById("period-select"),
     rapRangeGroup: document.getElementById("rap-range-group"),
     priceRangeGroup: document.getElementById("price-range-group"),
-    aduriteGroup: document.getElementById("adurite-group"),
-    aduriteMinSales: document.getElementById("adurite-min-sales"),
+    minSalesDay: document.getElementById("min-sales-day"),
+    rapVsValueMin: document.getElementById("rap-vs-value-min"),
+    rapVsValueMax: document.getElementById("rap-vs-value-max"),
+    priceVsRapMin: document.getElementById("price-vs-rap-min"),
+    priceVsRapMax: document.getElementById("price-vs-rap-max"),
     statusLine: document.getElementById("status-line"),
     grid: document.getElementById("grid"),
     loadMoreWrap: document.getElementById("load-more-wrap"),
@@ -658,34 +671,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   function usesSalesPeriod() { return state.sortKey === "sales" || state.sortKey === "overpriced_sales_desc"; }
 
   // ---------- Rendering: controls ----------
-  function isAduriteView() { return state.view === "adurite"; }
-
-  function renderViewRow() {
-    els.viewRow.innerHTML = "";
-    VIEWS.forEach(function (v) {
-      var btn = document.createElement("button");
-      btn.className = "pill" + (state.view === v.key ? " active" : "");
-      btn.textContent = v.label;
-      btn.addEventListener("click", function () {
-        if (state.view === v.key) return;
-        state.view = v.key;
-        renderViewRow();
-        renderControlVisibility();
-        resetAndLoad();
-      });
-      els.viewRow.appendChild(btn);
-    });
-  }
-
-  function renderControlVisibility() {
-    var adurite = isAduriteView();
-    els.sortGroup.hidden = adurite;
-    els.rapRangeGroup.hidden = adurite;
-    els.priceRangeGroup.hidden = adurite;
-    els.aduriteGroup.hidden = !adurite;
-    renderPeriodGroup();
-  }
-
   function renderSortRow() {
     els.sortRow.innerHTML = "";
     SORTS.forEach(function (s) {
@@ -753,11 +738,22 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     return Number.isFinite(v) && v >= 0 ? v : null;
   }
 
-  function wireRangeInput(el, stateKey) {
+  // Percentage comparisons (RAP vs Value, Price vs RAP) can legitimately go
+  // negative (a price below RAP, a RAP below Value) - parseRangeInput's
+  // v >= 0 guard exists for RAP/Price/sales-count fields where a negative
+  // number is meaningless, but it would silently swallow exactly the
+  // negative thresholds these two filters need to be useful.
+  function parseSignedRangeInput(el) {
+    var v = parseFloat(el.value);
+    return Number.isFinite(v) ? v : null;
+  }
+
+  function wireRangeInput(el, stateKey, parser) {
+    var parse = parser || parseRangeInput;
     el.addEventListener("input", function () {
       clearTimeout(state.rangeDebounce);
       state.rangeDebounce = setTimeout(function () {
-        state[stateKey] = parseRangeInput(el);
+        state[stateKey] = parse(el);
         resetAndLoad();
       }, 400);
     });
@@ -766,16 +762,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   wireRangeInput(els.rapMax, "maxRap");
   wireRangeInput(els.priceMin, "minPrice");
   wireRangeInput(els.priceMax, "maxPrice");
-
-  els.aduriteMinSales.addEventListener("input", function () {
-    clearTimeout(state.minSalesDebounce);
-    var el = els.aduriteMinSales;
-    state.minSalesDebounce = setTimeout(function () {
-      var v = parseFloat(el.value);
-      state.minSalesPerDay = Number.isFinite(v) && v >= 0 ? v : 0;
-      resetAndLoad();
-    }, 400);
-  });
+  wireRangeInput(els.minSalesDay, "minSalesPerDay");
+  wireRangeInput(els.rapVsValueMin, "minRapVsValue", parseSignedRangeInput);
+  wireRangeInput(els.rapVsValueMax, "maxRapVsValue", parseSignedRangeInput);
+  wireRangeInput(els.priceVsRapMin, "minPriceVsRap", parseSignedRangeInput);
+  wireRangeInput(els.priceVsRapMax, "maxPriceVsRap", parseSignedRangeInput);
 
   // ---------- Data fetching ----------
   function buildUrl(path, params) {
@@ -810,23 +801,21 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     els.loadMore.textContent = "Loading…";
     els.loadMore.disabled = true;
 
-    var url = isAduriteView()
-      ? buildUrl("/api/adurite-deals", {
-          keyword: state.search,
-          minSalesPerDay: state.minSalesPerDay,
-          cursor: state.cursor,
-          limit: PAGE_LIMIT,
-        })
-      : buildUrl("/api/limiteds", {
-          sort: remoteSort(),
-          keyword: state.search,
-          cursor: state.cursor,
-          limit: PAGE_LIMIT,
-          minRap: state.minRap,
-          maxRap: state.maxRap,
-          minPrice: state.minPrice,
-          maxPrice: state.maxPrice,
-        });
+    var url = buildUrl("/api/limiteds", {
+      sort: remoteSort(),
+      keyword: state.search,
+      cursor: state.cursor,
+      limit: PAGE_LIMIT,
+      minRap: state.minRap,
+      maxRap: state.maxRap,
+      minPrice: state.minPrice,
+      maxPrice: state.maxPrice,
+      minSalesPerDay: state.minSalesPerDay,
+      minRapVsValue: state.minRapVsValue,
+      maxRapVsValue: state.maxRapVsValue,
+      minPriceVsRap: state.minPriceVsRap,
+      maxPriceVsRap: state.maxPriceVsRap,
+    });
 
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       state.loading = false;
@@ -840,7 +829,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       state.cursor = data.nextPageCursor || "";
 
       var incoming = newItems;
-      if (isChangeSort() && !isAduriteView()) {
+      if (isChangeSort()) {
         incoming = incoming.filter(function (it) {
           return getChangeMetric(it) !== null;
         });
@@ -855,13 +844,9 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       els.loadMore.textContent = "Load more";
 
       if (state.items.length === 0) {
-        setStatus(isAduriteView()
-          ? "No Adurite deals match this filter right now."
-          : (isChangeSort()
-            ? "No limiteds with a " + state.changeMode + " right now for this period."
-            : (state.search ? "No limiteds found for \\"" + state.search + "\\"." : "No limiteds found.")));
-      } else if (isAduriteView()) {
-        setStatus(state.items.length + " of " + (data.totalMatching || state.items.length) + " deals loaded · best deal first");
+        setStatus(isChangeSort()
+          ? "No limiteds with a " + state.changeMode + " right now for this period."
+          : (state.search ? "No limiteds found for \\"" + state.search + "\\"." : "No limiteds found."));
       } else {
         setStatus(state.items.length + " limiteds loaded");
       }
@@ -925,6 +910,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         cls: "neg",
       };
     }
+    if (state.sortKey === "rap_above_value_desc") {
+      var rv = item.rapVsValuePercent;
+      if (rv === null || rv === undefined) return { label: "RAP vs Value", text: "N/A", cls: "" };
+      return { label: "RAP vs Value", text: fmtPercent(rv), cls: rv >= 0 ? "pos" : "neg" };
+    }
     var c24 = item.change24h;
     if (c24 === null || c24 === undefined) return null;
     return { label: "Change 24h", text: fmtPercent(c24), cls: Number(c24) > 0 ? "pos" : (Number(c24) < 0 ? "neg" : "") };
@@ -934,72 +924,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     els.grid.innerHTML = "";
     if (state.items.length === 0) return;
     var frag = document.createDocumentFragment();
-    var builder = isAduriteView() ? buildDealCard : buildCard;
     state.items.forEach(function (item) {
-      frag.appendChild(builder(item));
+      frag.appendChild(buildCard(item));
     });
     els.grid.appendChild(frag);
-  }
-
-  // A deal card shows what actually matters for "is this worth buying on
-  // Adurite": the price you'd pay there, what it's really worth (RAP/Value),
-  // how that price stacks up against every other current Adurite listing
-  // (percentBelowTypical - Adurite prices are USD while RAP/Value is Robux,
-  // with no fixed exchange rate between them, so ranking against the rest of
-  // the market is the honest way to say "cheap" - see computeAduriteDeals on
-  // the backend), and how liquid it is (sales/day) so a low price on a dead
-  // item doesn't look like a deal it isn't.
-  function buildDealCard(item) {
-    var card = document.createElement("div");
-    card.className = "card";
-    card.tabIndex = 0;
-    card.setAttribute("role", "button");
-
-    var title = document.createElement("div");
-    title.className = "card-title";
-    title.textContent = item.name;
-    card.appendChild(title);
-
-    var thumb = document.createElement("div");
-    thumb.className = "card-thumb";
-    var img = document.createElement("img");
-    img.loading = "lazy";
-    img.alt = item.name;
-    img.src = thumbUrl(item);
-    thumb.appendChild(img);
-    card.appendChild(thumb);
-
-    var stats = document.createElement("div");
-    stats.className = "card-stats";
-    stats.appendChild(statRow("Adurite Price", "$" + item.aduriteBestPriceUsd.toFixed(2)));
-    stats.appendChild(statRow("RAP / Value", fmtNum(item.value || item.rap)));
-    stats.appendChild(statRow("Roblox Price", item.robloxLowestPrice ? fmtNum(item.robloxLowestPrice) : "N/A"));
-    stats.appendChild(statRow("Sales / Day", fmtNum(item.salesPerDay)));
-
-    var deal = document.createElement("div");
-    var pct = item.percentBelowTypical;
-    var dealText = pct === null || pct === undefined
-      ? "n/a"
-      : (pct >= 0 ? (pct.toFixed(0) + "% cheaper than typical") : (Math.abs(pct).toFixed(0) + "% pricier than typical"));
-    deal.appendChild(statRow("Deal", dealText, pct >= 0 ? "pos" : "neg"));
-    deal.firstChild.className += " metric";
-    stats.appendChild(deal.firstChild);
-    card.appendChild(stats);
-
-    function open() {
-      openDetails({
-        assetId: item.assetId,
-        name: item.name,
-        thumbnailUrl: item.thumbnailUrl,
-        collectibleItemId: "",
-        rap: item.rap,
-        lowestPrice: item.robloxLowestPrice,
-      });
-    }
-    card.addEventListener("click", open);
-    card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
-
-    return card;
   }
 
   function buildCard(item) {
@@ -1374,9 +1302,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !els.overlay.hidden) closeModal(); });
 
   // ---------- Boot ----------
-  renderViewRow();
-  renderControlVisibility();
   renderSortRow();
+  renderPeriodGroup();
   resetAndLoad();
 })();
 </script>
@@ -1391,12 +1318,6 @@ const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
-// Public, unauthenticated - returns every current listing across the whole
-// site in one response (confirmed by direct testing: ~4,000+ Roblox limited
-// listings, no pagination needed). Prices are in USD, not Robux - each
-// listing is a real person (or Adurite's own "proxy" instant-buy inventory)
-// asking a real dollar amount for a Robux-denominated limited.
-const ADURITE_MARKET_URL = "https://adurite.com/api/market/roblox";
 const THUMBNAIL_BUNDLES_URL = "https://thumbnails.roblox.com/v1/bundles/thumbnails";
 const ALLOWED_LIMITS = [10, 28, 30];
 
@@ -1465,12 +1386,10 @@ let robloxCsrfToken = "";
 let snapshotRunning = false;
 let memorySnapshots = [];
 let rolimonsCatalogCache = { fetchedAt: 0, items: new Map() };
-// key: assetId -> { bestPriceUsd, listingCount, sellerName }
-let aduriteOffersCache = { fetchedAt: 0, items: new Map() };
-const ADURITE_CACHE_TTL_MS = Number(process.env.ADURITE_CACHE_TTL_MS || 10 * 60 * 1000);
 
-function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap }) {
-  return [marketType, sort, keyword, cursor || "", limit, minPrice ?? "", maxPrice ?? "", minRap ?? "", maxRap ?? ""].join(":");
+function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap, minSalesPerDay, minRapVsValue, maxRapVsValue, minPriceVsRap, maxPriceVsRap }) {
+  return [marketType, sort, keyword, cursor || "", limit, minPrice ?? "", maxPrice ?? "", minRap ?? "", maxRap ?? "",
+    minSalesPerDay ?? "", minRapVsValue ?? "", maxRapVsValue ?? "", minPriceVsRap ?? "", maxPriceVsRap ?? ""].join(":");
 }
 
 function sendJson(res, status, body) {
@@ -2256,54 +2175,6 @@ async function fetchRolimonsCatalog() {
   }
 }
 
-// Adurite's single /api/market/roblox response lists every current listing
-// (confirmed by direct testing: ~4,000+ at once, no pagination), several
-// sellers deep per popular item. What matters for "is this a good deal" is
-// only the CHEAPEST currently-buyable listing per item, so this collapses
-// straight down to assetId -> best (lowest) USD price + how many listings
-// are competing at that item, instead of keeping every individual listing.
-async function fetchAduriteOffers() {
-  if (aduriteOffersCache.items.size > 0 && Date.now() - aduriteOffersCache.fetchedAt < ADURITE_CACHE_TTL_MS) {
-    return aduriteOffersCache.items;
-  }
-  try {
-    const data = await fetchJson(ADURITE_MARKET_URL, {
-      timeoutMs: 12000,
-      retries: 2,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; LimitedsLiveMarketViewer/1.0)" },
-    });
-    const listings = data?.items?.items || {};
-    const items = new Map();
-    for (const listing of Object.values(listings)) {
-      const assetId = normalizeNumber(Number(listing.limited_id));
-      const price = Number(listing.numeric_price);
-      if (assetId <= 0 || !Number.isFinite(price) || price <= 0) continue;
-      const existing = items.get(assetId);
-      if (!existing || price < existing.bestPriceUsd) {
-        items.set(assetId, {
-          assetId,
-          name: String(listing.limited_name || ""),
-          bestPriceUsd: price,
-          sellerName: String(listing.seller_name || ""),
-          listingCount: (existing?.listingCount || 0) + 1,
-        });
-      } else {
-        existing.listingCount += 1;
-      }
-    }
-    if (items.size > 0) {
-      aduriteOffersCache = { fetchedAt: Date.now(), items };
-      console.log(`Adurite offers refreshed: ${items.size} limiteds with a current listing.`);
-    } else {
-      console.warn("Adurite offers fetch returned 0 items - keeping previous cache.");
-    }
-    return aduriteOffersCache.items;
-  } catch (e) {
-    console.warn(`Adurite offers fetch failed: ${e.message} - keeping previous cache (${aduriteOffersCache.items.size} items).`);
-    return aduriteOffersCache.items;
-  }
-}
-
 // Rolimons only adds an item to its tracked list some time after Roblox
 // converts it to a Limited - fetches live catalog-details + thumbnails for
 // the manually-maintained MANUAL_NEW_LIMITEDS list (see its definition)
@@ -2473,8 +2344,20 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   const maxPrice = parseOptionalNumber(p.get("maxPrice"));
   const minRap = parseOptionalNumber(p.get("minRap"));
   const maxRap = parseOptionalNumber(p.get("maxRap"));
+  const minSalesPerDay = parseOptionalNumber(p.get("minSalesPerDay"));
+  // Signed - "below RAP"/"below Value" are meaningful, legitimate thresholds
+  // (e.g. maxPriceVsRap: -20 -> only items priced at least 20% under RAP),
+  // so these two intentionally allow negative values where minPrice/minRap
+  // above don't.
+  const minRapVsValue = parseOptionalNumber(p.get("minRapVsValue"));
+  const maxRapVsValue = parseOptionalNumber(p.get("maxRapVsValue"));
+  const minPriceVsRap = parseOptionalNumber(p.get("minPriceVsRap"));
+  const maxPriceVsRap = parseOptionalNumber(p.get("maxPriceVsRap"));
 
-  const cacheKey = makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap });
+  const cacheKey = makePageCacheKey({
+    marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap,
+    minSalesPerDay, minRapVsValue, maxRapVsValue, minPriceVsRap, maxPriceVsRap,
+  });
   const cached = pageCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
 
@@ -2488,11 +2371,61 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   if (minRap > 0) items = items.filter(i => i.rap >= minRap);
   if (maxRap > 0) items = items.filter(i => i.rap <= maxRap);
 
+  // Both are already-known, static-per-item Rolimons figures (no live sales
+  // fetch needed) - computed for every item up front so any sort can display
+  // them and the two range filters below can apply regardless of sort.
+  // rapVsValuePercent: RAP is Rolimons' own "Recent Average Price" - what the
+  // item ACTUALLY sells for on Roblox lately. Value is Rolimons' separate,
+  // more conservative estimate. When RAP is meaningfully above Value, the
+  // item is trading for more than Rolimons' own value figure suggests - a
+  // real demand signal Value alone misses (e.g. RAP 30,123 vs Value 35,000
+  // is trading BELOW value, not a deal on this measure - the reverse case,
+  // RAP above Value, is the "good deal" signal being surfaced here).
+  // priceVsRapPercent: how far the current asking price sits from RAP -
+  // positive means priced above what it actually sells for (overpriced),
+  // negative means priced below it (a bargain vs. its own trading history).
+  for (const item of items) {
+    item.rapVsValuePercent = (item.value > 0 && item.rap > 0)
+      ? Math.round(((item.rap - item.value) / item.value) * 10000) / 100
+      : null;
+    item.priceVsRapPercent = (item.rap > 0 && item.lowestPrice > 0)
+      ? Math.round(((item.lowestPrice - item.rap) / item.rap) * 10000) / 100
+      : null;
+  }
+  if (minRapVsValue !== null) items = items.filter(i => i.rapVsValuePercent !== null && i.rapVsValuePercent >= minRapVsValue);
+  if (maxRapVsValue !== null) items = items.filter(i => i.rapVsValuePercent !== null && i.rapVsValuePercent <= maxRapVsValue);
+  if (minPriceVsRap !== null) items = items.filter(i => i.priceVsRapPercent !== null && i.priceVsRapPercent >= minPriceVsRap);
+  if (maxPriceVsRap !== null) items = items.filter(i => i.priceVsRapPercent !== null && i.priceVsRapPercent <= maxPriceVsRap);
+
+  if (minSalesPerDay !== null && minSalesPerDay > 0) {
+    // A week's average smooths out the noise a single slow/busy day would
+    // introduce into a hard cutoff like this.
+    const salesMap7 = await getSalesMetricsMap(7);
+    items = items.filter(i => {
+      const s = salesMap7.get(i.assetId);
+      const perDay = s?.salesCount != null ? s.salesCount / 7 : 0;
+      i.salesPerDay = Math.round(perDay * 10) / 10;
+      return perDay >= minSalesPerDay;
+    });
+  }
+
   if (sort === "price_asc") items.sort((a, b) => (a.lowestPrice || Infinity) - (b.lowestPrice || Infinity));
   else if (sort === "rap_desc") items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
   else if (sort === "value_desc") items.sort((a, b) => (b.value || 0) - (a.value || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
+  else if (sort === "rap_above_value_desc") {
+    // Items with no rapVsValuePercent (missing RAP or Value) have nothing to
+    // rank here - push them to the very end instead of tying them with a
+    // legitimate 0%.
+    items.sort((a, b) => {
+      const av = a.rapVsValuePercent, bv = b.rapVsValuePercent;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return bv - av;
+    });
+  }
   else if (sort.startsWith("overpriced_sales_")) {
     // "Overpriced (Most Sales)" - surfaces overpriced limiteds that are
     // actually moving, not just theoretically overpriced with no buyers.
@@ -2550,114 +2483,6 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   const result = { ok: true, items: pagedItems, nextPageCursor: nextCursor, updatedAt: new Date().toISOString() };
   pageCache.set(cacheKey, { cachedAt: Date.now(), data: result });
   return sendJson(res, 200, result);
-}
-
-// "Good deal" here means: Adurite is selling it for cheap RELATIVE TO WHAT
-// IT'S ACTUALLY WORTH (its own RAP/Value), and it's liquid enough that the
-// deal is real (people are actually buying it, not just sitting unsold).
-// Adurite's listings are priced in USD while RAP/Value is in Robux, and
-// there's no single "official" Robux-to-USD rate to convert through (every
-// seller picks their own discount, which is exactly the thing being ranked)
-// - so instead of inventing an exchange rate, every item's price is
-// normalized to "USD per 1,000 RAP" and ranked against every OTHER current
-// Adurite listing. Lower = you're paying less, for the same RAP-equivalent
-// value, than the typical listing right now - a comparison that holds up
-// however the dollar and Robux happen to be trading against each other.
-function computeAduriteDeals(catalogItems, aduriteOffers, salesMap7d, salesMap1d) {
-  const deals = [];
-  for (const item of catalogItems) {
-    const offer = aduriteOffers.get(item.assetId);
-    if (!offer) continue;
-    const baseline = firstPositiveNumber(item.value, item.rap);
-    if (!baseline) continue;
-    const usdPer1kRap = offer.bestPriceUsd / (baseline / 1000);
-    if (!Number.isFinite(usdPer1kRap) || usdPer1kRap <= 0) continue;
-
-    const sales7 = salesMap7d.get(item.assetId);
-    const sales1 = salesMap1d.get(item.assetId);
-    // A week's worth of days smooths out the noise a single day introduces
-    // (a slow Tuesday shouldn't fail a "10 sales/day" filter on its own) -
-    // fall back to the raw 24h count only when there's no 7d figure yet.
-    const salesPerDay = sales7?.salesCount != null
-      ? sales7.salesCount / 7
-      : (sales1?.salesCount || 0);
-
-    deals.push({
-      assetId: item.assetId,
-      name: item.name,
-      thumbnailUrl: item.thumbnailUrl || "",
-      itemType: item.itemType || "Asset",
-      rap: item.rap,
-      value: item.value,
-      robloxLowestPrice: item.lowestPrice || null,
-      overpricedPercent: item.overpricedPercent ?? null,
-      aduriteBestPriceUsd: Math.round(offer.bestPriceUsd * 100) / 100,
-      aduriteListingCount: offer.listingCount,
-      aduriteSellerName: offer.sellerName,
-      salesPerDay: Math.round(salesPerDay * 10) / 10,
-      usdPer1kRap: Math.round(usdPer1kRap * 100) / 100,
-    });
-  }
-
-  // The average across every matched item (before any sales-per-day filter
-  // is applied) is the "typical" price-for-value right now - a stable
-  // reference so "X% below typical" doesn't shift depending on what
-  // threshold the caller happens to be filtering with.
-  const avgUsdPer1k = deals.length
-    ? deals.reduce((sum, d) => sum + d.usdPer1kRap, 0) / deals.length
-    : 0;
-  for (const d of deals) {
-    d.percentBelowTypical = avgUsdPer1k > 0
-      ? Math.round(((avgUsdPer1k - d.usdPer1kRap) / avgUsdPer1k) * 1000) / 10
-      : null;
-  }
-  return deals;
-}
-
-async function handleAduriteDealsRequest(req, res, parsedUrl) {
-  const p = parsedUrl.searchParams;
-  const minSalesPerDay = parseOptionalNumber(p.get("minSalesPerDay")) || 0;
-  const keyword = (p.get("keyword") || "").trim();
-  const cursor = (p.get("cursor") || "").trim();
-  const limit = normalizeLimit(p.get("limit"));
-
-  const cacheKey = `adurite:${minSalesPerDay}:${keyword.toLowerCase()}:${cursor}:${limit}`;
-  const cached = pageCache.get(cacheKey);
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
-
-  try {
-    const [catalogItems, aduriteOffers, salesMap7d, salesMap1d] = await Promise.all([
-      getRobloxMarketIndex(),
-      fetchAduriteOffers(),
-      getSalesMetricsMap(7),
-      getSalesMetricsMap(1),
-    ]);
-
-    let deals = computeAduriteDeals(catalogItems, aduriteOffers, salesMap7d, salesMap1d);
-    // Best deal (cheapest relative to RAP/Value) first, regardless of the
-    // sales filter - filtering happens after sorting so the ranking a
-    // visitor sees never depends on where they set the threshold.
-    deals.sort((a, b) => a.usdPer1kRap - b.usdPer1kRap);
-    if (keyword) { const lk = keyword.toLowerCase(); deals = deals.filter(d => d.name.toLowerCase().includes(lk)); }
-    if (minSalesPerDay > 0) deals = deals.filter(d => d.salesPerDay >= minSalesPerDay);
-
-    const startIdx = cursor ? parseInt(cursor, 10) || 0 : 0;
-    const pagedItems = deals.slice(startIdx, startIdx + limit);
-    const nextCursor = (startIdx + limit < deals.length) ? String(startIdx + limit) : "";
-    const result = {
-      ok: true,
-      items: pagedItems,
-      nextPageCursor: nextCursor,
-      totalMatching: deals.length,
-      aduriteListingsScanned: aduriteOffers.size,
-      updatedAt: new Date().toISOString(),
-    };
-    pageCache.set(cacheKey, { cachedAt: Date.now(), data: result });
-    return sendJson(res, 200, result);
-  } catch (e) {
-    console.error(`Adurite deals request failed: ${e.message}`);
-    return sendJson(res, 500, { ok: false, error: "Failed to load Adurite deals" });
-  }
 }
 
 async function handleItemDetailsRequest(req, res, parsedUrl) {
@@ -2861,7 +2686,6 @@ const server = http.createServer(async (req, res) => {
     }
     if (parsedUrl.pathname === "/api/limiteds") return await handleLimitedsRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/item") return await handleItemDetailsRequest(req, res, parsedUrl);
-    if (parsedUrl.pathname === "/api/adurite-deals") return await handleAduriteDealsRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/portfolio") return await handlePortfolioRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/trigger-snapshot" && req.method === "POST") {
       runSnapshot().catch(e => console.error(e.message));
