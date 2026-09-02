@@ -1176,14 +1176,37 @@ const ROBLOX_RESALE_URL = "https://economy.roblox.com/v1/assets";
 const ROBLOX_COLLECTIBLE_RESALE_URL = "https://apis.roblox.com/marketplace-sales/v1/item";
 const ROBLOX_INVENTORY_URL = "https://inventory.roblox.com/v1/users";
 const ROLIMONS_ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails";
-const ROBLOX_SEARCH_URL = "https://catalog.roblox.com/v1/search/items/details";
-// How many pages (30 items each) of Roblox's own "Bestselling, Past Week"
-// feed to scan per snapshot for brand-new classic limiteds that Rolimons
-// hasn't added to its tracked list yet. A newly-converted Limited item
-// reliably spikes into weekly bestsellers within hours, so this catches new
-// items fast without scanning (or rate-limiting against) the whole catalog.
-const NEW_LIMITED_DISCOVERY_PAGES = Number(process.env.NEW_LIMITED_DISCOVERY_PAGES || 100);
+const THUMBNAIL_BUNDLES_URL = "https://thumbnails.roblox.com/v1/bundles/thumbnails";
 const ALLOWED_LIMITS = [10, 28, 30];
+
+// Brand-new limiteds Rolimons hasn't picked up yet. This used to be found by
+// live-scanning Roblox's own "bestselling, past week" feed on every catalog
+// build - slow, added yet another source of 429s, and still missed items
+// that didn't spike into that particular feed. A short manually-maintained
+// list is simpler and more reliable: add an { id, itemType } entry here when
+// a new limited shows up, and it gets full live price/RAP/thumbnail/history
+// tracking the same as everything else - it just skips the discovery scan.
+// itemType is "Asset" for a normal item or "Bundle" for a limited bundle
+// (Roblox's catalog-details and thumbnails APIs both need to know which).
+const MANUAL_NEW_LIMITEDS = [
+  { id: 87983592197138, itemType: "Asset" },   // Lord of the Buxeration
+  { id: 13241836994, itemType: "Asset" },      // Verdant Crown
+  { id: 15381472359, itemType: "Asset" },      // Solar System Aura
+  { id: 102887469225690, itemType: "Asset" },  // Blue Inferno Skull
+  { id: 17756304457, itemType: "Asset" },      // Flaming Pink Horned Helmet
+  { id: 17266515535, itemType: "Asset" },      // Molten Lava Wings
+  { id: 16972690019, itemType: "Asset" },      // Atomic Blue Hairdo
+  { id: 1098282, itemType: "Asset" },          // Lampshade
+  { id: 14524326503, itemType: "Asset" },      // Quadri-Skull Aura
+  { id: 450557238, itemType: "Asset" },        // 8-Bit Clockwork Shades
+  { id: 20011925, itemType: "Asset" },         // Oozing Oscar
+  { id: 1080949, itemType: "Asset" },          // Bunny Ears
+  { id: 128217885, itemType: "Asset" },        // Fall Fairy
+  { id: 110673146052704, itemType: "Asset" },  // Clockwork's Golden Shades
+  { id: 113598419875472, itemType: "Asset" },  // Helsworn Valkyrie
+  { id: 16477149823, itemType: "Asset" },      // Gold Clockwork Headphones
+  { id: 259144677693420, itemType: "Bundle" }, // Snowflake Eyes
+];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 
 // Rolimons' itemdetails array positions (community-documented convention).
@@ -1285,7 +1308,14 @@ async function fetchJson(url, options = {}) {
 }
 
 async function fetchCatalogDetailsChunk(assetIds) {
-  const body = JSON.stringify({ items: assetIds.map(id => ({ itemType: "Asset", id })) });
+  // Entries are normally plain assetIds (assumed itemType "Asset"), but can
+  // also be { id, itemType } objects for the rare non-Asset case (a limited
+  // Bundle, which Roblox's catalog-details API needs tagged differently).
+  const body = JSON.stringify({
+    items: assetIds.map(entry => typeof entry === "object" && entry
+      ? { itemType: entry.itemType || "Asset", id: entry.id }
+      : { itemType: "Asset", id: entry })
+  });
   let response;
   for (let a = 0; a < 5; a++) {
     const headers = { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "LimitedsLiveMarketViewer/1.0" };
@@ -1328,7 +1358,10 @@ async function fetchCatalogDetailsBatch(assetIds) {
       // worked yet (genuine outage, not a one-off blip).
       console.warn(`Catalog details batch ${i}-${i + 100} failed: ${e.message} - skipping this batch, continuing.`);
       if (!anyChunkSucceeded && i + 100 >= missing.length && result.size === 0) throw e;
-      if (i + 100 < missing.length) await sleep(220);
+      // Back off harder after a 429 specifically - pacing every batch at the
+      // same fixed 220ms regardless of whether Roblox just rate-limited us is
+      // what let a whole scan keep tripping the limiter batch after batch.
+      if (i + 100 < missing.length) await sleep(e.message.includes("429") ? 1500 : 220);
       continue;
     }
     anyChunkSucceeded = true;
@@ -1339,7 +1372,11 @@ async function fetchCatalogDetailsBatch(assetIds) {
         result.set(id, row);
       }
     }
-    if (i + 100 < missing.length) await sleep(220);
+    // A little more headroom between successful batches too (was 220ms) -
+    // ~2,600 items in batches of 100 at this pace still finishes in well
+    // under a minute, and it noticeably cuts down how often the very next
+    // batch gets rate-limited.
+    if (i + 100 < missing.length) await sleep(400);
   }
   return result;
 }
@@ -1380,6 +1417,27 @@ async function fetchThumbnailsBatch(assetIds) {
       console.warn(`Thumbnail batch fetch failed: ${e.message}`);
     }
     if (i + 100 < missing.length) await sleep(150);
+  }
+  return result;
+}
+
+// Same idea as fetchThumbnailsBatch but for limited Bundles (a small,
+// separate item type - a couple of these show up among manually-tracked new
+// limiteds) - Roblox serves their thumbnails from a different endpoint keyed
+// by bundleIds rather than assetIds.
+async function fetchBundleThumbnailsBatch(bundleIds) {
+  const result = new Map();
+  const ids = bundleIds.filter(id => id > 0);
+  if (!ids.length) return result;
+  try {
+    const data = await fetchJson(`${THUMBNAIL_BUNDLES_URL}?bundleIds=${ids.join(",")}&size=420x420&format=Png`, { timeoutMs: 6000, retries: 2 });
+    for (const row of (Array.isArray(data.data) ? data.data : [])) {
+      const id = normalizeNumber(row.targetId);
+      const url = row.state === "Completed" ? String(row.imageUrl || "") : "";
+      if (id > 0 && url) result.set(id, url);
+    }
+  } catch (e) {
+    console.warn(`Bundle thumbnail fetch failed: ${e.message}`);
   }
   return result;
 }
@@ -1932,38 +1990,38 @@ async function fetchRolimonsCatalog() {
 }
 
 // Rolimons only adds an item to its tracked list some time after Roblox
-// converts it to a Limited - in the meantime, scan a bounded slice of
-// Roblox's own "Bestselling, Past Week" feed (filtered to real classic
-// Limiteds, not UGC Collectibles) to catch brand-new items immediately.
-async function discoverNewRobloxLimiteds(knownAssetIds) {
+// converts it to a Limited - fetches live catalog-details + thumbnails for
+// the manually-maintained MANUAL_NEW_LIMITEDS list (see its definition)
+// so those items get tracked immediately instead of waiting on Rolimons.
+async function fetchManualNewLimiteds(knownAssetIds) {
+  const pending = MANUAL_NEW_LIMITEDS.filter(m => m.id > 0 && !knownAssetIds.has(m.id));
+  if (!pending.length) return [];
+
+  let data;
+  try {
+    data = await fetchCatalogDetailsChunk(pending.map(m => ({ id: m.id, itemType: m.itemType })));
+  } catch (e) {
+    console.warn(`Manual new-limiteds catalog lookup failed: ${e.message}`);
+    return [];
+  }
+
+  const rows = Array.isArray(data.data) ? data.data : [];
+  const rowsById = new Map(rows.map(r => [normalizeNumber(r.id), r]));
+  const assetIds = pending.filter(m => m.itemType !== "Bundle").map(m => m.id);
+  const bundleIds = pending.filter(m => m.itemType === "Bundle").map(m => m.id);
+  const [assetThumbs, bundleThumbs] = await Promise.all([
+    assetIds.length ? fetchThumbnailsBatch(assetIds) : new Map(),
+    bundleIds.length ? fetchBundleThumbnailsBatch(bundleIds) : new Map(),
+  ]);
+
   const discovered = [];
-  let cursor = "";
-  for (let page = 0; page < NEW_LIMITED_DISCOVERY_PAGES; page++) {
-    const url = new URL(ROBLOX_SEARCH_URL);
-    url.searchParams.set("category", "All");
-    url.searchParams.set("salesTypeFilter", "2");
-    url.searchParams.set("sortType", "2");
-    url.searchParams.set("sortAggregation", "3");
-    url.searchParams.set("limit", "30");
-    if (cursor) url.searchParams.set("cursor", cursor);
-    let data;
-    try {
-      data = await fetchJson(url.toString(), { timeoutMs: 8000, retries: 1 });
-    } catch (e) {
-      console.warn(`New-limited discovery stopped early at page ${page}: ${e.message}`);
-      break;
-    }
-    for (const row of (data.data || [])) {
-      const id = normalizeNumber(row.id);
-      if (id <= 0 || knownAssetIds.has(id)) continue;
-      // Only real classic Limiteds - "Collectible" restriction is the newer
-      // UGC-limited category, which stays excluded per classic-only scope.
-      if (!(row.itemRestrictions || []).includes("Limited")) continue;
-      discovered.push(row);
-    }
-    cursor = data.nextPageCursor || "";
-    if (!cursor) break;
-    await sleep(150);
+  for (const m of pending) {
+    const row = rowsById.get(m.id);
+    if (!row) continue;
+    if (!(row.itemRestrictions || []).includes("Limited")) continue;
+    row.__isBundle = m.itemType === "Bundle";
+    row.__thumbnailUrl = (m.itemType === "Bundle" ? bundleThumbs : assetThumbs).get(m.id) || "";
+    discovered.push(row);
   }
   return discovered;
 }
@@ -2008,13 +2066,7 @@ async function buildClassicLimitedsCatalog() {
   }
 
   try {
-    const newlyLimited = await discoverNewRobloxLimiteds(rolimonsItems);
-    // These are exactly the newest limiteds (not yet picked up by Rolimons at
-    // all) - and this loop was never fetching their thumbnails, only the ones
-    // from the main rolimonsItems loop above. That's why the newest items
-    // were consistently the ones showing up with no picture.
-    const newIds = newlyLimited.map(row => normalizeNumber(row.id)).filter(id => id > 0);
-    const newThumbnails = newIds.length ? await fetchThumbnailsBatch(newIds) : new Map();
+    const newlyLimited = await fetchManualNewLimiteds(rolimonsItems);
     for (const row of newlyLimited) {
       const id = normalizeNumber(row.id);
       const resale = await fetchAnyResaleData(id, row.collectibleItemId);
@@ -2034,18 +2086,18 @@ async function buildClassicLimitedsCatalog() {
         availableCopies: firstNonNegativeNumber(row.unitsAvailableForConsumption),
         totalCopies: firstPositiveNumber(row.totalQuantity),
         collectibleItemId: String(row.collectibleItemId || ""),
-        itemType: "Asset", marketType: "roblox", creatorName: row.creatorName || "Roblox",
+        itemType: row.__isBundle ? "Bundle" : "Asset", marketType: "roblox", creatorName: row.creatorName || "Roblox",
         thumbnail: `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
-        thumbnailUrl: newThumbnails.get(id) || "",
+        thumbnailUrl: row.__thumbnailUrl || "",
         dealValue: calculateDealValue(rap, lowestPrice), dealPercent: calculateDealPercent(rap, lowestPrice),
         overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
       });
     }
     if (newlyLimited.length > 0) {
-      console.log(`Discovered ${newlyLimited.length} newly-limited item(s) not yet tracked by Rolimons.`);
+      console.log(`Added ${newlyLimited.length} manually-tracked new limited(s) not yet on Rolimons.`);
     }
   } catch (e) {
-    console.warn(`New-limited discovery failed: ${e.message}`);
+    console.warn(`Manual new-limiteds lookup failed: ${e.message}`);
   }
 
   return items;
@@ -2180,10 +2232,21 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
     const rolimonsItems = await fetchRolimonsCatalog();
     const rolimonsItem = rolimonsItems.get(assetId);
 
-    const [catalogDetails, resaleDetails] = await Promise.all([
-      fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {}),
-      fetchAnyResaleData(assetId, collectibleItemId)
-    ]);
+    // catalogDetails is fetched fresh (cache or a live single-item lookup)
+    // every time this endpoint is hit, so its collectibleItemId is reliable
+    // even for an item whose bulk catalog-build batch got 429'd earlier and
+    // never cached one. The URL's own collectibleItemId param (whatever the
+    // list page happened to have when the card was built) used to be used
+    // instead and ignored this fresher value entirely - for any item that
+    // fell through the bulk build with a blank id, this silently sent every
+    // detail request down the legacy per-assetId resale endpoint, which
+    // Roblox has left frozen since Jan 2025 - exactly why "7d" and longer
+    // ranges kept coming back as "not enough history" for a lot of items
+    // that actually have plenty. Prefer the fresh id; the query param is
+    // only a fallback for the rare case the live lookup itself comes back
+    // empty too.
+    const catalogDetails = await fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {});
+    const resaleDetails = await fetchAnyResaleData(assetId, catalogDetails.collectibleItemId || collectibleItemId);
 
     // Same RAP/Value source as the catalog list, so a given item's numbers
     // can never disagree between the list and its own detail popup. Live
