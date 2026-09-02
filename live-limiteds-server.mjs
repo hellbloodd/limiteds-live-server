@@ -30,6 +30,991 @@ import { URL } from "url";
 
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "rolimons-source-v3";
+
+const DASHBOARD_HTML = `
+<title>Limiteds Live</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --surface: #12161f;
+    --surface-2: #1a2029;
+    --border: #262d3a;
+    --text: #e9edf4;
+    --muted: #8a93a6;
+    --muted-2: #5d6577;
+    --accent: #d9a441;
+    --accent-soft: #d9a44122;
+    --green: #34c17a;
+    --green-soft: #34c17a1c;
+    --red: #e0576a;
+    --red-soft: #e0576a1c;
+    --shadow: 0 12px 32px -12px rgba(0,0,0,0.55);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f4ee;
+      --surface: #ffffff;
+      --surface-2: #f0ede4;
+      --border: #ded8c8;
+      --text: #221d12;
+      --muted: #6b6455;
+      --muted-2: #98917f;
+      --accent: #ad7d1f;
+      --accent-soft: #ad7d1f18;
+      --green: #1f9d5c;
+      --green-soft: #1f9d5c16;
+      --red: #c23f52;
+      --red-soft: #c23f5216;
+      --shadow: 0 12px 28px -14px rgba(60,50,20,0.25);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f4ee;
+    --surface: #ffffff;
+    --surface-2: #f0ede4;
+    --border: #ded8c8;
+    --text: #221d12;
+    --muted: #6b6455;
+    --muted-2: #98917f;
+    --accent: #ad7d1f;
+    --accent-soft: #ad7d1f18;
+    --green: #1f9d5c;
+    --green-soft: #1f9d5c16;
+    --red: #c23f52;
+    --red-soft: #c23f5216;
+    --shadow: 0 12px 28px -14px rgba(60,50,20,0.25);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+  }
+  ::selection { background: var(--accent-soft); }
+
+  .tabular { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  a { color: inherit; }
+
+  /* ---------- Top bar ---------- */
+  header.top {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .top-inner {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .brand-mark {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: linear-gradient(155deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #ff8a3d));
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Unbounded", sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    color: #201404;
+    flex-shrink: 0;
+  }
+  .brand-text {
+    font-family: "Unbounded", sans-serif;
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .brand-text .dim { color: var(--muted); font-weight: 500; }
+
+  .search-wrap {
+    flex: 1;
+    max-width: 380px;
+    position: relative;
+  }
+  .search-wrap input {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 14px 9px 34px;
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .15s ease;
+  }
+  .search-wrap input:focus { border-color: var(--accent); }
+  .search-wrap svg {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    color: var(--muted-2);
+  }
+
+  .ticker {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .ticker .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-soft);
+  }
+  .ticker .dot.stale { background: var(--muted-2); box-shadow: 0 0 0 3px transparent; }
+  .ticker b.tabular { color: var(--text); }
+
+  /* ---------- Controls ---------- */
+  .controls {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 18px 28px 4px;
+    display: flex;
+    align-items: flex-start;
+    gap: 28px;
+    flex-wrap: wrap;
+  }
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .control-group .label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-2);
+    font-weight: 600;
+  }
+  .pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .12s ease;
+    white-space: nowrap;
+  }
+  .pill:hover { color: var(--text); border-color: var(--muted-2); }
+  .pill.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .pill.active.loss { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+  .pill.active.profit { background: var(--green-soft); border-color: var(--green); color: var(--green); }
+
+  select.period-select {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 30px 6px 12px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a93a6' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+
+  /* ---------- Status line ---------- */
+  .status-line {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 14px 28px 0;
+    font-size: 12.5px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .status-line .count { color: var(--text); font-weight: 700; }
+
+  /* ---------- Grid ---------- */
+  main {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 14px 28px 60px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--muted-2);
+    box-shadow: var(--shadow);
+  }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card-title {
+    padding: 10px 12px;
+    background: var(--surface-2);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-thumb {
+    width: 100%;
+    aspect-ratio: 1;
+    background:
+      radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 65%),
+      var(--bg);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card-thumb img { width: 78%; height: 78%; object-fit: contain; }
+  .card-stats { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .stat-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; }
+  .stat-row .k { color: var(--muted); }
+  .stat-row .v { font-weight: 700; }
+  .stat-row .v.pos { color: var(--green); }
+  .stat-row .v.neg { color: var(--red); }
+  .stat-row.metric { border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 2px; }
+
+  .empty-state {
+    text-align: center;
+    padding: 90px 20px;
+    color: var(--muted);
+  }
+  .empty-state .glyph { font-size: 34px; margin-bottom: 10px; opacity: .5; }
+  .empty-state .title { font-family: "Unbounded", sans-serif; font-size: 16px; color: var(--text); margin-bottom: 6px; }
+
+  .load-more-wrap { display: flex; justify-content: center; margin-top: 22px; }
+  .load-more {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 22px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .load-more:hover { border-color: var(--accent); color: var(--accent); }
+  .load-more[disabled] { opacity: .5; cursor: default; }
+
+  /* ---------- Modal ---------- */
+  .overlay {
+    position: fixed; inset: 0;
+    background: color-mix(in srgb, black 55%, transparent);
+    backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50;
+    padding: 20px;
+  }
+  .overlay[hidden] { display: none; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    width: min(760px, 100%);
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
+  }
+  .modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 24px 4px;
+  }
+  .modal-head h2 { font-family: "Unbounded", sans-serif; font-size: 19px; margin: 0; padding-right: 20px; }
+  .modal-close {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 15px;
+    line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-body {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 22px;
+    padding: 16px 24px 24px;
+  }
+  @media (max-width: 560px) {
+    .modal-body { grid-template-columns: 1fr; }
+  }
+  .modal-thumb {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    aspect-ratio: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-thumb img { width: 80%; height: 80%; object-fit: contain; }
+  .modal-buy {
+    display: block;
+    text-align: center;
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: 10px;
+    background: linear-gradient(155deg, var(--green), color-mix(in srgb, var(--green) 70%, #0a9e56));
+    color: #06210f;
+    font-weight: 800;
+    font-size: 13px;
+    text-decoration: none;
+  }
+  .modal-stats { display: flex; flex-direction: column; gap: 2px; }
+  .modal-stat {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .modal-stat .k { color: var(--muted); }
+  .modal-stat .v { font-weight: 700; }
+  .modal-stat .v.pos { color: var(--green); }
+  .modal-stat .v.neg { color: var(--red); }
+
+  .chart-wrap { grid-column: 1 / -1; margin-top: 4px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .chart-head .range-pills { display: flex; gap: 4px; }
+  .chart-head .rp {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: inherit; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 999px; cursor: pointer;
+  }
+  .chart-head .rp.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .chart-box { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 10px 12px; }
+  .chart-caption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+  .skel { background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.3s infinite; border-radius: 6px; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card, .skel { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <div class="brand-mark">L</div>
+      <div class="brand-text">Limiteds <span class="dim">Live</span></div>
+    </div>
+    <div class="search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="search" type="text" placeholder="Search limiteds…" autocomplete="off">
+    </div>
+    <div class="ticker">
+      <span class="dot" id="live-dot"></span>
+      <span id="live-text">connecting…</span>
+    </div>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="control-group">
+    <div class="label">Sort</div>
+    <div class="pill-row" id="sort-row"></div>
+  </div>
+  <div class="control-group" id="period-group" hidden>
+    <div class="label">Period</div>
+    <select class="period-select" id="period-select"></select>
+  </div>
+</div>
+
+<div class="status-line" id="status-line">Loading catalog…</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="load-more-wrap" id="load-more-wrap" hidden>
+    <button class="load-more" id="load-more">Load more</button>
+  </div>
+</main>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title">Item</h2>
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Same-origin: this page is served BY live-limiteds-server.mjs itself
+  // (see the "/" route), so API calls are plain relative paths - no CORS,
+  // no cross-origin fetch restrictions like a claude.ai-hosted page would hit.
+  var API_BASE = "";
+  var PAGE_LIMIT = 60;
+
+  // ---- Sort + period configuration (mirrors the in-game client) ----
+  var SORTS = [
+    { key: "rap_desc", label: "Highest RAP" },
+    { key: "price_asc", label: "Lowest Price" },
+    { key: "price_desc", label: "Highest Price" },
+    { key: "updated", label: "Recent" },
+    { key: "deal_desc", label: "Best Deals" },
+    { key: "overpriced_desc", label: "Overpriced" },
+    { key: "changes", label: "Changes" },
+    { key: "sales", label: "Sales" },
+  ];
+  var PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"];
+  var PERIOD_LABEL = { "1h": "1h", "24h": "24h", "7d": "7d", "30d": "30d", "1y": "1y", all: "All" };
+
+  var state = {
+    sortKey: "rap_desc",
+    changeMode: "profit", // profit | loss  (used only when sortKey === "changes")
+    period: "24h",
+    search: "",
+    searchDebounce: null,
+    cursor: "",
+    loading: false,
+    items: [],
+    detailCache: {},
+  };
+
+  var els = {
+    sortRow: document.getElementById("sort-row"),
+    periodGroup: document.getElementById("period-group"),
+    periodSelect: document.getElementById("period-select"),
+    statusLine: document.getElementById("status-line"),
+    grid: document.getElementById("grid"),
+    loadMoreWrap: document.getElementById("load-more-wrap"),
+    loadMore: document.getElementById("load-more"),
+    search: document.getElementById("search"),
+    liveDot: document.getElementById("live-dot"),
+    liveText: document.getElementById("live-text"),
+    overlay: document.getElementById("overlay"),
+    modalBody: document.getElementById("modal-body"),
+    modalTitle: document.getElementById("modal-title"),
+    modalClose: document.getElementById("modal-close"),
+  };
+
+  function fmtNum(n) {
+    n = Number(n);
+    if (!isFinite(n)) return "N/A";
+    return Math.round(n).toLocaleString("en-US");
+  }
+  function fmtPercent(v) {
+    v = Number(v);
+    if (v === null || v === undefined || !isFinite(v)) return "N/A";
+    return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+  }
+  function fmtUnsignedPercent(v) {
+    v = Number(v);
+    if (v === null || v === undefined || !isFinite(v)) return "N/A";
+    return Math.abs(v).toFixed(1) + "%";
+  }
+  function thumbUrl(assetId) {
+    return "https://www.roblox.com/asset-thumbnail/image?assetId=" + assetId + "&width=420&height=420&format=png";
+  }
+  function itemUrl(assetId) {
+    return "https://www.roblox.com/catalog/" + assetId;
+  }
+
+  // ---------- Remote sort key resolution ----------
+  function remoteSort() {
+    if (state.sortKey === "changes") return state.changeMode + "_" + state.period;
+    if (state.sortKey === "sales") return "bought_" + (state.period === "all" || state.period === "1h" ? "1y" : state.period);
+    return state.sortKey;
+  }
+  function isChangeSort() { return state.sortKey === "changes"; }
+  function isSalesSort() { return state.sortKey === "sales"; }
+
+  // ---------- Rendering: controls ----------
+  function renderSortRow() {
+    els.sortRow.innerHTML = "";
+    SORTS.forEach(function (s) {
+      var btn = document.createElement("button");
+      btn.className = "pill" + (state.sortKey === s.key ? " active" : "");
+      btn.textContent = s.label;
+      btn.addEventListener("click", function () {
+        state.sortKey = s.key;
+        renderSortRow();
+        renderPeriodGroup();
+        resetAndLoad();
+      });
+      els.sortRow.appendChild(btn);
+    });
+    if (isChangeSort()) {
+      var wrap = document.createElement("div");
+      wrap.className = "pill-row";
+      wrap.style.marginLeft = "6px";
+      ["profit", "loss"].forEach(function (mode) {
+        var b = document.createElement("button");
+        b.className = "pill" + (state.changeMode === mode ? " active " + mode : "");
+        b.textContent = mode === "profit" ? "Profit" : "Loss";
+        b.addEventListener("click", function () {
+          state.changeMode = mode;
+          renderSortRow();
+          resetAndLoad();
+        });
+        wrap.appendChild(b);
+      });
+      els.sortRow.appendChild(wrap);
+    }
+  }
+
+  function renderPeriodGroup() {
+    var show = isChangeSort() || isSalesSort();
+    els.periodGroup.hidden = !show;
+    if (!show) return;
+    var periods = isSalesSort() ? ["24h", "7d", "30d", "1y"] : PERIODS;
+    if (isSalesSort() && (state.period === "1h" || state.period === "all")) state.period = "24h";
+    els.periodSelect.innerHTML = "";
+    periods.forEach(function (p) {
+      var opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = PERIOD_LABEL[p];
+      if (p === state.period) opt.selected = true;
+      els.periodSelect.appendChild(opt);
+    });
+  }
+  els.periodSelect.addEventListener("change", function () {
+    state.period = els.periodSelect.value;
+    resetAndLoad();
+  });
+
+  els.search.addEventListener("input", function () {
+    clearTimeout(state.searchDebounce);
+    var v = els.search.value;
+    state.searchDebounce = setTimeout(function () {
+      state.search = v.trim();
+      resetAndLoad();
+    }, 320);
+  });
+
+  // ---------- Data fetching ----------
+  function buildUrl(path, params) {
+    // Base against location.origin so this works whether API_BASE is a full
+    // origin (artifact preview, testing) or "" (served same-origin in prod).
+    var url = new URL(API_BASE + path, window.location.origin);
+    Object.keys(params || {}).forEach(function (k) {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== "") url.searchParams.set(k, params[k]);
+    });
+    return url.toString();
+  }
+
+  function resetAndLoad() {
+    state.cursor = "";
+    state.items = [];
+    els.grid.innerHTML = "";
+    setStatus("Loading…");
+    fetchPage(true);
+  }
+
+  function setLive(ok, text) {
+    els.liveDot.classList.toggle("stale", !ok);
+    els.liveText.textContent = text;
+  }
+  function setStatus(text) {
+    els.statusLine.textContent = text;
+  }
+
+  function fetchPage(replace) {
+    if (state.loading) return;
+    state.loading = true;
+    els.loadMore.textContent = "Loading…";
+    els.loadMore.disabled = true;
+
+    var url = buildUrl("/api/limiteds", {
+      sort: remoteSort(),
+      keyword: state.search,
+      cursor: state.cursor,
+      limit: PAGE_LIMIT,
+    });
+
+    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+      state.loading = false;
+      if (!data || data.ok === false) {
+        setLive(false, "backend unreachable");
+        if (replace) renderEmpty("Live data unavailable — the backend may be waking up (free-tier hosting sleeps when idle). Try again in ~30s.");
+        return;
+      }
+      setLive(true, "updated " + new Date().toLocaleTimeString());
+      var newItems = data.items || [];
+      state.cursor = data.nextPageCursor || "";
+
+      var incoming = newItems;
+      if (isChangeSort()) {
+        incoming = incoming.filter(function (it) {
+          return getChangeMetric(it) !== null;
+        });
+      }
+
+      state.items = replace ? incoming : state.items.concat(incoming);
+      renderGrid();
+
+      var more = !!state.cursor;
+      els.loadMoreWrap.hidden = !more || state.items.length === 0;
+      els.loadMore.disabled = false;
+      els.loadMore.textContent = "Load more";
+
+      if (state.items.length === 0) {
+        setStatus(isChangeSort()
+          ? "No limiteds with a " + state.changeMode + " right now for this period."
+          : (state.search ? "No limiteds found for \"" + state.search + "\"." : "No limiteds found."));
+      } else {
+        setStatus(state.items.length + " limiteds loaded");
+      }
+    }).catch(function () {
+      state.loading = false;
+      els.loadMore.disabled = false;
+      els.loadMore.textContent = "Load more";
+      setLive(false, "connection failed");
+      if (replace) renderEmpty("Couldn't reach the live server. Check your connection and try again.");
+    });
+  }
+
+  els.loadMore.addEventListener("click", function () { fetchPage(false); });
+
+  function getChangeMetric(item) {
+    var suffix = state.period === "all" ? "AllTime" : state.period;
+    var field = (state.changeMode === "loss" ? "loss" : "profit") + suffix;
+    var v = item[field];
+    return (v === null || v === undefined) ? null : Number(v);
+  }
+
+  // ---------- Grid rendering ----------
+  function renderEmpty(message) {
+    els.grid.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "empty-state";
+    d.style.gridColumn = "1 / -1";
+    d.innerHTML = '<div class="glyph">◇</div><div class="title">Nothing here</div><div>' + message + "</div>";
+    els.grid.appendChild(d);
+  }
+
+  function metricForCard(item) {
+    if (isChangeSort()) {
+      var v = getChangeMetric(item);
+      if (v === null) return null;
+      return {
+        label: (state.changeMode === "loss" ? "Loss " : "Profit ") + PERIOD_LABEL[state.period],
+        text: state.changeMode === "loss" ? fmtUnsignedPercent(v) : fmtPercent(v),
+        cls: state.changeMode === "loss" ? "neg" : "pos",
+      };
+    }
+    if (isSalesSort()) {
+      var count = item.salesCount;
+      return {
+        label: "Sales " + PERIOD_LABEL[state.period],
+        text: count ? fmtNum(count) + (item.averageSalePrice ? " · avg " + fmtNum(item.averageSalePrice) : "") : "No sales",
+        cls: "",
+      };
+    }
+    if (state.sortKey === "deal_desc") {
+      return { label: "Deal", text: fmtPercent(item.dealPercent), cls: "pos" };
+    }
+    if (state.sortKey === "overpriced_desc") {
+      return { label: "Overpriced", text: fmtPercent(item.overpricedPercent), cls: "neg" };
+    }
+    var c24 = item.change24h;
+    if (c24 === null || c24 === undefined) return null;
+    return { label: "Change 24h", text: fmtPercent(c24), cls: Number(c24) > 0 ? "pos" : (Number(c24) < 0 ? "neg" : "") };
+  }
+
+  function renderGrid() {
+    els.grid.innerHTML = "";
+    if (state.items.length === 0) return;
+    var frag = document.createDocumentFragment();
+    state.items.forEach(function (item) {
+      frag.appendChild(buildCard(item));
+    });
+    els.grid.appendChild(frag);
+  }
+
+  function buildCard(item) {
+    var card = document.createElement("div");
+    card.className = "card";
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+
+    var title = document.createElement("div");
+    title.className = "card-title";
+    title.textContent = item.name;
+    card.appendChild(title);
+
+    var thumb = document.createElement("div");
+    thumb.className = "card-thumb";
+    var img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = item.name;
+    img.src = thumbUrl(item.assetId);
+    thumb.appendChild(img);
+    card.appendChild(thumb);
+
+    var stats = document.createElement("div");
+    stats.className = "card-stats";
+    stats.appendChild(statRow("RAP", fmtNum(item.rap)));
+    stats.appendChild(statRow("Price", item.lowestPrice ? fmtNum(item.lowestPrice) : "N/A"));
+
+    var metric = metricForCard(item);
+    if (metric) {
+      var row = statRow(metric.label, metric.text, metric.cls);
+      row.className += " metric";
+      stats.appendChild(row);
+    }
+    card.appendChild(stats);
+
+    card.addEventListener("click", function () { openDetails(item); });
+    card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetails(item); } });
+
+    return card;
+  }
+
+  function statRow(k, v, cls) {
+    var row = document.createElement("div");
+    row.className = "stat-row";
+    var kEl = document.createElement("span");
+    kEl.className = "k";
+    kEl.textContent = k;
+    var vEl = document.createElement("span");
+    vEl.className = "v tabular" + (cls ? " " + cls : "");
+    vEl.textContent = v;
+    row.appendChild(kEl);
+    row.appendChild(vEl);
+    return row;
+  }
+
+  // ---------- Details modal ----------
+  var activeChartRange = "24h";
+  var activeDetailItem = null;
+
+  function openDetails(item) {
+    activeDetailItem = item;
+    activeChartRange = "24h";
+    els.modalTitle.textContent = item.name;
+    els.overlay.hidden = false;
+    renderModalSkeleton(item);
+
+    var cacheKey = item.assetId;
+    if (state.detailCache[cacheKey]) {
+      applyDetailData(state.detailCache[cacheKey]);
+      return;
+    }
+
+    var url = buildUrl("/api/item", { assetId: item.assetId, collectibleItemId: item.collectibleItemId || "" });
+    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data || data.ok === false) return;
+      state.detailCache[cacheKey] = data;
+      if (activeDetailItem === item) applyDetailData(data);
+    }).catch(function () {});
+  }
+
+  function renderModalSkeleton(item) {
+    els.modalBody.innerHTML =
+      '<div><div class="modal-thumb"><img src="' + thumbUrl(item.assetId) + '" alt="' + escapeHtml(item.name) + '"></div>' +
+      '<a class="modal-buy" href="' + itemUrl(item.assetId) + '" target="_blank" rel="noopener">View on Roblox ↗</a></div>' +
+      '<div class="modal-stats">' +
+        modalStatHtml("RAP", fmtNum(item.rap)) +
+        modalStatHtml("Price", item.lowestPrice ? fmtNum(item.lowestPrice) : "N/A") +
+        modalStatHtml("Change 1h", "…") +
+        modalStatHtml("Change 24h", "…") +
+        modalStatHtml("Available", "…") +
+        modalStatHtml("Total copies", "…") +
+        modalStatHtml("Creator", "…") +
+      '</div>' +
+      '<div class="chart-wrap">' +
+        '<div class="chart-head"><div class="chart-caption" id="chart-caption">Loading history…</div>' +
+        '<div class="range-pills" id="range-pills"></div></div>' +
+        '<div class="chart-box"><svg id="chart-svg" width="100%" height="170" viewBox="0 0 680 170" preserveAspectRatio="none"></svg></div>' +
+      '</div>';
+    buildRangePills();
+  }
+
+  function modalStatHtml(k, v, cls) {
+    return '<div class="modal-stat"><span class="k">' + k + '</span><span class="v tabular' + (cls ? " " + cls : "") + '">' + v + "</span></div>";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  var RANGES = ["1h", "24h", "7d", "1m", "1y", "all"];
+  var RANGE_FIELD = { "1h": "change1h", "24h": "change24h", "7d": "change7d", "1m": "change30d", "1y": "change1y", all: "changeAllTime" };
+  var RANGE_DAYS = { "1h": 1 / 24, "24h": 1, "7d": 7, "1m": 30, "1y": 365, all: null };
+
+  function buildRangePills() {
+    var wrap = document.getElementById("range-pills");
+    wrap.innerHTML = "";
+    RANGES.forEach(function (r) {
+      var b = document.createElement("button");
+      b.className = "rp" + (r === activeChartRange ? " active" : "");
+      b.textContent = r === "1m" ? "1m" : (r === "all" ? "All" : r);
+      b.addEventListener("click", function () {
+        activeChartRange = r;
+        var cached = state.detailCache[activeDetailItem.assetId];
+        if (cached) applyDetailData(cached);
+      });
+      wrap.appendChild(b);
+    });
+  }
+
+  function applyDetailData(data) {
+    var statsWrap = els.modalBody.querySelector(".modal-stats");
+    if (statsWrap) {
+      statsWrap.innerHTML =
+        modalStatHtml("RAP", fmtNum(data.rap)) +
+        modalStatHtml("Price", data.lowestPrice ? fmtNum(data.lowestPrice) : "N/A") +
+        modalStatHtml("Change 1h", fmtPercent(data.change1h), changeCls(data.change1h)) +
+        modalStatHtml("Change 24h", fmtPercent(data.change24h), changeCls(data.change24h)) +
+        modalStatHtml("Available", fmtNum(data.availableCopies)) +
+        modalStatHtml("Total copies", fmtNum(data.totalCopies)) +
+        modalStatHtml("Creator", data.creatorName || "Roblox");
+    }
+    // re-highlight active pill (skeleton pills persist across re-renders)
+    document.querySelectorAll("#range-pills .rp").forEach(function (b, i) {
+      b.classList.toggle("active", RANGES[i] === activeChartRange);
+    });
+    drawChart(data);
+  }
+
+  function changeCls(v) {
+    v = Number(v);
+    if (!isFinite(v) || v === 0) return "";
+    return v > 0 ? "pos" : "neg";
+  }
+
+  function drawChart(data) {
+    var svg = document.getElementById("chart-svg");
+    var caption = document.getElementById("chart-caption");
+    var history = Array.isArray(data.history) ? data.history.slice() : [];
+    history.sort(function (a, b) { return Date.parse(a.date) - Date.parse(b.date); });
+
+    var days = RANGE_DAYS[activeChartRange];
+    var now = Date.now();
+    var startTime = days ? now - days * 86400000 : 0;
+    var points = history.filter(function (p) { return Date.parse(p.date) >= startTime && p.value > 0; });
+    if (points.length < 2) points = history.filter(function (p) { return p.value > 0; }).slice(-2);
+
+    var changeField = RANGE_FIELD[activeChartRange];
+    var changeVal = data[changeField];
+    var latest = points.length ? points[points.length - 1].value : data.rap;
+
+    caption.className = "chart-caption tabular";
+    if (points.length >= 2) {
+      caption.textContent = (activeChartRange === "all" ? "All-time" : activeChartRange) + " RAP " + fmtPercent(changeVal) + " · " + fmtNum(latest) + " now";
+    } else {
+      caption.textContent = "Not enough recorded history for this range yet";
+    }
+
+    svg.innerHTML = "";
+    if (points.length < 2) return;
+
+    var w = 680, h = 170, padX = 8, padY = 14;
+    var values = points.map(function (p) { return p.value; });
+    var min = Math.min.apply(null, values), max = Math.max.apply(null, values);
+    if (min === max) { min -= 1; max += 1; }
+    var times = points.map(function (p) { return Date.parse(p.date); });
+    var tMin = times[0], tMax = times[times.length - 1];
+    if (tMin === tMax) tMax = tMin + 1;
+
+    function xFor(t) { return padX + ((t - tMin) / (tMax - tMin)) * (w - padX * 2); }
+    function yFor(v) { return h - padY - ((v - min) / (max - min)) * (h - padY * 2); }
+
+    var isUp = values[values.length - 1] >= values[0];
+    var lineColor = isUp ? "var(--green)" : "var(--red)";
+    var lineColorResolved = getComputedStyle(document.documentElement).getPropertyValue(isUp ? "--green" : "--red").trim() || (isUp ? "#34c17a" : "#e0576a");
+
+    var linePts = points.map(function (p) { return xFor(Date.parse(p.date)).toFixed(1) + "," + yFor(p.value).toFixed(1); }).join(" ");
+    var areaPts = linePts + " " + xFor(tMax).toFixed(1) + "," + (h - padY) + " " + xFor(tMin).toFixed(1) + "," + (h - padY);
+
+    var ns = "http://www.w3.org/2000/svg";
+    var gridColor = getComputedStyle(document.documentElement).getPropertyValue("--border").trim() || "#262d3a";
+    for (var i = 0; i <= 3; i++) {
+      var gy = padY + (i / 3) * (h - padY * 2);
+      var gline = document.createElementNS(ns, "line");
+      gline.setAttribute("x1", padX); gline.setAttribute("x2", w - padX);
+      gline.setAttribute("y1", gy.toFixed(1)); gline.setAttribute("y2", gy.toFixed(1));
+      gline.setAttribute("stroke", gridColor); gline.setAttribute("stroke-width", "1");
+      svg.appendChild(gline);
+    }
+
+    var area = document.createElementNS(ns, "polygon");
+    area.setAttribute("points", areaPts);
+    area.setAttribute("fill", lineColorResolved);
+    area.setAttribute("opacity", "0.12");
+    svg.appendChild(area);
+
+    var poly = document.createElementNS(ns, "polyline");
+    poly.setAttribute("points", linePts);
+    poly.setAttribute("fill", "none");
+    poly.setAttribute("stroke", lineColorResolved);
+    poly.setAttribute("stroke-width", "2");
+    poly.setAttribute("stroke-linejoin", "round");
+    poly.setAttribute("stroke-linecap", "round");
+    svg.appendChild(poly);
+
+    var lastPt = points[points.length - 1];
+    var dot = document.createElementNS(ns, "circle");
+    dot.setAttribute("cx", xFor(Date.parse(lastPt.date)).toFixed(1));
+    dot.setAttribute("cy", yFor(lastPt.value).toFixed(1));
+    dot.setAttribute("r", "3.5");
+    dot.setAttribute("fill", lineColorResolved);
+    svg.appendChild(dot);
+  }
+
+  function closeModal() { els.overlay.hidden = true; activeDetailItem = null; }
+  els.modalClose.addEventListener("click", closeModal);
+  els.overlay.addEventListener("click", function (e) { if (e.target === els.overlay) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !els.overlay.hidden) closeModal(); });
+
+  // ---------- Boot ----------
+  renderSortRow();
+  renderPeriodGroup();
+  resetAndLoad();
+})();
+</script>
+
+`;
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
 const SNAPSHOT_INTERVAL_MS = Number(process.env.SNAPSHOT_INTERVAL_MS || 60 * 60 * 1000);
@@ -1014,7 +1999,11 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
-    if (parsedUrl.pathname === "/ping" || parsedUrl.pathname === "/") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
+    if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
+    if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(DASHBOARD_HTML);
+    }
     if (parsedUrl.pathname === "/api/limiteds") return await handleLimitedsRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/item") return await handleItemDetailsRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/portfolio") return await handlePortfolioRequest(req, res, parsedUrl);
