@@ -46,7 +46,7 @@ const ROBLOX_SEARCH_URL = "https://catalog.roblox.com/v1/search/items/details";
 // hasn't added to its tracked list yet. A newly-converted Limited item
 // reliably spikes into weekly bestsellers within hours, so this catches new
 // items fast without scanning (or rate-limiting against) the whole catalog.
-const NEW_LIMITED_DISCOVERY_PAGES = Number(process.env.NEW_LIMITED_DISCOVERY_PAGES || 20);
+const NEW_LIMITED_DISCOVERY_PAGES = Number(process.env.NEW_LIMITED_DISCOVERY_PAGES || 100);
 const ALLOWED_LIMITS = [10, 28, 30];
 const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
 
@@ -629,9 +629,16 @@ async function fetchRolimonsCatalog() {
     for (const [idStr, arr] of Object.entries(data.items || {})) {
       const id = Number(idStr);
       if (id <= 0 || !Array.isArray(arr)) continue;
-      const rap = Number(arr[RL_RAP]);
-      if (!Number.isFinite(rap) || rap <= 0) continue;
+      const rawRap = Number(arr[RL_RAP]);
       const rlValue = Number(arr[RL_VALUE]);
+      // A missing/zero RAP (-1 or 0) means Rolimons hasn't accumulated resale
+      // history for this item yet - very common for brand-new limiteds - not
+      // that it isn't a real classic limited. Skipping those used to drop a
+      // large chunk of the catalog (new items especially); fall back to
+      // Rolimons' "Value" figure instead of excluding the item entirely.
+      const rap = Number.isFinite(rawRap) && rawRap > 0
+        ? rawRap
+        : (Number.isFinite(rlValue) && rlValue > 0 ? rlValue : null);
       const demand = arr[RL_DEMAND] ?? -1;
       const trend = arr[RL_TREND] ?? -1;
       items.set(id, {
@@ -737,9 +744,14 @@ async function buildClassicLimitedsCatalog() {
     for (const row of newlyLimited) {
       const id = normalizeNumber(row.id);
       const resale = await fetchAnyResaleData(id, row.collectibleItemId);
-      const rap = firstPositiveNumber(resale.recentAveragePrice, row.price);
-      if (!(rap > 0)) continue;
       const lowestPrice = firstPositiveNumber(row.lowestPrice, row.price);
+      // A brand-new limited may have zero resale history yet (nobody has
+      // resold a copy), which used to mean recentAveragePrice was unavailable
+      // and the item got dropped entirely - exactly the "new ones missing"
+      // case. Fall back to its current listed price as a stand-in RAP rather
+      // than excluding it; only skip if we truly have no number at all.
+      const rap = firstPositiveNumber(resale.recentAveragePrice, row.price, lowestPrice);
+      if (!(rap > 0)) continue;
       items.push({
         assetId: id, name: row.name || "Unknown", acronym: "", rap,
         value: null, demand: -1, demandLabel: null, trend: -1, trendLabel: null,
