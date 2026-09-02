@@ -556,8 +556,13 @@ const DASHBOARD_HTML = `
     if (v === null || v === undefined || !isFinite(v)) return "N/A";
     return Math.abs(v).toFixed(1) + "%";
   }
-  function thumbUrl(assetId) {
-    return "https://www.roblox.com/asset-thumbnail/image?assetId=" + assetId + "&width=420&height=420&format=png";
+  function thumbUrl(item) {
+    // The backend resolves this via Roblox's real thumbnail API and caches
+    // it (item.thumbnailUrl, a hotlinkable rbxcdn.com URL) - the old trick of
+    // building a URL straight from the assetId no longer works, Roblox
+    // retired that endpoint. Fall back to a blank placeholder if a thumbnail
+    // genuinely isn't available yet rather than showing a broken image icon.
+    return item.thumbnailUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
   }
   function itemUrl(assetId) {
     return "https://www.roblox.com/catalog/" + assetId;
@@ -791,7 +796,7 @@ const DASHBOARD_HTML = `
     var img = document.createElement("img");
     img.loading = "lazy";
     img.alt = item.name;
-    img.src = thumbUrl(item.assetId);
+    img.src = thumbUrl(item);
     thumb.appendChild(img);
     card.appendChild(thumb);
 
@@ -855,7 +860,7 @@ const DASHBOARD_HTML = `
 
   function renderModalSkeleton(item) {
     els.modalBody.innerHTML =
-      '<div><div class="modal-thumb"><img src="' + thumbUrl(item.assetId) + '" alt="' + escapeHtml(item.name) + '"></div>' +
+      '<div><div class="modal-thumb"><img src="' + thumbUrl(item) + '" alt="' + escapeHtml(item.name) + '"></div>' +
       '<a class="modal-buy" href="' + itemUrl(item.assetId) + '" target="_blank" rel="noopener">View on Roblox ↗</a></div>' +
       '<div class="modal-stats">' +
         modalStatHtml("RAP", fmtNum(item.rap)) +
@@ -1166,14 +1171,26 @@ async function fetchCatalogDetailsBatch(assetIds) {
       missing.push(assetId);
     }
   }
+  let anyChunkSucceeded = false;
   for (let i = 0; i < missing.length; i += 100) {
     let data;
     try {
       data = await fetchCatalogDetailsChunk(missing.slice(i, i + 100));
     } catch (e) {
-      if (result.size > 0) break;
-      throw e;
+      // A single failed batch (rate limit, transient network error) used to
+      // abort the whole loop here, silently leaving EVERY item after this
+      // point in the catalog with no price/availability data at all - with
+      // ~2,600 items across 26+ batches of 100, one hiccup partway through
+      // wiped out prices for most of the list. Skip just this batch instead
+      // and keep going, so a single bad batch costs 100 items, not the rest
+      // of the catalog. Only bail out entirely if not a single batch has
+      // worked yet (genuine outage, not a one-off blip).
+      console.warn(`Catalog details batch ${i}-${i + 100} failed: ${e.message} - skipping this batch, continuing.`);
+      if (!anyChunkSucceeded && i + 100 >= missing.length && result.size === 0) throw e;
+      if (i + 100 < missing.length) await sleep(220);
+      continue;
     }
+    anyChunkSucceeded = true;
     for (const row of (Array.isArray(data.data) ? data.data : [])) {
       const id = normalizeNumber(row.id);
       if (id > 0) {
@@ -1182,6 +1199,46 @@ async function fetchCatalogDetailsBatch(assetIds) {
       }
     }
     if (i + 100 < missing.length) await sleep(220);
+  }
+  return result;
+}
+
+const THUMBNAIL_URL = "https://thumbnails.roblox.com/v1/assets";
+const THUMBNAIL_CACHE_TTL_MS = Number(process.env.THUMBNAIL_CACHE_TTL_MS || 24 * 60 * 60 * 1000); // thumbnails barely change
+const thumbnailCache = new Map();
+
+// Roblox's old `roblox.com/asset-thumbnail/image?assetId=` URL - what the
+// website used to build <img> src directly from an assetId - is dead; it now
+// just redirects to the Roblox homepage. The current API returns a JSON
+// mapping to a real, hotlinkable rbxcdn.com URL per asset, batched up to 100
+// ids per call like the catalog-details lookup above.
+async function fetchThumbnailsBatch(assetIds) {
+  const result = new Map();
+  const missing = [];
+  for (const assetId of assetIds) {
+    const c = thumbnailCache.get(assetId);
+    if (c && Date.now() - c.fetchedAt < THUMBNAIL_CACHE_TTL_MS) {
+      result.set(assetId, c.url);
+    } else if (assetId > 0) {
+      missing.push(assetId);
+    }
+  }
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100);
+    try {
+      const data = await fetchJson(`${THUMBNAIL_URL}?assetIds=${chunk.join(",")}&size=420x420&format=Png`, { timeoutMs: 6000, retries: 2 });
+      for (const row of (Array.isArray(data.data) ? data.data : [])) {
+        const id = normalizeNumber(row.targetId);
+        const url = row.state === "Completed" ? String(row.imageUrl || "") : "";
+        if (id > 0 && url) {
+          thumbnailCache.set(id, { fetchedAt: Date.now(), url });
+          result.set(id, url);
+        }
+      }
+    } catch (e) {
+      console.warn(`Thumbnail batch fetch failed: ${e.message}`);
+    }
+    if (i + 100 < missing.length) await sleep(150);
   }
   return result;
 }
@@ -1741,6 +1798,11 @@ async function buildClassicLimitedsCatalog() {
 
   const assetIds = [...rolimonsItems.keys()];
   const priceDetails = await fetchCatalogDetailsBatch(assetIds);
+  // `thumbnail` (rbxthumb://) below only renders inside Roblox itself (Studio
+  ///the game client) - a browser can't load that protocol at all, which is
+  // why the website showed no images. `thumbnailUrl` is the real hotlinkable
+  // rbxcdn.com URL the website's <img> tags actually need.
+  const thumbnails = await fetchThumbnailsBatch(assetIds);
 
   const items = [];
   for (const [id, base] of rolimonsItems) {
@@ -1756,6 +1818,7 @@ async function buildClassicLimitedsCatalog() {
       marketType: "roblox",
       creatorName: details.creatorName || "Roblox",
       thumbnail: `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
+      thumbnailUrl: thumbnails.get(id) || "",
       dealValue: calculateDealValue(base.rap, lowestPrice),
       dealPercent: calculateDealPercent(base.rap, lowestPrice),
       overpricedValue: calculateOverpricedValue(base.rap, lowestPrice),
