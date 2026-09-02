@@ -551,6 +551,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     { key: "updated", label: "Recent" },
     { key: "deal_desc", label: "Best Deals" },
     { key: "overpriced_desc", label: "Overpriced" },
+    { key: "overpriced_sales_desc", label: "Overpriced (Most Sales)" },
     { key: "changes", label: "Changes" },
     { key: "sales", label: "Sales" },
   ];
@@ -626,10 +627,12 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   function remoteSort() {
     if (state.sortKey === "changes") return state.changeMode + "_" + state.period;
     if (state.sortKey === "sales") return "bought_" + (state.period === "all" || state.period === "1h" ? "1y" : state.period);
+    if (state.sortKey === "overpriced_sales_desc") return "overpriced_sales_" + (state.period === "all" || state.period === "1h" ? "1y" : state.period);
     return state.sortKey;
   }
   function isChangeSort() { return state.sortKey === "changes"; }
   function isSalesSort() { return state.sortKey === "sales"; }
+  function usesSalesPeriod() { return state.sortKey === "sales" || state.sortKey === "overpriced_sales_desc"; }
 
   // ---------- Rendering: controls ----------
   function renderSortRow() {
@@ -666,11 +669,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   }
 
   function renderPeriodGroup() {
-    var show = isChangeSort() || isSalesSort();
+    var show = isChangeSort() || usesSalesPeriod();
     els.periodGroup.hidden = !show;
     if (!show) return;
-    var periods = isSalesSort() ? ["24h", "7d", "30d", "1y"] : PERIODS;
-    if (isSalesSort() && (state.period === "1h" || state.period === "all")) state.period = "24h";
+    var periods = usesSalesPeriod() ? ["24h", "7d", "30d", "1y"] : PERIODS;
+    if (usesSalesPeriod() && (state.period === "1h" || state.period === "all")) state.period = "24h";
     els.periodSelect.innerHTML = "";
     periods.forEach(function (p) {
       var opt = document.createElement("option");
@@ -841,6 +844,14 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     }
     if (state.sortKey === "overpriced_desc") {
       return { label: "Overpriced", text: fmtPercent(item.overpricedPercent), cls: "neg" };
+    }
+    if (state.sortKey === "overpriced_sales_desc") {
+      var oCount = item.salesCount;
+      return {
+        label: "Overpriced · Sales " + PERIOD_LABEL[state.period],
+        text: fmtPercent(item.overpricedPercent) + (oCount ? " · " + fmtNum(oCount) + " sold" : " · no sales"),
+        cls: "neg",
+      };
     }
     var c24 = item.change24h;
     if (c24 === null || c24 === undefined) return null;
@@ -2250,7 +2261,22 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   else if (sort === "value_desc") items.sort((a, b) => (b.value || 0) - (a.value || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
-  else if (sort.startsWith("bought_")) {
+  else if (sort.startsWith("overpriced_sales_")) {
+    // "Overpriced (Most Sales)" - surfaces overpriced limiteds that are
+    // actually moving, not just theoretically overpriced with no buyers.
+    // Most sales first, overpriced% as the tiebreak among equal sales counts.
+    const days = { overpriced_sales_24h: 1, overpriced_sales_7d: 7, overpriced_sales_30d: 30, overpriced_sales_1y: 365 }[sort];
+    if (days) {
+      const salesMap = await getSalesMetricsMap(days);
+      for (const item of items) {
+        const s = salesMap.get(item.assetId);
+        if (s) Object.assign(item, s);
+      }
+      items.sort((a, b) => ((b.salesCount || 0) - (a.salesCount || 0)) || ((b.overpricedPercent || 0) - (a.overpricedPercent || 0)));
+    } else {
+      items.sort(compareOverpricedItems);
+    }
+  } else if (sort.startsWith("bought_")) {
     const days = { bought_24h: 1, bought_7d: 7, bought_30d: 30, bought_1y: 365 }[sort];
     if (days) {
       const salesMap = await getSalesMetricsMap(days);
