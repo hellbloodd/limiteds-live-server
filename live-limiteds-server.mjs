@@ -1904,6 +1904,9 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
 
   let items = await getRobloxMarketIndex();
+  // Hide items with no purchasable price at all - the user only wants
+  // limiteds that actually show a price, not off-sale/no-price items.
+  items = items.filter(i => i.lowestPrice > 0);
   if (keyword) { const lk = keyword.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(lk)); }
   if (minPrice > 0) items = items.filter(i => !i.lowestPrice || i.lowestPrice >= minPrice);
   if (maxPrice > 0) items = items.filter(i => !i.lowestPrice || i.lowestPrice <= maxPrice);
@@ -1941,11 +1944,14 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       return r - l;
     });
   } else {
-    // "Recent" - order by when OUR pipeline first saw the item, not raw
-    // assetId (Roblox's ID space is global and unrelated to Limited status -
-    // a years-old item can have a far larger ID than a brand-new limited).
-    const firstSeen = await fetchFirstSeenMap();
-    items.sort((a, b) => (firstSeen.get(b.assetId) || 0) - (firstSeen.get(a.assetId) || 0));
+    // "Recent" = newest limiteds added to Roblox itself, not when our own
+    // pipeline happened to first scan them. Our own first-seen timestamps
+    // are all clustered around whenever this tracker itself started running,
+    // so they don't reflect the item's real age on Roblox at all. Roblox
+    // assigns asset IDs sequentially as items are created, so a higher
+    // assetId reliably means the item appeared on Roblox more recently -
+    // that's the correct, always-available signal for "newest".
+    items.sort((a, b) => (b.assetId || 0) - (a.assetId || 0));
   }
 
   const startIdx = cursor ? parseInt(cursor, 10) || 0 : 0;
@@ -2006,13 +2012,28 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
     };
 
     const ownHistory = await fetchStoredSnapshots(assetId);
+    // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
+    // item - typically stretching back over its whole resale life, not just
+    // the (short, recent) window our own hourly snapshots have accumulated.
+    // ownHistory is merged in on top only to fill in anything more recent
+    // than Roblox's own last-updated point; it's never the primary source.
     const resaleHistory = normalizeHistoryPoints(resaleDetails.priceDataPoints);
     const combinedHistory = [...ownHistory, ...resaleHistory].sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(-5000);
     Object.assign(item, buildRapChangeMetrics(combinedHistory, rap), { history: combinedHistory });
+
+    // Same idea for sales: buildSalesHistory is already built from Roblox's
+    // full price+volume history (not just what we've personally observed),
+    // so totalQuantitySold/averagePrice below cover the item's whole
+    // recorded trading history, the way Rolimons' own chart does - not just
+    // a short recent window.
     const salesHistory = buildSalesHistory(resaleDetails.priceDataPoints, resaleDetails.volumeDataPoints, lowestPrice);
+    const totalQuantitySold = salesHistory.reduce((sum, p) => sum + (p.salesVolume || 0), 0);
     Object.assign(item, calculateSalesMetrics(salesHistory, 1), {
       volume24h: calculateSalesMetrics(salesHistory, 1).salesCount,
-      volume7d: calculateSalesMetrics(salesHistory, 7).salesCount
+      volume7d: calculateSalesMetrics(salesHistory, 7).salesCount,
+      totalQuantitySold: totalQuantitySold > 0 ? totalQuantitySold : null,
+      originalPrice: firstPositiveNumber(resaleDetails.originalPrice) || null,
+      salesHistory,
     });
     detailCache.set(cacheKey, { cachedAt: Date.now(), data: item });
     return sendJson(res, 200, item);
