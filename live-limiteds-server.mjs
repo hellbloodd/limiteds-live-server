@@ -86,6 +86,11 @@ const DASHBOARD_HTML = `
   }
 
   * { box-sizing: border-box; }
+  /* Some of the classes below (.control-group, .load-more-wrap, .overlay)
+     set their own \`display\`, which - at equal CSS specificity - beats the
+     browser's default \`[hidden] { display: none }\` rule. Restating it here
+     with !important keeps \`el.hidden = true\` working everywhere on the page. */
+  [hidden] { display: none !important; }
   html, body { margin: 0; }
   body {
     background: var(--bg);
@@ -699,7 +704,7 @@ const DASHBOARD_HTML = `
       if (state.items.length === 0) {
         setStatus(isChangeSort()
           ? "No limiteds with a " + state.changeMode + " right now for this period."
-          : (state.search ? "No limiteds found for \"" + state.search + "\"." : "No limiteds found."));
+          : (state.search ? "No limiteds found for \\"" + state.search + "\\"." : "No limiteds found."));
       } else {
         setStatus(state.items.length + " limiteds loaded");
       }
@@ -1359,46 +1364,80 @@ async function mapWithConcurrency(items, concurrency, fn) {
   return results;
 }
 
-// Builds { assetId -> salesCount/averageSalePrice } for one period bucket by
-// scanning live Roblox resale history per item. This used to also try a
-// Rolimons "single item" sales call first (`itemapi/itemdetails?itemids=`),
-// but that endpoint ignores the itemids filter entirely and just returns the
-// full bulk catalog with no per-item sales data - it never found anything,
-// so every item fell through to this same Roblox lookup anyway while paying
-// for a wasted, rate-limit-prone network round trip first. Removed.
-async function buildSalesMetricsMap(days, maxItems = ACTIVE_SALES_SCAN_LIMIT) {
+const SALES_PERIOD_DAYS = [1, 7, 30, 365]; // bought_24h / 7d / 30d / 1y
+const SALES_CACHE_TTL_MS = Number(process.env.SALES_CACHE_TTL_MS || 30 * 60 * 1000);
+let salesWarmupRunning = false;
+
+// Fetching resale history is the same live external call per item no matter
+// which period you're asking about - only the local time-window filter in
+// calculateSalesMetrics differs. Scanning the whole catalog ONCE and computing
+// all four period buckets from that single pass (instead of a full separate
+// catalog scan per period) is what makes it possible to keep every bucket
+// warm without hammering Roblox's API four times as hard.
+async function scanAllSalesMetrics(maxItems = ACTIVE_SALES_SCAN_LIMIT) {
   const allItems = await getRobloxMarketIndex();
   const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
-  const entries = await mapWithConcurrency(candidates, 40, async (item) => {
+  const maps = new Map(SALES_PERIOD_DAYS.map(d => [d, new Map()]));
+
+  await mapWithConcurrency(candidates, 40, async (item) => {
     const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
     const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
-    const sales = calculateSalesMetrics(salesHistory, days);
-    return [item.assetId, {
-      salesCount: sales.salesCount,
-      averageSalePrice: sales.averageSalePrice,
-      salesSource: sales.salesCount ? "roblox" : null,
-      salesEstimated: false,
-    }];
+    for (const days of SALES_PERIOD_DAYS) {
+      const sales = calculateSalesMetrics(salesHistory, days);
+      maps.get(days).set(item.assetId, {
+        salesCount: sales.salesCount,
+        averageSalePrice: sales.averageSalePrice,
+        salesSource: sales.salesCount ? "roblox" : null,
+        salesEstimated: false,
+      });
+    }
   });
-  return new Map(entries);
+
+  return maps;
+}
+
+// Runs the full-catalog sales scan and refreshes every period bucket's cache
+// at once. Called proactively (on startup and after each hourly snapshot) so
+// a visitor's "sort by sales" request almost always hits an already-warm
+// cache instead of triggering (and waiting out) a live multi-minute scan.
+async function warmSalesMetrics() {
+  if (salesWarmupRunning) return;
+  salesWarmupRunning = true;
+  try {
+    console.log("Sales metrics warm-up started.");
+    const maps = await scanAllSalesMetrics();
+    const fetchedAt = Date.now();
+    for (const [days, map] of maps) salesActivityCache.set(days, { fetchedAt, map });
+    console.log(`Sales metrics warm-up done (${maps.get(1)?.size || 0} items scanned).`);
+  } catch (e) {
+    console.warn(`Sales metrics warm-up failed: ${e.message} - keeping previous cache.`);
+  } finally {
+    salesWarmupRunning = false;
+  }
 }
 
 // Sales metrics require one live external fetch per item across the whole
-// catalog, which is far too slow to redo on every request (this is what was
-// making "sort by sales" hang / never come back). Compute it once per period
-// bucket and cache the result for CACHE_TTL_MS, independent of the current
-// page's cursor/keyword/price filters, so every page of the same sort reuses
-// the same computed map instead of re-scanning the whole catalog per page.
+// catalog, which is far too slow to do inline on every request (this is what
+// was making "sort by sales" hang / never come back). warmSalesMetrics() is
+// meant to keep this cache filled proactively; this is only the cold-start
+// fallback for when a request lands before the first warm-up has finished.
 async function getSalesMetricsMap(days) {
   const cached = salesActivityCache.get(days);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.map;
+  if (cached && Date.now() - cached.fetchedAt < SALES_CACHE_TTL_MS) return cached.map;
+  if (cached) {
+    // Stale but present: serve it immediately and refresh in the background
+    // rather than making this request wait out a fresh multi-minute scan.
+    warmSalesMetrics().catch(() => {});
+    return cached.map;
+  }
   try {
-    const map = await buildSalesMetricsMap(days);
-    salesActivityCache.set(days, { fetchedAt: Date.now(), map });
-    return map;
+    const maps = await scanAllSalesMetrics();
+    const fetchedAt = Date.now();
+    for (const [d, map] of maps) salesActivityCache.set(d, { fetchedAt, map });
+    return maps.get(days) || new Map();
   } catch (e) {
-    console.warn(`Sales metrics scan failed: ${e.message} - keeping previous cache (${cached?.map.size || 0} items).`);
-    return cached?.map || new Map();
+    console.warn(`Sales metrics scan failed: ${e.message}`);
+    return new Map();
   }
 }
 
@@ -1990,6 +2029,11 @@ async function runSnapshot() {
   } finally {
     snapshotRunning = false;
   }
+  // Keep the "sort by sales" cache warm alongside the regular RAP snapshot,
+  // using whatever catalog just got refreshed above. Runs after, not in
+  // parallel with, the snapshot - both hit Roblox's API hard and shouldn't
+  // race each other for rate-limit headroom.
+  warmSalesMetrics().catch(e => console.error(`Sales warm-up error: ${e.message}`));
 }
 
 const server = http.createServer(async (req, res) => {
