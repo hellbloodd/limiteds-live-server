@@ -1287,7 +1287,21 @@ const MANUAL_NEW_LIMITEDS = [
   { id: 16477149823, itemType: "Asset" },      // Gold Clockwork Headphones
   { id: 259144677693420, itemType: "Bundle" }, // Snowflake Eyes
 ];
-const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 3000);
+// BUG (fixed): this used to default to 3000, and the catalog easily runs
+// past that (Rolimons tracks the whole history of classic limiteds, several
+// thousand items, plus whatever MANUAL_NEW_LIMITEDS appends at the very end
+// of the list). scanAllSalesMetrics() below did `allItems.slice(0, maxItems)`
+// with no reordering first - since rolimonsItems is a Map keyed by numeric
+// assetId, JS iterates integer-keyed maps in ascending key order, so the
+// slice silently kept only the OLDEST ~3000 limiteds and permanently
+// excluded every newer one from ever getting sales data, including every
+// single manually-added item (Molten Lava Wings, 8-Bit Royal Crown, etc,
+// which are pushed onto the end of the array) - exactly the "no sales for X"
+// reports. The scan itself already runs in the background (never blocks a
+// request - see getSalesMetricsMap), so there's no real cost to covering the
+// whole catalog; default to effectively unlimited and let the env var only
+// serve as a safety valve, not a silent correctness bug.
+const ACTIVE_SALES_SCAN_LIMIT = Number(process.env.ACTIVE_SALES_SCAN_LIMIT || 999999);
 
 // Rolimons' itemdetails array positions (community-documented convention).
 const RL_NAME = 0, RL_ACRONYM = 1, RL_RAP = 2, RL_VALUE = 3, RL_DEFAULT_VALUE = 4,
@@ -1711,12 +1725,26 @@ function calculateSalesMetrics(points, days) {
   return c <= 0 ? { salesCount: null, averageSalePrice: null } : { salesCount: c, averageSalePrice: Math.round(t / c) };
 }
 
+// BUG (fixed): this used to chop `items` into fixed-size batches and
+// Promise.all() each batch before starting the next one. That means a single
+// slow item (anything that falls through to the frozen legacy resale
+// endpoint and has to burn its full 5s x2 retry timeout) stalled the other
+// ~19 already-finished slots in its batch for the rest of that wait, instead
+// of them picking up the next item immediately. Over a few-thousand-item
+// scan those stalls compound badly - this is the main reason the sales scan
+// was slow to finish. A rolling worker pool keeps every slot busy: as soon
+// as one item finishes, that worker grabs the next one, with no batch
+// boundaries for a slow item to block.
 async function mapWithConcurrency(items, concurrency, fn) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    results.push(...await Promise.all(batch.map(fn)));
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
   return results;
 }
 
@@ -1744,7 +1772,15 @@ async function scanAllSalesMetrics(maxItems = ACTIVE_SALES_SCAN_LIMIT) {
   salesScanPromise = (async () => {
     try {
       const allItems = await getRobloxMarketIndex();
-      const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
+      // If maxItems is ever set below the catalog size (env override), scan
+      // the newest/highest-RAP items first rather than whatever order the
+      // catalog happens to be in - assetId ascending, which used to mean the
+      // OLDEST items always won the cap and every newer limited (manually
+      // tracked ones especially) got silently starved of sales data.
+      const candidates = allItems.filter(i => i.assetId > 0)
+        .slice()
+        .sort((a, b) => (b.assetId || 0) - (a.assetId || 0))
+        .slice(0, maxItems);
       const maps = new Map(SALES_PERIOD_DAYS.map(d => [d, new Map()]));
 
       // This hits a completely different Roblox host/endpoint
@@ -1798,26 +1834,30 @@ async function warmSalesMetrics() {
 // Sales metrics require one live external fetch per item across the whole
 // catalog, which is far too slow to do inline on every request (this is what
 // was making "sort by sales" hang / never come back). warmSalesMetrics() is
-// meant to keep this cache filled proactively; this is only the cold-start
-// fallback for when a request lands before the first warm-up has finished.
+// meant to keep this cache filled proactively.
+//
+// BUG (fixed): the true cold-start case (server just booted, nothing cached
+// for this period yet) used to `await scanAllSalesMetrics()` right here,
+// inline, blocking that visitor's actual HTTP request on a full catalog
+// scan - on Render's free tier, every cold start (the service sleeps when
+// idle) hit exactly this path, so the very first "Sort by Sales" or
+// "Overpriced (Most Sales)" request after a wake-up would hang for minutes
+// and typically time out client-side before the scan ever finished, which is
+// what showed up as "sales not showing at all". There's no way to compute a
+// real sales ordering without the data, so instead of blocking, kick the
+// scan off in the background (same dedup as every other caller) and return
+// an empty map immediately - the request still renders fast, just without
+// sales figures for a few seconds, and self-corrects as soon as the
+// background scan lands.
 async function getSalesMetricsMap(days) {
   const cached = salesActivityCache.get(days);
   if (cached && Date.now() - cached.fetchedAt < SALES_CACHE_TTL_MS) return cached.map;
-  if (cached) {
-    // Stale but present: serve it immediately and refresh in the background
-    // rather than making this request wait out a fresh multi-minute scan.
-    warmSalesMetrics().catch(() => {});
-    return cached.map;
-  }
-  try {
-    const maps = await scanAllSalesMetrics();
-    const fetchedAt = Date.now();
-    for (const [d, map] of maps) salesActivityCache.set(d, { fetchedAt, map });
-    return maps.get(days) || new Map();
-  } catch (e) {
-    console.warn(`Sales metrics scan failed: ${e.message}`);
-    return new Map();
-  }
+  // Stale-but-present or genuinely cold: either way, never block this
+  // request on a live scan - serve what's cached (possibly nothing) and
+  // let the background warm-up (deduped, so this is a no-op if one is
+  // already running) fill it in for the next request.
+  warmSalesMetrics().catch(() => {});
+  return cached ? cached.map : new Map();
 }
 
 function buildRapChangeMetrics(ownHistory, currentRap) {
@@ -2331,7 +2371,18 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return sendJson(res, 200, cached.data);
 
   try {
-    const rolimonsItems = await fetchRolimonsCatalog();
+    // rolimonsItems, catalogDetails and ownHistory don't depend on each
+    // other - they used to run one after another (three sequential
+    // round-trips, one of them to Supabase) purely because they were written
+    // top to bottom. Only resaleDetails genuinely has to wait, since it
+    // needs catalogDetails.collectibleItemId first. Running the independent
+    // three in parallel is a straightforward win for how long the item modal
+    // takes to open, especially on a cache-cold hit.
+    const [rolimonsItems, catalogDetails, ownHistory] = await Promise.all([
+      fetchRolimonsCatalog(),
+      fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {}),
+      fetchStoredSnapshots(assetId),
+    ]);
     const rolimonsItem = rolimonsItems.get(assetId);
 
     // catalogDetails is fetched fresh (cache or a live single-item lookup)
@@ -2347,7 +2398,6 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
     // that actually have plenty. Prefer the fresh id; the query param is
     // only a fallback for the rare case the live lookup itself comes back
     // empty too.
-    const catalogDetails = await fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {});
     const resaleDetails = await fetchAnyResaleData(assetId, catalogDetails.collectibleItemId || collectibleItemId);
 
     // Same RAP/Value source as the catalog list, so a given item's numbers
@@ -2380,7 +2430,6 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice)
     };
 
-    const ownHistory = await fetchStoredSnapshots(assetId);
     // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
     // item - typically stretching back over its whole resale life, not just
     // the (short, recent) window our own hourly snapshots have accumulated.
