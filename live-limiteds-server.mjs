@@ -504,6 +504,57 @@ async function fetchStoredSnapshots(assetId) {
   } catch { return []; }
 }
 
+// One bulk-fetched, cached (assetId -> history[]) map for the whole catalog,
+// used by the Changes/Loss/Profit sorts. Those sorts need EVERY item's
+// history to rank the whole catalog - calling fetchStoredSnapshots() per
+// item (one Supabase round trip each) for ~2,500+ items serialized into
+// minutes-long requests that just hung forever client-side. A handful of
+// paginated bulk queries plus a short cache fixes that.
+let snapshotsByAssetCache = { fetchedAt: 0, map: new Map() };
+async function fetchAllStoredSnapshotsGrouped() {
+  if (!snapshotStorageEnabled()) {
+    const map = new Map();
+    for (const r of memorySnapshots) {
+      const id = Number(r.asset_id);
+      if (!(id > 0)) continue;
+      const arr = map.get(id) || [];
+      arr.push({ value: Number(r.rap), lowestPrice: Number(r.lowest_price) || null, date: String(r.saved_at || ""), source: "own" });
+      map.set(id, arr);
+    }
+    return map;
+  }
+  if (Date.now() - snapshotsByAssetCache.fetchedAt < CACHE_TTL_MS && snapshotsByAssetCache.map.size > 0) {
+    return snapshotsByAssetCache.map;
+  }
+  try {
+    const map = new Map();
+    const pageSize = 1000;
+    for (let page = 0, offset = 0; page < 500; page++, offset += pageSize) {
+      const rows = await supabaseRequest(
+        `limited_snapshots?select=asset_id,rap,lowest_price,saved_at&order=saved_at.asc&limit=${pageSize}&offset=${offset}`,
+        { headers: { Prefer: "" } }
+      );
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      for (const r of rows) {
+        const id = Number(r.asset_id);
+        const value = Number(r.rap);
+        const date = String(r.saved_at || "");
+        if (id > 0 && value > 0 && Number.isFinite(Date.parse(date))) {
+          const arr = map.get(id) || [];
+          arr.push({ value, lowestPrice: Number(r.lowest_price) || null, date, source: "own" });
+          map.set(id, arr);
+        }
+      }
+      if (rows.length < pageSize) break;
+    }
+    if (map.size > 0) snapshotsByAssetCache = { fetchedAt: Date.now(), map };
+    return snapshotsByAssetCache.map;
+  } catch (e) {
+    console.warn(`Bulk snapshot fetch failed: ${e.message} - keeping previous cache (${snapshotsByAssetCache.map.size} items).`);
+    return snapshotsByAssetCache.map;
+  }
+}
+
 async function saveSnapshotRows(rows) {
   if (!rows.length || !snapshotStorageEnabled()) return;
   memorySnapshots.push(...rows);
@@ -771,8 +822,9 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
     const suffix = sort.replace("loss_", "").replace("profit_", "");
     const days = { "_1h": 1 / 24, "_24h": 1, "_7d": 7, "_30d": 30, "_1y": 365, "_all": null }[`_${suffix}`];
     const fieldSuffix = suffix === "all" ? "AllTime" : suffix;
+    const snapshotsByAsset = await fetchAllStoredSnapshotsGrouped();
     for (const item of items) {
-      const history = await fetchStoredSnapshots(item.assetId);
+      const history = snapshotsByAsset.get(item.assetId) || [];
       Object.assign(item, buildRapChangeMetrics(history, item.rap));
     }
     items.sort((a, b) => {
