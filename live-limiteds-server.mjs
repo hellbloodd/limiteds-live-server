@@ -62,11 +62,14 @@ const resaleCache = new Map();
 const catalogDetailCache = new Map();
 const detailCache = new Map();
 const portfolioCache = new Map();
-const rolimonsSalesCache = new Map();
+// Sales-count-by-period is expensive (one live resale-history fetch per item,
+// across the whole catalog) so it's computed once per period bucket and
+// reused across every page/cursor/filter combination for CACHE_TTL_MS,
+// instead of being recomputed per request like the old per-request scan was.
+const salesActivityCache = new Map(); // key: days -> { fetchedAt, map: Map<assetId, salesFields> }
 let robloxCsrfToken = "";
 let snapshotRunning = false;
 let memorySnapshots = [];
-let rolimonsSalesBlockedUntil = 0;
 let rolimonsCatalogCache = { fetchedAt: 0, items: new Map() };
 
 function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, maxPrice, minRap, maxRap }) {
@@ -371,48 +374,47 @@ async function mapWithConcurrency(items, concurrency, fn) {
   return results;
 }
 
-async function fetchRolimonsItemSales(assetId) {
-  const cached = rolimonsSalesCache.get(assetId);
-  if (cached && Date.now() - cached.fetchedAt < ROLIMONS_CACHE_TTL_MS) return cached.data;
-  if (Date.now() < rolimonsSalesBlockedUntil) return { history: [], totalSales: 0 };
-  try {
-    const data = await fetchJson(`${ROLIMONS_ITEM_DETAILS_URL}?itemids=${assetId}`, { timeoutMs: 3000 });
-    const itemData = data?.items?.[String(assetId)];
-    if (itemData) {
-      const result = {
-        history: (itemData.sales || []).map(s => ({
-          value: s.v || s.value,
-          date: new Date((s.t || s.time) * 1000).toISOString(),
-          source: "rolimons",
-          salesVolume: 1
-        })),
-        totalSales: itemData.sales_count || 0
-      };
-      rolimonsSalesCache.set(assetId, { fetchedAt: Date.now(), data: result });
-      return result;
-    }
-    return { history: [], totalSales: 0 };
-  } catch (error) {
-    if (error.message?.includes("429")) rolimonsSalesBlockedUntil = Date.now() + 60000;
-    return { history: [], totalSales: 0 };
-  }
+// Builds { assetId -> salesCount/averageSalePrice } for one period bucket by
+// scanning live Roblox resale history per item. This used to also try a
+// Rolimons "single item" sales call first (`itemapi/itemdetails?itemids=`),
+// but that endpoint ignores the itemids filter entirely and just returns the
+// full bulk catalog with no per-item sales data - it never found anything,
+// so every item fell through to this same Roblox lookup anyway while paying
+// for a wasted, rate-limit-prone network round trip first. Removed.
+async function buildSalesMetricsMap(days, maxItems = ACTIVE_SALES_SCAN_LIMIT) {
+  const allItems = await getRobloxMarketIndex();
+  const candidates = allItems.filter(i => i.assetId > 0).slice(0, maxItems);
+  const entries = await mapWithConcurrency(candidates, 40, async (item) => {
+    const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
+    const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
+    const sales = calculateSalesMetrics(salesHistory, days);
+    return [item.assetId, {
+      salesCount: sales.salesCount,
+      averageSalePrice: sales.averageSalePrice,
+      salesSource: sales.salesCount ? "roblox" : null,
+      salesEstimated: false,
+    }];
+  });
+  return new Map(entries);
 }
 
-async function addResaleActivityMetrics(items, days, maxItems = ACTIVE_SALES_SCAN_LIMIT) {
-  const candidates = items.filter(i => i.assetId > 0).slice(0, maxItems);
-  return mapWithConcurrency(candidates, 24, async (item) => {
-    let sales = { salesCount: null, averageSalePrice: null, salesSource: null, salesEstimated: false };
-    const rolimonsSales = await fetchRolimonsItemSales(item.assetId);
-    if (rolimonsSales.history.length > 0) {
-      sales = { ...calculateSalesMetrics(rolimonsSales.history, days), salesSource: "rolimons", salesEstimated: false };
-    }
-    if (!sales.salesCount) {
-      const resale = await fetchAnyResaleData(item.assetId, item.collectibleItemId);
-      const salesHistory = buildSalesHistory(resale.priceDataPoints, resale.volumeDataPoints, item.lowestPrice);
-      sales = { ...calculateSalesMetrics(salesHistory, days), salesSource: "roblox", salesEstimated: false };
-    }
-    return { ...item, salesCount: sales.salesCount, averageSalePrice: sales.averageSalePrice, salesSource: sales.salesSource, salesEstimated: sales.salesEstimated };
-  }).then(r => r.sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0)));
+// Sales metrics require one live external fetch per item across the whole
+// catalog, which is far too slow to redo on every request (this is what was
+// making "sort by sales" hang / never come back). Compute it once per period
+// bucket and cache the result for CACHE_TTL_MS, independent of the current
+// page's cursor/keyword/price filters, so every page of the same sort reuses
+// the same computed map instead of re-scanning the whole catalog per page.
+async function getSalesMetricsMap(days) {
+  const cached = salesActivityCache.get(days);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.map;
+  try {
+    const map = await buildSalesMetricsMap(days);
+    salesActivityCache.set(days, { fetchedAt: Date.now(), map });
+    return map;
+  } catch (e) {
+    console.warn(`Sales metrics scan failed: ${e.message} - keeping previous cache (${cached?.map.size || 0} items).`);
+    return cached?.map || new Map();
+  }
 }
 
 function buildRapChangeMetrics(ownHistory, currentRap) {
@@ -816,7 +818,14 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
   else if (sort.startsWith("bought_")) {
     const days = { bought_24h: 1, bought_7d: 7, bought_30d: 30, bought_1y: 365 }[sort];
-    if (days) items = await addResaleActivityMetrics(items, days);
+    if (days) {
+      const salesMap = await getSalesMetricsMap(days);
+      for (const item of items) {
+        const s = salesMap.get(item.assetId);
+        if (s) Object.assign(item, s);
+      }
+      items.sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0));
+    }
   } else if (sort.startsWith("loss_") || sort.startsWith("profit_")) {
     const isLoss = sort.startsWith("loss_");
     const suffix = sort.replace("loss_", "").replace("profit_", "");
