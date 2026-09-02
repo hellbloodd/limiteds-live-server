@@ -31,8 +31,7 @@ import { URL } from "url";
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "rolimons-source-v3";
 
-const DASHBOARD_HTML = `
-<title>Limiteds Live</title>
+const DASHBOARD_HTML = `<title>Limiteds Live</title>
 <style>
   :root {
     --bg: #0b0e14;
@@ -427,8 +426,17 @@ const DASHBOARD_HTML = `
     font-family: inherit; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 999px; cursor: pointer;
   }
   .chart-head .rp.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  .chart-box { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 10px 12px; }
+  .chart-box { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 10px 12px; position: relative; }
   .chart-caption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; z-index: 5; transform: translate(-50%, -100%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; line-height: 1.45; white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(0,0,0,.28);
+  }
+  .chart-tooltip .tt-date { color: var(--muted); font-size: 11px; }
+  .chart-tooltip .tt-val { font-weight: 700; }
+  .chart-tooltip[hidden] { display: none; }
 
   .skel { background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.3s infinite; border-radius: 6px; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
@@ -865,8 +873,8 @@ const DASHBOARD_HTML = `
       '<div class="modal-stats">' +
         modalStatHtml("RAP", fmtNum(item.rap)) +
         modalStatHtml("Price", item.lowestPrice ? fmtNum(item.lowestPrice) : "N/A") +
-        modalStatHtml("Change 1h", "…") +
-        modalStatHtml("Change 24h", "…") +
+        modalStatHtml("Change (" + rangeLabel(activeChartRange) + ")", "…") +
+        modalStatHtml("Sales (" + rangeLabel(activeChartRange) + ")", "…") +
         modalStatHtml("Available", "…") +
         modalStatHtml("Total copies", "…") +
         modalStatHtml("Creator", "…") +
@@ -874,9 +882,13 @@ const DASHBOARD_HTML = `
       '<div class="chart-wrap">' +
         '<div class="chart-head"><div class="chart-caption" id="chart-caption">Loading history…</div>' +
         '<div class="range-pills" id="range-pills"></div></div>' +
-        '<div class="chart-box"><svg id="chart-svg" width="100%" height="170" viewBox="0 0 680 170" preserveAspectRatio="none"></svg></div>' +
+        '<div class="chart-box">' +
+          '<svg id="chart-svg" width="100%" height="170" viewBox="0 0 680 170" preserveAspectRatio="none"></svg>' +
+          '<div class="chart-tooltip" id="chart-tooltip" hidden></div>' +
+        '</div>' +
       '</div>';
     buildRangePills();
+    wireChartHover();
   }
 
   function modalStatHtml(k, v, cls) {
@@ -891,6 +903,38 @@ const DASHBOARD_HTML = `
   var RANGES = ["1h", "24h", "7d", "1m", "1y", "all"];
   var RANGE_FIELD = { "1h": "change1h", "24h": "change24h", "7d": "change7d", "1m": "change30d", "1y": "change1y", all: "changeAllTime" };
   var RANGE_DAYS = { "1h": 1 / 24, "24h": 1, "7d": 7, "1m": 30, "1y": 365, all: null };
+  function rangeLabel(r) { return r === "all" ? "All" : r; }
+
+  // Sales count for the currently-selected range, summed straight from the
+  // same salesHistory points the item carries for its whole recorded life -
+  // so picking any pill from 1h up to All recomputes it instantly with no
+  // extra request, the same way the RAP chart already does for Change.
+  //
+  // Roblox only publishes this data once per calendar day, usually with
+  // about a day's delay - filtering by "since exactly N*24h ago" against the
+  // real clock used to show "No sales" for almost the entire day, then a
+  // sudden jump once a new day's row appeared. Counting off the data's own
+  // published days instead (collapsed to one entry per day, then the most
+  // recent N of them) matches what the server does and stays stable no
+  // matter when today's row happens to land.
+  function computeSalesForRange(data, range) {
+    var history = Array.isArray(data.salesHistory) ? data.salesHistory : [];
+    var days = RANGE_DAYS[range];
+    var byDay = {};
+    history.forEach(function (p) {
+      var vol = Number(p.salesVolume) || 0;
+      var t = Date.parse(p.date);
+      if (!(p.value > 0) || !vol || !isFinite(t)) return;
+      var k = new Date(t).toISOString().slice(0, 10);
+      byDay[k] = { vol: vol, t: t };
+    });
+    var sortedDays = Object.keys(byDay).map(function (k) { return byDay[k]; }).sort(function (a, b) { return a.t - b.t; });
+    var n = days ? Math.max(1, Math.round(days)) : sortedDays.length;
+    var window = sortedDays.slice(-n);
+    var count = 0;
+    window.forEach(function (d) { count += d.vol; });
+    return count;
+  }
 
   function buildRangePills() {
     var wrap = document.getElementById("range-pills");
@@ -911,11 +955,13 @@ const DASHBOARD_HTML = `
   function applyDetailData(data) {
     var statsWrap = els.modalBody.querySelector(".modal-stats");
     if (statsWrap) {
+      var changeVal = data[RANGE_FIELD[activeChartRange]];
+      var salesForRange = computeSalesForRange(data, activeChartRange);
       statsWrap.innerHTML =
         modalStatHtml("RAP", fmtNum(data.rap)) +
         modalStatHtml("Price", data.lowestPrice ? fmtNum(data.lowestPrice) : "N/A") +
-        modalStatHtml("Change 1h", fmtPercent(data.change1h), changeCls(data.change1h)) +
-        modalStatHtml("Change 24h", fmtPercent(data.change24h), changeCls(data.change24h)) +
+        modalStatHtml("Change (" + rangeLabel(activeChartRange) + ")", fmtPercent(changeVal), changeCls(changeVal)) +
+        modalStatHtml("Sales (" + rangeLabel(activeChartRange) + ")", salesForRange > 0 ? fmtNum(salesForRange) : "—") +
         modalStatHtml("Available", fmtNum(data.availableCopies)) +
         modalStatHtml("Total copies", fmtNum(data.totalCopies)) +
         modalStatHtml("Creator", data.creatorName || "Roblox");
@@ -933,9 +979,15 @@ const DASHBOARD_HTML = `
     return v > 0 ? "pos" : "neg";
   }
 
+  // Populated by drawChart with everything the hover handler needs to find
+  // the nearest point under the cursor and place a tooltip over it - null
+  // whenever there's no drawable line (so hover is a no-op).
+  var chartHoverState = null;
+
   function drawChart(data) {
     var svg = document.getElementById("chart-svg");
     var caption = document.getElementById("chart-caption");
+    chartHoverState = null;
     var history = Array.isArray(data.history) ? data.history.slice() : [];
     history.sort(function (a, b) { return Date.parse(a.date) - Date.parse(b.date); });
 
@@ -1010,6 +1062,96 @@ const DASHBOARD_HTML = `
     dot.setAttribute("r", "3.5");
     dot.setAttribute("fill", lineColorResolved);
     svg.appendChild(dot);
+
+    // Hover overlay: a guideline + dot drawn on top, moved to whichever point
+    // is nearest the cursor. Created once per render, toggled visible on
+    // mousemove (see wireChartHover) rather than rebuilt every frame.
+    var hoverLine = document.createElementNS(ns, "line");
+    hoverLine.setAttribute("y1", padY); hoverLine.setAttribute("y2", h - padY);
+    hoverLine.setAttribute("stroke", gridColor); hoverLine.setAttribute("stroke-width", "1");
+    hoverLine.setAttribute("stroke-dasharray", "3,3");
+    hoverLine.setAttribute("visibility", "hidden");
+    svg.appendChild(hoverLine);
+    var bgColorResolved = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0b0e14";
+    var hoverDot = document.createElementNS(ns, "circle");
+    hoverDot.setAttribute("r", "4");
+    hoverDot.setAttribute("fill", lineColorResolved);
+    hoverDot.setAttribute("stroke", bgColorResolved);
+    hoverDot.setAttribute("stroke-width", "2");
+    hoverDot.setAttribute("visibility", "hidden");
+    svg.appendChild(hoverDot);
+
+    chartHoverState = { points: points, xFor: xFor, w: w, hoverLine: hoverLine, hoverDot: hoverDot };
+  }
+
+  // Wired once per modal open (the svg element persists across pill clicks -
+  // only its contents get redrawn) so hovering works immediately and keeps
+  // working after switching ranges.
+  function wireChartHover() {
+    var svg = document.getElementById("chart-svg");
+    var tooltip = document.getElementById("chart-tooltip");
+    if (!svg || !tooltip) return;
+
+    function hide() {
+      tooltip.hidden = true;
+      if (chartHoverState) {
+        chartHoverState.hoverLine.setAttribute("visibility", "hidden");
+        chartHoverState.hoverDot.setAttribute("visibility", "hidden");
+      }
+    }
+
+    svg.addEventListener("mousemove", function (e) {
+      if (!chartHoverState || chartHoverState.points.length < 2) return hide();
+      var rect = svg.getBoundingClientRect();
+      if (!rect.width) return hide();
+      var svgX = ((e.clientX - rect.left) / rect.width) * chartHoverState.w;
+
+      // Nearest point by drawn x-position (points aren't evenly spaced in
+      // time, so this is a linear scan over the plotted x values rather than
+      // an index computed from a fixed step).
+      var nearest = chartHoverState.points[0], nearestX = chartHoverState.xFor(Date.parse(nearest.date)), bestDist = Infinity;
+      chartHoverState.points.forEach(function (p) {
+        var px = chartHoverState.xFor(Date.parse(p.date));
+        var dist = Math.abs(px - svgX);
+        if (dist < bestDist) { bestDist = dist; nearest = p; nearestX = px; }
+      });
+
+      var cx = nearestX, cy = yForCache(nearest.value);
+      chartHoverState.hoverLine.setAttribute("x1", cx.toFixed(1)); chartHoverState.hoverLine.setAttribute("x2", cx.toFixed(1));
+      chartHoverState.hoverLine.setAttribute("visibility", "visible");
+      chartHoverState.hoverDot.setAttribute("cx", cx.toFixed(1)); chartHoverState.hoverDot.setAttribute("cy", cy.toFixed(1));
+      chartHoverState.hoverDot.setAttribute("visibility", "visible");
+
+      var boxRect = svg.parentElement.getBoundingClientRect();
+      var leftPx = (cx / chartHoverState.w) * rect.width + (rect.left - boxRect.left);
+      var topPx = (cy / 170) * rect.height + (rect.top - boxRect.top);
+      tooltip.style.left = leftPx + "px";
+      tooltip.style.top = Math.max(0, topPx - 10) + "px";
+      tooltip.innerHTML =
+        '<div class="tt-date">' + formatHoverDate(nearest.date) + '</div>' +
+        '<div class="tt-val tabular">' + fmtNum(nearest.value) + "</div>";
+      tooltip.hidden = false;
+
+      function yForCache(v) {
+        // Re-derive the y scale from the currently-drawn points (kept in
+        // sync with drawChart's own yFor via the same min/max source data).
+        var values = chartHoverState.points.map(function (p) { return p.value; });
+        var min = Math.min.apply(null, values), max = Math.max.apply(null, values);
+        if (min === max) { min -= 1; max += 1; }
+        var padY = 14, h = 170;
+        return h - padY - ((v - min) / (max - min)) * (h - padY * 2);
+      }
+    });
+
+    svg.addEventListener("mouseleave", hide);
+  }
+
+  function formatHoverDate(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return "";
+    var d = new Date(t);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+      d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   }
 
   function closeModal() { els.overlay.hidden = true; activeDetailItem = null; }
@@ -1023,7 +1165,6 @@ const DASHBOARD_HTML = `
   resetAndLoad();
 })();
 </script>
-
 `;
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 300_000);
 const ROLIMONS_CACHE_TTL_MS = Number(process.env.ROLIMONS_CACHE_TTL_MS || 600_000);
@@ -1397,18 +1538,38 @@ function compareOverpricedItems(a, b) {
   return ((b?.overpricedPercent || 0) - (a?.overpricedPercent || 0)) || ((b?.overpricedValue || 0) - (a?.overpricedValue || 0));
 }
 
+// Roblox only publishes sales/price history once per calendar day, and
+// (confirmed by direct testing) with roughly a day's delay before "today"'s
+// row shows up at all. A strict "since exactly N*24h ago" filter against the
+// real clock intermittently lands on zero published days right as the
+// calendar rolls over - showing a wrong "no sales" - and if a scan happens
+// to run while the clock is mid-flip, it can straddle day boundaries in a
+// way that quietly sums more days than intended. Counting off the data's own
+// published days instead of the wall clock avoids both: collapse to one
+// entry per calendar day (so the same day is never counted twice even if a
+// point appears more than once) and take the most recently PUBLISHED `days`
+// of them - stable, and never spuriously empty as long as the item has any
+// recorded history at all.
 function calculateSalesMetrics(points, days) {
-  if (!Array.isArray(points) || !days) return { salesCount: null, averageSalePrice: null };
-  const s = getPeriodStartTime(days), e = getPeriodEndTime(days);
-  let c = 0, t = 0;
+  if (!Array.isArray(points) || !points.length || !days) return { salesCount: null, averageSalePrice: null };
+  const byDay = new Map();
   for (const p of points) {
-    const v = p.value, ti = Date.parse(p.date);
-    if (!v || v <= 0 || !Number.isFinite(ti) || ti < s || ti > e) continue;
+    if (!(p.value > 0)) continue;
     const vol = getPointVolume(p);
     if (!vol) continue;
-    c += vol;
-    t += v * vol;
+    const ti = Date.parse(p.date);
+    if (!Number.isFinite(ti)) continue;
+    const k = new Date(ti).toISOString().slice(0, 10);
+    // Later entries win on a duplicate day rather than accumulating - a
+    // calendar day contributes at most once no matter how many raw points
+    // reference it.
+    byDay.set(k, { value: p.value, vol, ti });
   }
+  const sortedDays = [...byDay.values()].sort((a, b) => a.ti - b.ti);
+  const n = Math.max(1, Math.round(days));
+  const window = sortedDays.slice(-n);
+  let c = 0, t = 0;
+  for (const d of window) { c += d.vol; t += d.value * d.vol; }
   return c <= 0 ? { salesCount: null, averageSalePrice: null } : { salesCount: c, averageSalePrice: Math.round(t / c) };
 }
 
@@ -1848,6 +2009,12 @@ async function buildClassicLimitedsCatalog() {
 
   try {
     const newlyLimited = await discoverNewRobloxLimiteds(rolimonsItems);
+    // These are exactly the newest limiteds (not yet picked up by Rolimons at
+    // all) - and this loop was never fetching their thumbnails, only the ones
+    // from the main rolimonsItems loop above. That's why the newest items
+    // were consistently the ones showing up with no picture.
+    const newIds = newlyLimited.map(row => normalizeNumber(row.id)).filter(id => id > 0);
+    const newThumbnails = newIds.length ? await fetchThumbnailsBatch(newIds) : new Map();
     for (const row of newlyLimited) {
       const id = normalizeNumber(row.id);
       const resale = await fetchAnyResaleData(id, row.collectibleItemId);
@@ -1869,6 +2036,7 @@ async function buildClassicLimitedsCatalog() {
         collectibleItemId: String(row.collectibleItemId || ""),
         itemType: "Asset", marketType: "roblox", creatorName: row.creatorName || "Roblox",
         thumbnail: `rbxthumb://type=Asset&id=${id}&w=420&h=420`,
+        thumbnailUrl: newThumbnails.get(id) || "",
         dealValue: calculateDealValue(rap, lowestPrice), dealPercent: calculateDealPercent(rap, lowestPrice),
         overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice),
       });
