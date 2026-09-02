@@ -232,6 +232,27 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .pill.active.loss { background: var(--red-soft); border-color: var(--red); color: var(--red); }
   .pill.active.profit { background: var(--green-soft); border-color: var(--green); color: var(--green); }
 
+  .range-row { display: flex; align-items: center; gap: 6px; }
+  .range-sep { color: var(--muted-2); font-size: 12px; }
+  .range-input {
+    width: 76px;
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+  }
+  .range-input::placeholder { color: var(--muted-2); font-weight: 500; }
+  .range-input:focus { outline: none; border-color: var(--accent); }
+  /* Hide native number spinners so the pill shape stays clean */
+  .range-input::-webkit-outer-spin-button,
+  .range-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .range-input[type=number] { -moz-appearance: textfield; }
+
   select.period-select {
     appearance: none;
     background: var(--surface);
@@ -475,6 +496,22 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     <div class="label">Period</div>
     <select class="period-select" id="period-select"></select>
   </div>
+  <div class="control-group">
+    <div class="label">RAP Range</div>
+    <div class="range-row">
+      <input type="number" min="0" inputmode="numeric" class="range-input" id="rap-min" placeholder="Min">
+      <span class="range-sep">–</span>
+      <input type="number" min="0" inputmode="numeric" class="range-input" id="rap-max" placeholder="Max">
+    </div>
+  </div>
+  <div class="control-group">
+    <div class="label">Price Range</div>
+    <div class="range-row">
+      <input type="number" min="0" inputmode="numeric" class="range-input" id="price-min" placeholder="Min">
+      <span class="range-sep">–</span>
+      <input type="number" min="0" inputmode="numeric" class="range-input" id="price-max" placeholder="Max">
+    </div>
+  </div>
 </div>
 
 <div class="status-line" id="status-line">Loading catalog…</div>
@@ -526,6 +563,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     period: "24h",
     search: "",
     searchDebounce: null,
+    minRap: null,
+    maxRap: null,
+    minPrice: null,
+    maxPrice: null,
+    rangeDebounce: null,
     cursor: "",
     loading: false,
     items: [],
@@ -541,6 +583,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     loadMoreWrap: document.getElementById("load-more-wrap"),
     loadMore: document.getElementById("load-more"),
     search: document.getElementById("search"),
+    rapMin: document.getElementById("rap-min"),
+    rapMax: document.getElementById("rap-max"),
+    priceMin: document.getElementById("price-min"),
+    priceMax: document.getElementById("price-max"),
     liveDot: document.getElementById("live-dot"),
     liveText: document.getElementById("live-text"),
     overlay: document.getElementById("overlay"),
@@ -648,6 +694,25 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     }, 320);
   });
 
+  function parseRangeInput(el) {
+    var v = parseFloat(el.value);
+    return Number.isFinite(v) && v >= 0 ? v : null;
+  }
+
+  function wireRangeInput(el, stateKey) {
+    el.addEventListener("input", function () {
+      clearTimeout(state.rangeDebounce);
+      state.rangeDebounce = setTimeout(function () {
+        state[stateKey] = parseRangeInput(el);
+        resetAndLoad();
+      }, 400);
+    });
+  }
+  wireRangeInput(els.rapMin, "minRap");
+  wireRangeInput(els.rapMax, "maxRap");
+  wireRangeInput(els.priceMin, "minPrice");
+  wireRangeInput(els.priceMax, "maxPrice");
+
   // ---------- Data fetching ----------
   function buildUrl(path, params) {
     // Base against location.origin so this works whether API_BASE is a full
@@ -686,6 +751,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       keyword: state.search,
       cursor: state.cursor,
       limit: PAGE_LIMIT,
+      minRap: state.minRap,
+      maxRap: state.maxRap,
+      minPrice: state.minPrice,
+      maxPrice: state.maxPrice,
     });
 
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
