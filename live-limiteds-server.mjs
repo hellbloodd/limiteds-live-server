@@ -1,5 +1,6 @@
 import http from "http";
 import { URL } from "url";
+import crypto from "crypto";
 
 // ============================================================================
 // ARCHITECTURE
@@ -465,6 +466,87 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   @media (prefers-reduced-motion: reduce) {
     .card, .skel { animation: none !important; transition: none !important; }
   }
+
+  /* ---------- Auth area ---------- */
+  .auth-area { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .auth-btn {
+    appearance: none; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 700; font-family: inherit; cursor: pointer;
+  }
+  .auth-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .auth-btn.primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .auth-user { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .auth-user b { color: var(--text); }
+
+  /* ---------- View tabs ---------- */
+  .view-tabs {
+    max-width: 1360px; margin: 0 auto; padding: 16px 28px 0;
+    display: flex; gap: 8px; border-bottom: 1px solid var(--border);
+  }
+  .view-tab {
+    appearance: none; background: transparent; border: none; color: var(--muted);
+    padding: 10px 4px; margin-bottom: -1px; border-bottom: 2px solid transparent;
+    font-family: "Unbounded", sans-serif; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .view-tab + .view-tab { margin-left: 14px; }
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ---------- Marketplace ---------- */
+  .mp-section { max-width: 1360px; margin: 0 auto; padding: 22px 28px 60px; }
+  .mp-subtabs { display: flex; gap: 6px; margin-bottom: 18px; }
+  .mp-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .mp-card .card-title { padding: 10px 12px; background: var(--surface-2); font-size: 13px; font-weight: 700; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mp-card .card-thumb { width: 100%; aspect-ratio: 1; background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 65%), var(--bg); display: flex; align-items: center; justify-content: center; }
+  .mp-card .card-thumb img { width: 78%; height: 78%; object-fit: contain; }
+  .mp-card .mp-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .mp-price { font-family: "Unbounded", sans-serif; font-size: 18px; font-weight: 700; color: var(--accent); }
+  .mp-seller { font-size: 12px; color: var(--muted); }
+  .mp-remove { margin-top: 4px; }
+
+  .form-card { max-width: 480px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 24px; }
+  .form-card h3 { font-family: "Unbounded", sans-serif; font-size: 15px; margin: 0 0 16px; }
+  .form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .form-row label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 600; }
+  .form-input, .form-textarea {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 12px; border-radius: 9px; font-size: 13.5px; font-family: inherit; outline: none; width: 100%;
+  }
+  .form-input:focus, .form-textarea:focus { border-color: var(--accent); }
+  .form-textarea { resize: vertical; min-height: 64px; }
+  .form-btn {
+    appearance: none; background: linear-gradient(155deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff8a3d));
+    border: none; color: #201404; padding: 10px 18px; border-radius: 10px; font-family: inherit;
+    font-weight: 800; font-size: 13px; cursor: pointer; width: 100%;
+  }
+  .form-btn:disabled { opacity: .55; cursor: default; }
+  .form-btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+  .form-error { color: var(--red); font-size: 12.5px; margin-top: 10px; }
+  .form-success { color: var(--green); font-size: 12.5px; margin-top: 10px; }
+  .auth-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  .badge.pending { background: var(--accent-soft); color: var(--accent); }
+  .badge.approved { background: var(--green-soft); color: var(--green); }
+  .badge.rejected { background: var(--red-soft); color: var(--red); }
+
+  .asset-pick-results { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; margin-top: 6px; }
+  .asset-pick-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 12.5px; }
+  .asset-pick-row:hover { background: var(--surface-2); }
+  .asset-pick-row img { width: 22px; height: 22px; object-fit: contain; flex-shrink: 0; }
+  .asset-picked { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; margin-top: 6px; font-size: 12.5px; }
+  .asset-picked img { width: 24px; height: 24px; object-fit: contain; }
+
+  .admin-app-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .admin-app-row .info { font-size: 12.5px; color: var(--muted); }
+  .admin-app-row .info b { color: var(--text); }
+  .admin-app-actions { display: flex; gap: 8px; }
+  .admin-app-actions button { padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+  .admin-app-actions button.approve:hover { border-color: var(--green); color: var(--green); }
+  .admin-app-actions button.reject:hover { border-color: var(--red); color: var(--red); }
 </style>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -484,10 +566,16 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       <span class="dot" id="live-dot"></span>
       <span id="live-text">connecting…</span>
     </div>
+    <div class="auth-area" id="auth-area"></div>
   </div>
 </header>
 
-<div class="controls">
+<div class="view-tabs" id="view-tabs">
+  <button class="view-tab" id="tab-tracker">Tracker</button>
+  <button class="view-tab" id="tab-marketplace">Marketplace</button>
+</div>
+
+<div class="controls" id="tracker-controls">
   <div class="control-group" id="sort-group">
     <div class="label">Sort</div>
     <div class="pill-row" id="sort-row"></div>
@@ -538,12 +626,67 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 
 <div class="status-line" id="status-line">Loading catalog…</div>
 
-<main>
+<main id="tracker-main">
   <div class="grid" id="grid"></div>
   <div class="load-more-wrap" id="load-more-wrap" hidden>
     <button class="load-more" id="load-more">Load more</button>
   </div>
 </main>
+
+<div class="mp-section" id="mp-section" hidden>
+  <div class="mp-subtabs" id="mp-subtabs">
+    <button class="pill" id="mp-tab-browse">Browse</button>
+    <button class="pill" id="mp-tab-sell">Sell</button>
+    <button class="pill" id="mp-tab-mine" hidden>My Listings</button>
+    <button class="pill" id="mp-tab-admin" hidden>Admin</button>
+  </div>
+
+  <div id="mp-browse">
+    <div class="status-line" id="mp-browse-status" style="padding:0 0 14px;">Loading listings…</div>
+    <div class="grid" id="mp-browse-grid"></div>
+  </div>
+
+  <div id="mp-sell" hidden></div>
+
+  <div id="mp-mine" hidden>
+    <div class="grid" id="mp-mine-grid"></div>
+  </div>
+
+  <div id="mp-admin" hidden>
+    <div id="mp-admin-list"></div>
+  </div>
+</div>
+
+<div class="overlay" id="auth-overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(400px,100%);">
+    <div class="modal-head">
+      <h2 id="auth-modal-title">Sign In</h2>
+      <button class="modal-close" id="auth-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div style="padding:4px 24px 24px;">
+      <div class="auth-tabs">
+        <button class="pill active" id="auth-tab-login">Sign In</button>
+        <button class="pill" id="auth-tab-signup">Create Account</button>
+      </div>
+      <form id="auth-form">
+        <div class="form-row" id="auth-row-name" hidden>
+          <label>Display name</label>
+          <input class="form-input" id="auth-display-name" type="text" autocomplete="name">
+        </div>
+        <div class="form-row">
+          <label>Email</label>
+          <input class="form-input" id="auth-email" type="email" autocomplete="email" required>
+        </div>
+        <div class="form-row">
+          <label>Password</label>
+          <input class="form-input" id="auth-password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="form-btn" id="auth-submit" type="submit">Sign In</button>
+        <div class="form-error" id="auth-error" hidden></div>
+      </form>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="overlay" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1301,10 +1444,450 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   els.overlay.addEventListener("click", function (e) { if (e.target === els.overlay) closeModal(); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !els.overlay.hidden) closeModal(); });
 
+  // ==========================================================================
+  // Marketplace (Phase 1: browse, sell application, listings, admin review).
+  // No payments/delivery yet - a listing here is just a public "seller X has
+  // item Y for $Z" post. Same-origin API calls as the tracker above, but
+  // these carry an Authorization: Bearer <token> header once signed in.
+  // ==========================================================================
+
+  var mpState = {
+    token: null,
+    user: null,
+    view: "tracker",      // tracker | marketplace
+    mpTab: "browse",      // browse | sell | mine | admin
+    authMode: "login",    // login | signup
+    pickedAsset: null,    // { assetId, name, thumbnailUrl } chosen in the sell form's asset picker
+    assetSearchDebounce: null,
+  };
+
+  var mpEls = {
+    authArea: document.getElementById("auth-area"),
+    tabTracker: document.getElementById("tab-tracker"),
+    tabMarketplace: document.getElementById("tab-marketplace"),
+    trackerControls: document.getElementById("tracker-controls"),
+    trackerMain: document.getElementById("tracker-main"),
+    trackerStatus: document.getElementById("status-line"),
+    mpSection: document.getElementById("mp-section"),
+    mpSubtabBrowse: document.getElementById("mp-tab-browse"),
+    mpSubtabSell: document.getElementById("mp-tab-sell"),
+    mpSubtabMine: document.getElementById("mp-tab-mine"),
+    mpSubtabAdmin: document.getElementById("mp-tab-admin"),
+    mpBrowse: document.getElementById("mp-browse"),
+    mpBrowseStatus: document.getElementById("mp-browse-status"),
+    mpBrowseGrid: document.getElementById("mp-browse-grid"),
+    mpSell: document.getElementById("mp-sell"),
+    mpMine: document.getElementById("mp-mine"),
+    mpMineGrid: document.getElementById("mp-mine-grid"),
+    mpAdmin: document.getElementById("mp-admin"),
+    mpAdminList: document.getElementById("mp-admin-list"),
+    authOverlay: document.getElementById("auth-overlay"),
+    authModalTitle: document.getElementById("auth-modal-title"),
+    authModalClose: document.getElementById("auth-modal-close"),
+    authTabLogin: document.getElementById("auth-tab-login"),
+    authTabSignup: document.getElementById("auth-tab-signup"),
+    authForm: document.getElementById("auth-form"),
+    authRowName: document.getElementById("auth-row-name"),
+    authDisplayName: document.getElementById("auth-display-name"),
+    authEmail: document.getElementById("auth-email"),
+    authPassword: document.getElementById("auth-password"),
+    authSubmit: document.getElementById("auth-submit"),
+    authError: document.getElementById("auth-error"),
+  };
+
+  function mpFmtUsd(n) {
+    n = Number(n);
+    if (!isFinite(n)) return "$0";
+    return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({}, opts.headers || {});
+    if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    if (mpState.token) headers["Authorization"] = "Bearer " + mpState.token;
+    return fetch(API_BASE + path, Object.assign({}, opts, { headers: headers }))
+      .then(function (r) { return r.json().then(function (data) { return { status: r.status, data: data }; }); });
+  }
+
+  function mpSaveSession(token, user) {
+    mpState.token = token;
+    mpState.user = user;
+    try {
+      if (token) { localStorage.setItem("mp_token", token); } else { localStorage.removeItem("mp_token"); }
+    } catch (e) { /* private browsing / storage disabled - session just won't survive a reload */ }
+  }
+
+  function mpLoadSession() {
+    try { mpState.token = localStorage.getItem("mp_token") || null; } catch (e) { mpState.token = null; }
+    if (!mpState.token) { renderAuthArea(); return; }
+    apiFetch("/api/auth/me").then(function (res) {
+      if (res.status === 200 && res.data.ok) {
+        mpState.user = res.data.user;
+      } else {
+        mpSaveSession(null, null);
+      }
+      renderAuthArea();
+      renderMpTabsVisibility();
+    });
+  }
+
+  function renderAuthArea() {
+    mpEls.authArea.innerHTML = "";
+    if (!mpState.user) {
+      var btn = document.createElement("button");
+      btn.className = "auth-btn primary";
+      btn.textContent = "Sign In";
+      btn.addEventListener("click", openAuthModal);
+      mpEls.authArea.appendChild(btn);
+      return;
+    }
+    var wrap = document.createElement("div");
+    wrap.className = "auth-user";
+    var name = document.createElement("span");
+    name.innerHTML = "<b>" + mpState.user.displayName.replace(/</g, "&lt;") + "</b>";
+    wrap.appendChild(name);
+    var logout = document.createElement("button");
+    logout.className = "auth-btn";
+    logout.textContent = "Log out";
+    logout.addEventListener("click", function () {
+      apiFetch("/api/auth/logout", { method: "POST" }).catch(function () {});
+      mpSaveSession(null, null);
+      renderAuthArea();
+      renderMpTabsVisibility();
+      if (mpState.view === "marketplace") renderMpTab();
+    });
+    wrap.appendChild(logout);
+    mpEls.authArea.appendChild(wrap);
+  }
+
+  function openAuthModal() {
+    mpEls.authError.hidden = true;
+    mpEls.authForm.reset();
+    mpEls.authOverlay.hidden = false;
+  }
+  function closeAuthModal() { mpEls.authOverlay.hidden = true; }
+  mpEls.authModalClose.addEventListener("click", closeAuthModal);
+  mpEls.authOverlay.addEventListener("click", function (e) { if (e.target === mpEls.authOverlay) closeAuthModal(); });
+
+  function setAuthMode(mode) {
+    mpState.authMode = mode;
+    mpEls.authTabLogin.classList.toggle("active", mode === "login");
+    mpEls.authTabSignup.classList.toggle("active", mode === "signup");
+    mpEls.authRowName.hidden = mode !== "signup";
+    mpEls.authModalTitle.textContent = mode === "signup" ? "Create Account" : "Sign In";
+    mpEls.authSubmit.textContent = mode === "signup" ? "Create Account" : "Sign In";
+    mpEls.authError.hidden = true;
+  }
+  mpEls.authTabLogin.addEventListener("click", function () { setAuthMode("login"); });
+  mpEls.authTabSignup.addEventListener("click", function () { setAuthMode("signup"); });
+
+  mpEls.authForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    mpEls.authError.hidden = true;
+    mpEls.authSubmit.disabled = true;
+    var path = mpState.authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+    var body = { email: mpEls.authEmail.value.trim(), password: mpEls.authPassword.value };
+    if (mpState.authMode === "signup") body.displayName = mpEls.authDisplayName.value.trim();
+    apiFetch(path, { method: "POST", body: JSON.stringify(body) }).then(function (res) {
+      mpEls.authSubmit.disabled = false;
+      if (res.status !== 200 || !res.data.ok) {
+        mpEls.authError.textContent = (res.data && res.data.error) || "Something went wrong";
+        mpEls.authError.hidden = false;
+        return;
+      }
+      mpSaveSession(res.data.token, res.data.user);
+      renderAuthArea();
+      renderMpTabsVisibility();
+      closeAuthModal();
+      if (mpState.view === "marketplace") renderMpTab();
+    }).catch(function () {
+      mpEls.authSubmit.disabled = false;
+      mpEls.authError.textContent = "Network error - try again";
+      mpEls.authError.hidden = false;
+    });
+  });
+
+  // ---------- View switching (Tracker <-> Marketplace) ----------
+  function setView(view) {
+    mpState.view = view;
+    mpEls.tabTracker.classList.toggle("active", view === "tracker");
+    mpEls.tabMarketplace.classList.toggle("active", view === "marketplace");
+    mpEls.trackerControls.hidden = view !== "tracker";
+    mpEls.trackerMain.hidden = view !== "tracker";
+    mpEls.trackerStatus.hidden = view !== "tracker";
+    mpEls.mpSection.hidden = view !== "marketplace";
+    if (view === "marketplace") renderMpTab();
+  }
+  mpEls.tabTracker.addEventListener("click", function () { setView("tracker"); });
+  mpEls.tabMarketplace.addEventListener("click", function () { setView("marketplace"); });
+
+  function renderMpTabsVisibility() {
+    mpEls.mpSubtabMine.hidden = !mpState.user;
+    mpEls.mpSubtabAdmin.hidden = !(mpState.user && mpState.user.isAdmin);
+    if (!mpState.user && (mpState.mpTab === "mine" || mpState.mpTab === "admin")) mpState.mpTab = "browse";
+  }
+
+  function setMpTab(tab) {
+    mpState.mpTab = tab;
+    mpEls.mpSubtabBrowse.classList.toggle("active", tab === "browse");
+    mpEls.mpSubtabSell.classList.toggle("active", tab === "sell");
+    mpEls.mpSubtabMine.classList.toggle("active", tab === "mine");
+    mpEls.mpSubtabAdmin.classList.toggle("active", tab === "admin");
+    mpEls.mpBrowse.hidden = tab !== "browse";
+    mpEls.mpSell.hidden = tab !== "sell";
+    mpEls.mpMine.hidden = tab !== "mine";
+    mpEls.mpAdmin.hidden = tab !== "admin";
+    renderMpTab();
+  }
+  mpEls.mpSubtabBrowse.addEventListener("click", function () { setMpTab("browse"); });
+  mpEls.mpSubtabSell.addEventListener("click", function () {
+    if (!mpState.user) { openAuthModal(); return; }
+    setMpTab("sell");
+  });
+  mpEls.mpSubtabMine.addEventListener("click", function () { setMpTab("mine"); });
+  mpEls.mpSubtabAdmin.addEventListener("click", function () { setMpTab("admin"); });
+
+  function renderMpTab() {
+    renderMpTabsVisibility();
+    if (mpState.mpTab === "browse") return loadBrowseListings();
+    if (mpState.mpTab === "sell") return renderSellTab();
+    if (mpState.mpTab === "mine") return loadMyListings();
+    if (mpState.mpTab === "admin") return loadAdminApplications();
+  }
+
+  // ---------- Browse ----------
+  function mpListingCardHtml(listing) {
+    var thumb = listing.thumbnailUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
+    var sellerName = listing.seller ? listing.seller.displayName : "Unknown seller";
+    return (
+      '<div class="card-title">' + listing.itemName.replace(/</g, "&lt;") + '</div>' +
+      '<div class="card-thumb"><img src="' + thumb + '" alt="" loading="lazy"></div>' +
+      '<div class="mp-body">' +
+        '<div class="mp-price tabular">' + mpFmtUsd(listing.priceUsd) + '</div>' +
+        '<div class="mp-seller">Sold by ' + sellerName.replace(/</g, "&lt;") + (listing.quantity > 1 ? " · Qty " + listing.quantity : "") + '</div>' +
+      '</div>'
+    );
+  }
+
+  function loadBrowseListings() {
+    mpEls.mpBrowseStatus.textContent = "Loading listings…";
+    mpEls.mpBrowseGrid.innerHTML = "";
+    apiFetch("/api/listings").then(function (res) {
+      if (res.status !== 200 || !res.data.ok) {
+        mpEls.mpBrowseStatus.textContent = "Couldn't load listings.";
+        return;
+      }
+      var listings = res.data.listings || [];
+      // Listings only carry assetId/itemName/priceUsd - the real thumbnail
+      // comes from the tracker's own live catalog, already cached client-side
+      // once the tracker view has loaded. Best-effort only: a listing still
+      // renders fine (blank thumb) if that catalog cache is empty.
+      var byId = {};
+      (state.items || []).forEach(function (it) { byId[it.assetId] = it; });
+      mpEls.mpBrowseStatus.textContent = listings.length + " active listing" + (listings.length === 1 ? "" : "s");
+      if (!listings.length) {
+        mpEls.mpBrowseGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="glyph">🛒</div><div class="title">No listings yet</div>Check back soon, or become a seller.</div>';
+        return;
+      }
+      mpEls.mpBrowseGrid.innerHTML = listings.map(function (l) {
+        var enriched = Object.assign({}, l, { thumbnailUrl: byId[l.assetId] ? byId[l.assetId].thumbnailUrl : null });
+        return '<div class="mp-card">' + mpListingCardHtml(enriched) + '</div>';
+      }).join("");
+    }).catch(function () { mpEls.mpBrowseStatus.textContent = "Couldn't load listings."; });
+  }
+
+  // ---------- Sell ----------
+  function renderSellTab() {
+    if (!mpState.user) {
+      mpEls.mpSell.innerHTML = '<div class="form-card">Sign in to apply as a seller.</div>';
+      return;
+    }
+    mpEls.mpSell.innerHTML = '<div class="form-card">Loading…</div>';
+    apiFetch("/api/seller/my-application").then(function (res) {
+      var application = res.status === 200 && res.data.ok ? res.data.application : null;
+      if (mpState.user.isApprovedSeller) {
+        renderCreateListingForm();
+      } else if (application && application.status === "pending") {
+        mpEls.mpSell.innerHTML =
+          '<div class="form-card"><h3>Seller application</h3>' +
+          '<p style="font-size:13px;color:var(--muted);">Your application is pending review.</p>' +
+          '<span class="badge pending">Pending</span></div>';
+      } else if (application && application.status === "rejected") {
+        renderSellerApplicationForm("Your previous application was rejected" + (application.admin_note ? ": " + application.admin_note.replace(/</g, "&lt;") : "") + ". You can apply again below.");
+      } else {
+        renderSellerApplicationForm(null);
+      }
+    });
+  }
+
+  function renderSellerApplicationForm(note) {
+    mpEls.mpSell.innerHTML =
+      '<div class="form-card"><h3>Apply to sell</h3>' +
+      (note ? '<p style="font-size:12.5px;color:var(--muted);margin-top:-8px;">' + note + '</p>' : '') +
+      '<form id="seller-apply-form">' +
+        '<div class="form-row"><label>Roblox username</label><input class="form-input" id="apply-roblox-username" required></div>' +
+        '<div class="form-row"><label>Roblox profile URL (optional)</label><input class="form-input" id="apply-profile-url" type="url"></div>' +
+        '<div class="form-row"><label>Note to reviewers (optional)</label><textarea class="form-textarea" id="apply-note"></textarea></div>' +
+        '<button class="form-btn" type="submit">Submit application</button>' +
+        '<div class="form-error" id="apply-error" hidden></div>' +
+      '</form></div>';
+    document.getElementById("seller-apply-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var errEl = document.getElementById("apply-error");
+      errEl.hidden = true;
+      apiFetch("/api/seller/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          robloxUsername: document.getElementById("apply-roblox-username").value.trim(),
+          robloxProfileUrl: document.getElementById("apply-profile-url").value.trim(),
+          note: document.getElementById("apply-note").value.trim(),
+        }),
+      }).then(function (res) {
+        if (res.status !== 200 || !res.data.ok) {
+          errEl.textContent = (res.data && res.data.error) || "Couldn't submit application";
+          errEl.hidden = false;
+          return;
+        }
+        renderSellTab();
+      });
+    });
+  }
+
+  function renderCreateListingForm() {
+    mpState.pickedAsset = null;
+    mpEls.mpSell.innerHTML =
+      '<div class="form-card"><h3>Create a listing</h3>' +
+      '<form id="create-listing-form">' +
+        '<div class="form-row"><label>Item</label><input class="form-input" id="listing-asset-search" placeholder="Search classic limiteds…" autocomplete="off"></div>' +
+        '<div id="listing-asset-results"></div>' +
+        '<div class="form-row"><label>Price (USD)</label><input class="form-input" id="listing-price" type="number" min="0.01" step="0.01" required></div>' +
+        '<div class="form-row"><label>Quantity</label><input class="form-input" id="listing-quantity" type="number" min="1" step="1" value="1"></div>' +
+        '<div class="form-row"><label>Description (optional)</label><textarea class="form-textarea" id="listing-description"></textarea></div>' +
+        '<button class="form-btn" type="submit" id="listing-submit">List item</button>' +
+        '<div class="form-error" id="listing-error" hidden></div>' +
+        '<div class="form-success" id="listing-success" hidden></div>' +
+      '</form></div>';
+
+    var searchEl = document.getElementById("listing-asset-search");
+    var resultsEl = document.getElementById("listing-asset-results");
+    searchEl.addEventListener("input", function () {
+      clearTimeout(mpState.assetSearchDebounce);
+      var q = searchEl.value.trim();
+      mpState.assetSearchDebounce = setTimeout(function () {
+        if (!q) { resultsEl.innerHTML = ""; return; }
+        fetch(API_BASE + "/api/limiteds?keyword=" + encodeURIComponent(q) + "&limit=8&sort=rap_desc")
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var items = (data && data.items) || [];
+            if (!items.length) { resultsEl.innerHTML = '<div class="asset-pick-results"><div class="asset-pick-row">No matches</div></div>'; return; }
+            resultsEl.innerHTML = '<div class="asset-pick-results">' + items.map(function (it) {
+              return '<div class="asset-pick-row" data-asset-id="' + it.assetId + '"><img src="' + thumbUrl(it) + '" alt=""> ' + it.name.replace(/</g, "&lt;") + ' <span style="margin-left:auto;color:var(--muted);">RAP ' + fmtNum(it.rap) + '</span></div>';
+            }).join("") + '</div>';
+            Array.prototype.forEach.call(resultsEl.querySelectorAll(".asset-pick-row[data-asset-id]"), function (row) {
+              row.addEventListener("click", function () {
+                var picked = items.filter(function (it) { return String(it.assetId) === row.getAttribute("data-asset-id"); })[0];
+                if (!picked) return;
+                mpState.pickedAsset = picked;
+                searchEl.value = picked.name;
+                resultsEl.innerHTML = '<div class="asset-picked"><img src="' + thumbUrl(picked) + '" alt=""> Listing: ' + picked.name.replace(/</g, "&lt;") + '</div>';
+              });
+            });
+          }).catch(function () {});
+      }, 300);
+    });
+
+    document.getElementById("create-listing-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var errEl = document.getElementById("listing-error");
+      var okEl = document.getElementById("listing-success");
+      errEl.hidden = true; okEl.hidden = true;
+      if (!mpState.pickedAsset) { errEl.textContent = "Pick an item from the search results first"; errEl.hidden = false; return; }
+      apiFetch("/api/listings", {
+        method: "POST",
+        body: JSON.stringify({
+          assetId: mpState.pickedAsset.assetId,
+          priceUsd: Number(document.getElementById("listing-price").value),
+          quantity: Number(document.getElementById("listing-quantity").value) || 1,
+          description: document.getElementById("listing-description").value.trim(),
+        }),
+      }).then(function (res) {
+        if (res.status !== 200 || !res.data.ok) {
+          errEl.textContent = (res.data && res.data.error) || "Couldn't create listing";
+          errEl.hidden = false;
+          return;
+        }
+        okEl.textContent = "Listed! View it under My Listings.";
+        okEl.hidden = false;
+        document.getElementById("create-listing-form").reset();
+        resultsEl.innerHTML = "";
+        mpState.pickedAsset = null;
+      });
+    });
+  }
+
+  // ---------- My Listings ----------
+  function loadMyListings() {
+    if (!mpState.user) { mpEls.mpMineGrid.innerHTML = ""; return; }
+    mpEls.mpMineGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Loading…</div>';
+    apiFetch("/api/listings/mine").then(function (res) {
+      if (res.status !== 200 || !res.data.ok) { mpEls.mpMineGrid.innerHTML = ""; return; }
+      var listings = res.data.listings || [];
+      if (!listings.length) {
+        mpEls.mpMineGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="glyph">📦</div><div class="title">No listings yet</div>Create one from the Sell tab.</div>';
+        return;
+      }
+      var byId = {};
+      (state.items || []).forEach(function (it) { byId[it.assetId] = it; });
+      mpEls.mpMineGrid.innerHTML = listings.map(function (l) {
+        var enriched = Object.assign({}, l, { thumbnailUrl: byId[l.assetId] ? byId[l.assetId].thumbnailUrl : null });
+        var removeBtn = l.status === "active" ? '<button class="form-btn secondary mp-remove" data-listing-id="' + l.id + '">Remove listing</button>' : '<span class="badge ' + (l.status === "sold" ? "approved" : "rejected") + '">' + l.status + '</span>';
+        return '<div class="mp-card">' + mpListingCardHtml(enriched) + '<div style="padding:0 12px 12px;">' + removeBtn + '</div></div>';
+      }).join("");
+      Array.prototype.forEach.call(mpEls.mpMineGrid.querySelectorAll("[data-listing-id]"), function (btn) {
+        btn.addEventListener("click", function () {
+          apiFetch("/api/listings/" + btn.getAttribute("data-listing-id"), { method: "DELETE" }).then(function () { loadMyListings(); });
+        });
+      });
+    });
+  }
+
+  // ---------- Admin ----------
+  function loadAdminApplications() {
+    if (!mpState.user || !mpState.user.isAdmin) { mpEls.mpAdminList.innerHTML = ""; return; }
+    mpEls.mpAdminList.innerHTML = "Loading…";
+    apiFetch("/api/admin/seller-applications?status=pending").then(function (res) {
+      if (res.status !== 200 || !res.data.ok) { mpEls.mpAdminList.innerHTML = "Couldn't load applications."; return; }
+      var apps = res.data.applications || [];
+      if (!apps.length) { mpEls.mpAdminList.innerHTML = '<div class="empty-state"><div class="glyph">✅</div><div class="title">No pending applications</div></div>'; return; }
+      mpEls.mpAdminList.innerHTML = apps.map(function (a) {
+        return '<div class="admin-app-row" data-app-id="' + a.id + '">' +
+          '<div class="info"><b>' + a.roblox_username.replace(/</g, "&lt;") + '</b>' +
+          (a.roblox_profile_url ? ' · <a href="' + a.roblox_profile_url + '" target="_blank" rel="noopener">profile</a>' : '') +
+          (a.note ? '<br>' + a.note.replace(/</g, "&lt;") : '') + '</div>' +
+          '<div class="admin-app-actions">' +
+            '<button class="approve" data-action="approve">Approve</button>' +
+            '<button class="reject" data-action="reject">Reject</button>' +
+          '</div></div>';
+      }).join("");
+      Array.prototype.forEach.call(mpEls.mpAdminList.querySelectorAll(".admin-app-row"), function (row) {
+        var id = row.getAttribute("data-app-id");
+        Array.prototype.forEach.call(row.querySelectorAll("button[data-action]"), function (btn) {
+          btn.addEventListener("click", function () {
+            var action = btn.getAttribute("data-action");
+            apiFetch("/api/admin/seller-applications/" + id + "/" + action, { method: "POST" }).then(function () { loadAdminApplications(); });
+          });
+        });
+      });
+    });
+  }
+
   // ---------- Boot ----------
   renderSortRow();
   renderPeriodGroup();
   resetAndLoad();
+  setView("tracker");
+  mpLoadSession();
 })();
 </script>
 `;
@@ -1395,8 +1978,8 @@ function makePageCacheKey({ marketType, sort, keyword, cursor, limit, minPrice, 
 function sendJson(res, status, body) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
@@ -2672,10 +3255,543 @@ async function runSnapshot() {
   }
 }
 
+// ============================================================================
+// Marketplace (Phase 1: Foundation)
+//
+// Accounts, seller vetting, and listings. No payments/escrow/delivery yet -
+// those are later phases. When Supabase isn't configured (local dev), this
+// falls back to the in-memory `memoryMarket` store below, mirroring the
+// memorySnapshots pattern already used for snapshot storage, so the whole
+// flow (signup -> apply as seller -> admin approve -> list -> browse) is
+// testable without real credentials.
+// ============================================================================
+
+const SESSION_TTL_MS = Number(process.env.MP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000); // 30 days
+// Comma-separated emails that are granted admin on signup/login, e.g.
+// "owner@example.com,ops@example.com". Simple bootstrap - once at least one
+// real admin exists in the DB, managing further admins can move into the
+// admin UI itself; this env var stays as a break-glass path either way.
+const MP_ADMIN_EMAILS = String(process.env.MP_ADMIN_EMAILS || "")
+  .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+
+const memoryMarket = {
+  users: [],             // { id, email, password_hash, display_name, roblox_username, is_admin, is_approved_seller, created_at }
+  sessions: [],          // { token, user_id, created_at, expires_at }
+  sellerApplications: [],// { id, user_id, roblox_username, roblox_profile_url, note, status, admin_note, created_at, reviewed_at }
+  listings: [],          // { id, seller_id, asset_id, item_name, price_usd, quantity, description, status, created_at, updated_at }
+  nextSellerAppId: 1,
+  nextListingId: 1,
+};
+
+function mpUuid() {
+  return crypto.randomUUID();
+}
+
+// scrypt output stored as "salt_hex:hash_hex" - Node's built-in crypto, no
+// extra dependency (bcrypt) for something this security-sensitive.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64);
+  return `${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+function verifyPassword(password, stored) {
+  const [saltHex, hashHex] = String(stored || "").split(":");
+  if (!saltHex || !hashHex) return false;
+  const salt = Buffer.from(saltHex, "hex");
+  const expected = Buffer.from(hashHex, "hex");
+  const actual = crypto.scryptSync(password, salt, expected.length);
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ""));
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.display_name,
+    robloxUsername: user.roblox_username || null,
+    isAdmin: !!user.is_admin,
+    isApprovedSeller: !!user.is_approved_seller,
+  };
+}
+
+// ---- Data access: users --------------------------------------------------
+
+async function mpFindUserByEmail(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.users.find(u => u.email === normalized) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_users?email=eq.${encodeURIComponent(normalized)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpGetUserById(id) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.users.find(u => u.id === id) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_users?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpCreateUser({ email, password, displayName, robloxUsername }) {
+  const normalized = String(email).trim().toLowerCase();
+  const isAdmin = MP_ADMIN_EMAILS.includes(normalized);
+  const user = {
+    id: mpUuid(),
+    email: normalized,
+    password_hash: hashPassword(password),
+    display_name: String(displayName || "").trim() || normalized.split("@")[0],
+    roblox_username: robloxUsername ? String(robloxUsername).trim() : null,
+    is_admin: isAdmin,
+    is_approved_seller: false,
+    created_at: new Date().toISOString(),
+  };
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.users.push(user);
+    return user;
+  }
+  await supabaseRequest("mp_users", { method: "POST", body: JSON.stringify(user) });
+  return user;
+}
+
+async function mpSetUserApprovedSeller(userId, approved) {
+  if (!snapshotStorageEnabled()) {
+    const user = memoryMarket.users.find(u => u.id === userId);
+    if (user) user.is_approved_seller = approved;
+    return;
+  }
+  await supabaseRequest(`mp_users?id=eq.${encodeURIComponent(userId)}`, {
+    method: "PATCH", body: JSON.stringify({ is_approved_seller: approved })
+  });
+}
+
+// ---- Data access: sessions ------------------------------------------------
+
+async function mpCreateSession(userId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const session = {
+    token, user_id: userId,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+  };
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.sessions.push(session);
+    return session;
+  }
+  await supabaseRequest("mp_sessions", { method: "POST", body: JSON.stringify(session) });
+  return session;
+}
+
+async function mpFindSession(token) {
+  if (!token) return null;
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.sessions.find(s => s.token === token) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_sessions?token=eq.${encodeURIComponent(token)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpDeleteSession(token) {
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.sessions = memoryMarket.sessions.filter(s => s.token !== token);
+    return;
+  }
+  await supabaseRequest(`mp_sessions?token=eq.${encodeURIComponent(token)}`, { method: "DELETE" });
+}
+
+// Resolves the Bearer token on a request to its user, or null. Expired
+// sessions are treated as absent (best-effort cleanup, not load-bearing).
+async function getAuthUser(req) {
+  const header = String(req.headers["authorization"] || "");
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) return null;
+  const token = match[1].trim();
+  try {
+    const session = await mpFindSession(token);
+    if (!session) return null;
+    if (Date.parse(session.expires_at) < Date.now()) {
+      mpDeleteSession(token).catch(() => {});
+      return null;
+    }
+    return await mpGetUserById(session.user_id);
+  } catch {
+    return null;
+  }
+}
+
+// ---- Data access: seller applications -------------------------------------
+
+async function mpGetPendingApplicationForUser(userId) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.sellerApplications.find(a => a.user_id === userId && a.status === "pending") || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_seller_applications?user_id=eq.${encodeURIComponent(userId)}&status=eq.pending&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpCreateSellerApplication(userId, { robloxUsername, robloxProfileUrl, note }) {
+  const application = {
+    id: snapshotStorageEnabled() ? undefined : memoryMarket.nextSellerAppId++,
+    user_id: userId,
+    roblox_username: String(robloxUsername || "").trim(),
+    roblox_profile_url: robloxProfileUrl ? String(robloxProfileUrl).trim() : null,
+    note: note ? String(note).trim().slice(0, 1000) : null,
+    status: "pending",
+    admin_note: null,
+    created_at: new Date().toISOString(),
+    reviewed_at: null,
+  };
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.sellerApplications.push(application);
+    return application;
+  }
+  delete application.id;
+  const rows = await supabaseRequest("mp_seller_applications", {
+    method: "POST", body: JSON.stringify(application), headers: { Prefer: "return=representation" }
+  });
+  return Array.isArray(rows) && rows[0] ? rows[0] : application;
+}
+
+async function mpGetLatestApplicationForUser(userId) {
+  if (!snapshotStorageEnabled()) {
+    const mine = memoryMarket.sellerApplications.filter(a => a.user_id === userId);
+    return mine.length ? mine[mine.length - 1] : null;
+  }
+  const rows = await supabaseRequest(
+    `mp_seller_applications?user_id=eq.${encodeURIComponent(userId)}&select=*&order=created_at.desc&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpListSellerApplications(status) {
+  if (!snapshotStorageEnabled()) {
+    const list = status ? memoryMarket.sellerApplications.filter(a => a.status === status) : memoryMarket.sellerApplications;
+    return [...list].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  }
+  const filter = status ? `&status=eq.${encodeURIComponent(status)}` : "";
+  const rows = await supabaseRequest(
+    `mp_seller_applications?select=*${filter}&order=created_at.desc&limit=500`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function mpGetSellerApplicationById(id) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.sellerApplications.find(a => String(a.id) === String(id)) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_seller_applications?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpReviewSellerApplication(id, { status, adminNote }) {
+  const patch = { status, admin_note: adminNote || null, reviewed_at: new Date().toISOString() };
+  if (!snapshotStorageEnabled()) {
+    const application = memoryMarket.sellerApplications.find(a => String(a.id) === String(id));
+    if (application) Object.assign(application, patch);
+    return application || null;
+  }
+  await supabaseRequest(`mp_seller_applications?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH", body: JSON.stringify(patch)
+  });
+  return mpGetSellerApplicationById(id);
+}
+
+// ---- Data access: listings --------------------------------------------------
+
+async function mpCreateListing({ sellerId, assetId, itemName, priceUsd, quantity, description }) {
+  const listing = {
+    id: snapshotStorageEnabled() ? undefined : memoryMarket.nextListingId++,
+    seller_id: sellerId,
+    asset_id: assetId,
+    item_name: itemName,
+    price_usd: priceUsd,
+    quantity: quantity || 1,
+    description: description ? String(description).trim().slice(0, 1000) : null,
+    status: "active",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.listings.push(listing);
+    return listing;
+  }
+  delete listing.id;
+  const rows = await supabaseRequest("mp_listings", {
+    method: "POST", body: JSON.stringify(listing), headers: { Prefer: "return=representation" }
+  });
+  return Array.isArray(rows) && rows[0] ? rows[0] : listing;
+}
+
+async function mpListListings({ status = "active", assetId, sellerId, limit = 60 }) {
+  if (!snapshotStorageEnabled()) {
+    let list = memoryMarket.listings.filter(l => (status ? l.status === status : true));
+    if (assetId) list = list.filter(l => Number(l.asset_id) === Number(assetId));
+    if (sellerId) list = list.filter(l => l.seller_id === sellerId);
+    return [...list].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, limit);
+  }
+  const filters = [];
+  if (status) filters.push(`status=eq.${encodeURIComponent(status)}`);
+  if (assetId) filters.push(`asset_id=eq.${encodeURIComponent(assetId)}`);
+  if (sellerId) filters.push(`seller_id=eq.${encodeURIComponent(sellerId)}`);
+  const query = filters.length ? `&${filters.join("&")}` : "";
+  const rows = await supabaseRequest(
+    `mp_listings?select=*${query}&order=created_at.desc&limit=${Math.min(limit, 200)}`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function mpGetListingById(id) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.listings.find(l => String(l.id) === String(id)) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_listings?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpUpdateListingStatus(id, status) {
+  const patch = { status, updated_at: new Date().toISOString() };
+  if (!snapshotStorageEnabled()) {
+    const listing = memoryMarket.listings.find(l => String(l.id) === String(id));
+    if (listing) Object.assign(listing, patch);
+    return listing || null;
+  }
+  await supabaseRequest(`mp_listings?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH", body: JSON.stringify(patch)
+  });
+  return mpGetListingById(id);
+}
+
+function publicListing(listing, sellerMap) {
+  const seller = sellerMap ? sellerMap.get(listing.seller_id) : null;
+  return {
+    id: listing.id,
+    assetId: Number(listing.asset_id),
+    itemName: listing.item_name,
+    priceUsd: Number(listing.price_usd),
+    quantity: Number(listing.quantity) || 1,
+    description: listing.description || null,
+    status: listing.status,
+    createdAt: listing.created_at,
+    seller: seller ? { id: seller.id, displayName: seller.display_name, robloxUsername: seller.roblox_username || null } : null,
+  };
+}
+
+// ---- Request body helper ---------------------------------------------------
+
+function readJsonBody(req, maxBytes = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.destroy();
+        reject(new Error("Request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!chunks.length) return resolve({});
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+// ---- HTTP handlers: auth ---------------------------------------------------
+
+async function handleSignupRequest(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  const displayName = String(body.displayName || "").trim();
+  if (!isValidEmail(email)) return sendJson(res, 400, { ok: false, error: "Enter a valid email address" });
+  if (password.length < 8) return sendJson(res, 400, { ok: false, error: "Password must be at least 8 characters" });
+  const existing = await mpFindUserByEmail(email);
+  if (existing) return sendJson(res, 409, { ok: false, error: "An account with that email already exists" });
+  const user = await mpCreateUser({ email, password, displayName, robloxUsername: body.robloxUsername });
+  const session = await mpCreateSession(user.id);
+  return sendJson(res, 200, { ok: true, token: session.token, user: publicUser(user) });
+}
+
+async function handleLoginRequest(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  const user = await mpFindUserByEmail(email);
+  // Same generic message whether the email is unknown or the password is
+  // wrong - not confirming which one it was avoids leaking which emails
+  // have accounts.
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return sendJson(res, 401, { ok: false, error: "Incorrect email or password" });
+  }
+  const session = await mpCreateSession(user.id);
+  return sendJson(res, 200, { ok: true, token: session.token, user: publicUser(user) });
+}
+
+async function handleLogoutRequest(req, res) {
+  const header = String(req.headers["authorization"] || "");
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (match) await mpDeleteSession(match[1].trim()).catch(() => {});
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleMeRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Not signed in" });
+  return sendJson(res, 200, { ok: true, user: publicUser(user) });
+}
+
+// ---- HTTP handlers: seller applications ------------------------------------
+
+async function handleSellerApplyRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  if (user.is_approved_seller) return sendJson(res, 409, { ok: false, error: "You're already an approved seller" });
+  const pending = await mpGetPendingApplicationForUser(user.id);
+  if (pending) return sendJson(res, 409, { ok: false, error: "You already have a pending application" });
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+  const robloxUsername = String(body.robloxUsername || "").trim();
+  if (!robloxUsername) return sendJson(res, 400, { ok: false, error: "Roblox username is required" });
+  const application = await mpCreateSellerApplication(user.id, {
+    robloxUsername, robloxProfileUrl: body.robloxProfileUrl, note: body.note,
+  });
+  return sendJson(res, 200, { ok: true, application });
+}
+
+async function handleMySellerApplicationRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  const application = await mpGetLatestApplicationForUser(user.id);
+  return sendJson(res, 200, { ok: true, application: application || null });
+}
+
+async function handleAdminListSellerApplicationsRequest(req, res, parsedUrl) {
+  const user = await getAuthUser(req);
+  if (!user || !user.is_admin) return sendJson(res, 403, { ok: false, error: "Admin access required" });
+  const status = (parsedUrl.searchParams.get("status") || "pending").trim();
+  const applications = await mpListSellerApplications(status === "all" ? null : status);
+  return sendJson(res, 200, { ok: true, applications });
+}
+
+async function handleAdminReviewSellerApplicationRequest(req, res, id, decision) {
+  const admin = await getAuthUser(req);
+  if (!admin || !admin.is_admin) return sendJson(res, 403, { ok: false, error: "Admin access required" });
+  const application = await mpGetSellerApplicationById(id);
+  if (!application) return sendJson(res, 404, { ok: false, error: "Application not found" });
+  if (application.status !== "pending") return sendJson(res, 409, { ok: false, error: "Application already reviewed" });
+  let body = {};
+  try { body = await readJsonBody(req); } catch { /* admin note is optional */ }
+  const status = decision === "approve" ? "approved" : "rejected";
+  const updated = await mpReviewSellerApplication(id, { status, adminNote: body.adminNote });
+  if (status === "approved") await mpSetUserApprovedSeller(application.user_id, true);
+  return sendJson(res, 200, { ok: true, application: updated });
+}
+
+// ---- HTTP handlers: listings ------------------------------------------------
+
+async function handleCreateListingRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  if (!user.is_approved_seller) return sendJson(res, 403, { ok: false, error: "Only approved sellers can create listings" });
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+  const assetId = Number(body.assetId);
+  const priceUsd = Number(body.priceUsd);
+  const quantity = Number.isFinite(Number(body.quantity)) && Number(body.quantity) > 0 ? Math.floor(Number(body.quantity)) : 1;
+  if (!(assetId > 0)) return sendJson(res, 400, { ok: false, error: "Missing or invalid assetId" });
+  if (!(priceUsd > 0)) return sendJson(res, 400, { ok: false, error: "Price must be greater than 0" });
+  if (priceUsd > 1_000_000) return sendJson(res, 400, { ok: false, error: "Price is too high" });
+
+  // Never trust a client-supplied item name - always re-look-up the real
+  // item from the live catalog so a listing can't be spoofed to display as
+  // a different, more valuable item than what actually gets delivered.
+  const catalog = await getRobloxMarketIndex();
+  const catalogItem = catalog.find(i => Number(i.assetId) === assetId);
+  if (!catalogItem) return sendJson(res, 400, { ok: false, error: "That item isn't a tracked classic limited" });
+
+  const listing = await mpCreateListing({
+    sellerId: user.id, assetId, itemName: catalogItem.name, priceUsd, quantity, description: body.description,
+  });
+  return sendJson(res, 200, { ok: true, listing: publicListing(listing, new Map([[user.id, user]])) });
+}
+
+async function handleListListingsRequest(req, res, parsedUrl) {
+  const p = parsedUrl.searchParams;
+  const assetId = p.get("assetId") ? Number(p.get("assetId")) : undefined;
+  const limit = Math.min(Math.max(Number(p.get("limit")) || 60, 1), 200);
+  const listings = await mpListListings({ status: "active", assetId, limit });
+  const sellerIds = [...new Set(listings.map(l => l.seller_id))];
+  const sellers = await Promise.all(sellerIds.map(id => mpGetUserById(id)));
+  const sellerMap = new Map(sellers.filter(Boolean).map(u => [u.id, u]));
+  return sendJson(res, 200, { ok: true, listings: listings.map(l => publicListing(l, sellerMap)) });
+}
+
+async function handleGetListingRequest(req, res, id) {
+  const listing = await mpGetListingById(id);
+  if (!listing) return sendJson(res, 404, { ok: false, error: "Listing not found" });
+  const seller = await mpGetUserById(listing.seller_id);
+  return sendJson(res, 200, { ok: true, listing: publicListing(listing, seller ? new Map([[seller.id, seller]]) : null) });
+}
+
+async function handleMyListingsRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  const listings = await mpListListings({ status: null, sellerId: user.id, limit: 200 });
+  return sendJson(res, 200, { ok: true, listings: listings.map(l => publicListing(l, new Map([[user.id, user]]))) });
+}
+
+async function handleRemoveListingRequest(req, res, id) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  const listing = await mpGetListingById(id);
+  if (!listing) return sendJson(res, 404, { ok: false, error: "Listing not found" });
+  if (listing.seller_id !== user.id && !user.is_admin) return sendJson(res, 403, { ok: false, error: "Not your listing" });
+  const updated = await mpUpdateListingStatus(id, "removed");
+  return sendJson(res, 200, { ok: true, listing: publicListing(updated, new Map([[user.id, user]])) });
+}
+
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "OPTIONS") {
-    res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
+    res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
     return res.end();
   }
   try {
@@ -2691,6 +3807,35 @@ const server = http.createServer(async (req, res) => {
       runSnapshot().catch(e => console.error(e.message));
       return sendJson(res, 200, { ok: true, message: "Snapshot triggered" });
     }
+
+    // ---- Marketplace routes ----
+    if (parsedUrl.pathname === "/api/auth/signup" && req.method === "POST") return await handleSignupRequest(req, res);
+    if (parsedUrl.pathname === "/api/auth/login" && req.method === "POST") return await handleLoginRequest(req, res);
+    if (parsedUrl.pathname === "/api/auth/logout" && req.method === "POST") return await handleLogoutRequest(req, res);
+    if (parsedUrl.pathname === "/api/auth/me" && req.method === "GET") return await handleMeRequest(req, res);
+
+    if (parsedUrl.pathname === "/api/seller/apply" && req.method === "POST") return await handleSellerApplyRequest(req, res);
+    if (parsedUrl.pathname === "/api/seller/my-application" && req.method === "GET") return await handleMySellerApplicationRequest(req, res);
+
+    if (parsedUrl.pathname === "/api/admin/seller-applications" && req.method === "GET") {
+      return await handleAdminListSellerApplicationsRequest(req, res, parsedUrl);
+    }
+    {
+      const reviewMatch = parsedUrl.pathname.match(/^\/api\/admin\/seller-applications\/([^/]+)\/(approve|reject)$/);
+      if (reviewMatch && req.method === "POST") {
+        return await handleAdminReviewSellerApplicationRequest(req, res, decodeURIComponent(reviewMatch[1]), reviewMatch[2]);
+      }
+    }
+
+    if (parsedUrl.pathname === "/api/listings" && req.method === "POST") return await handleCreateListingRequest(req, res);
+    if (parsedUrl.pathname === "/api/listings" && req.method === "GET") return await handleListListingsRequest(req, res, parsedUrl);
+    if (parsedUrl.pathname === "/api/listings/mine" && req.method === "GET") return await handleMyListingsRequest(req, res);
+    {
+      const listingMatch = parsedUrl.pathname.match(/^\/api\/listings\/([^/]+)$/);
+      if (listingMatch && req.method === "GET") return await handleGetListingRequest(req, res, decodeURIComponent(listingMatch[1]));
+      if (listingMatch && req.method === "DELETE") return await handleRemoveListingRequest(req, res, decodeURIComponent(listingMatch[1]));
+    }
+
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
     console.error(`Unhandled error: ${error.message}`);
