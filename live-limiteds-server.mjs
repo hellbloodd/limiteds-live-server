@@ -1,6 +1,7 @@
 import http from "http";
 import { URL } from "url";
 import crypto from "crypto";
+import Stripe from "stripe";
 
 // ============================================================================
 // ARCHITECTURE
@@ -506,6 +507,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .mp-price { font-family: "Unbounded", sans-serif; font-size: 18px; font-weight: 700; color: var(--accent); }
   .mp-seller { font-size: 12px; color: var(--muted); }
   .mp-remove { margin-top: 4px; }
+  .mp-buy-btn { margin-top: 6px; }
 
   .form-card { max-width: 480px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 24px; }
   .form-card h3 { font-family: "Unbounded", sans-serif; font-size: 15px; margin: 0 0 16px; }
@@ -634,9 +636,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 </main>
 
 <div class="mp-section" id="mp-section" hidden>
+  <div class="status-line" id="mp-order-banner" hidden style="margin-bottom:14px;"></div>
   <div class="mp-subtabs" id="mp-subtabs">
     <button class="pill" id="mp-tab-browse">Browse</button>
     <button class="pill" id="mp-tab-sell">Sell</button>
+    <button class="pill" id="mp-tab-orders" hidden>My Orders</button>
     <button class="pill" id="mp-tab-mine" hidden>My Listings</button>
     <button class="pill" id="mp-tab-admin" hidden>Admin</button>
   </div>
@@ -648,12 +652,21 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 
   <div id="mp-sell" hidden></div>
 
+  <div id="mp-orders" hidden>
+    <div id="mp-orders-list"></div>
+  </div>
+
   <div id="mp-mine" hidden>
     <div class="grid" id="mp-mine-grid"></div>
   </div>
 
   <div id="mp-admin" hidden>
+    <h3 style="font-family:'Unbounded',sans-serif;font-size:14px;margin:0 0 12px;">Pending seller applications</h3>
     <div id="mp-admin-list"></div>
+    <h3 style="font-family:'Unbounded',sans-serif;font-size:14px;margin:26px 0 12px;">Orders awaiting completion</h3>
+    <div id="mp-admin-orders-list"></div>
+    <h3 style="font-family:'Unbounded',sans-serif;font-size:14px;margin:26px 0 12px;">Disputed orders</h3>
+    <div id="mp-admin-disputed-list"></div>
   </div>
 </div>
 
@@ -1469,18 +1482,24 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     trackerMain: document.getElementById("tracker-main"),
     trackerStatus: document.getElementById("status-line"),
     mpSection: document.getElementById("mp-section"),
+    mpOrderBanner: document.getElementById("mp-order-banner"),
     mpSubtabBrowse: document.getElementById("mp-tab-browse"),
     mpSubtabSell: document.getElementById("mp-tab-sell"),
+    mpSubtabOrders: document.getElementById("mp-tab-orders"),
     mpSubtabMine: document.getElementById("mp-tab-mine"),
     mpSubtabAdmin: document.getElementById("mp-tab-admin"),
     mpBrowse: document.getElementById("mp-browse"),
     mpBrowseStatus: document.getElementById("mp-browse-status"),
     mpBrowseGrid: document.getElementById("mp-browse-grid"),
     mpSell: document.getElementById("mp-sell"),
+    mpOrders: document.getElementById("mp-orders"),
+    mpOrdersList: document.getElementById("mp-orders-list"),
     mpMine: document.getElementById("mp-mine"),
     mpMineGrid: document.getElementById("mp-mine-grid"),
     mpAdmin: document.getElementById("mp-admin"),
     mpAdminList: document.getElementById("mp-admin-list"),
+    mpAdminOrdersList: document.getElementById("mp-admin-orders-list"),
+    mpAdminDisputedList: document.getElementById("mp-admin-disputed-list"),
     authOverlay: document.getElementById("auth-overlay"),
     authModalTitle: document.getElementById("auth-modal-title"),
     authModalClose: document.getElementById("auth-modal-close"),
@@ -1520,8 +1539,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 
   function mpLoadSession() {
     try { mpState.token = localStorage.getItem("mp_token") || null; } catch (e) { mpState.token = null; }
-    if (!mpState.token) { renderAuthArea(); return; }
-    apiFetch("/api/auth/me").then(function (res) {
+    if (!mpState.token) { renderAuthArea(); return Promise.resolve(); }
+    return apiFetch("/api/auth/me").then(function (res) {
       if (res.status === 200 && res.data.ok) {
         mpState.user = res.data.user;
       } else {
@@ -1529,7 +1548,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       }
       renderAuthArea();
       renderMpTabsVisibility();
-    });
+    }).catch(function () {});
   }
 
   function renderAuthArea() {
@@ -1623,19 +1642,22 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   mpEls.tabMarketplace.addEventListener("click", function () { setView("marketplace"); });
 
   function renderMpTabsVisibility() {
+    mpEls.mpSubtabOrders.hidden = !mpState.user;
     mpEls.mpSubtabMine.hidden = !mpState.user;
     mpEls.mpSubtabAdmin.hidden = !(mpState.user && mpState.user.isAdmin);
-    if (!mpState.user && (mpState.mpTab === "mine" || mpState.mpTab === "admin")) mpState.mpTab = "browse";
+    if (!mpState.user && (mpState.mpTab === "mine" || mpState.mpTab === "admin" || mpState.mpTab === "orders")) mpState.mpTab = "browse";
   }
 
   function setMpTab(tab) {
     mpState.mpTab = tab;
     mpEls.mpSubtabBrowse.classList.toggle("active", tab === "browse");
     mpEls.mpSubtabSell.classList.toggle("active", tab === "sell");
+    mpEls.mpSubtabOrders.classList.toggle("active", tab === "orders");
     mpEls.mpSubtabMine.classList.toggle("active", tab === "mine");
     mpEls.mpSubtabAdmin.classList.toggle("active", tab === "admin");
     mpEls.mpBrowse.hidden = tab !== "browse";
     mpEls.mpSell.hidden = tab !== "sell";
+    mpEls.mpOrders.hidden = tab !== "orders";
     mpEls.mpMine.hidden = tab !== "mine";
     mpEls.mpAdmin.hidden = tab !== "admin";
     renderMpTab();
@@ -1645,6 +1667,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     if (!mpState.user) { openAuthModal(); return; }
     setMpTab("sell");
   });
+  mpEls.mpSubtabOrders.addEventListener("click", function () { setMpTab("orders"); });
   mpEls.mpSubtabMine.addEventListener("click", function () { setMpTab("mine"); });
   mpEls.mpSubtabAdmin.addEventListener("click", function () { setMpTab("admin"); });
 
@@ -1652,12 +1675,14 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     renderMpTabsVisibility();
     if (mpState.mpTab === "browse") return loadBrowseListings();
     if (mpState.mpTab === "sell") return renderSellTab();
+    if (mpState.mpTab === "orders") return loadMyOrders();
     if (mpState.mpTab === "mine") return loadMyListings();
-    if (mpState.mpTab === "admin") return loadAdminApplications();
+    if (mpState.mpTab === "admin") { loadAdminApplications(); return loadAdminOrders(); }
   }
 
   // ---------- Browse ----------
-  function mpListingCardHtml(listing) {
+  function mpListingCardHtml(listing, opts) {
+    opts = opts || {};
     var thumb = listing.thumbnailUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
     var sellerName = listing.seller ? listing.seller.displayName : "Unknown seller";
     return (
@@ -1666,8 +1691,44 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       '<div class="mp-body">' +
         '<div class="mp-price tabular">' + mpFmtUsd(listing.priceUsd) + '</div>' +
         '<div class="mp-seller">Sold by ' + sellerName.replace(/</g, "&lt;") + (listing.quantity > 1 ? " · Qty " + listing.quantity : "") + '</div>' +
+        (opts.showBuyButton ?
+          '<button class="form-btn mp-buy-btn" data-listing-id="' + listing.id + '" data-method="stripe">Buy with card</button>' +
+          '<button class="form-btn secondary mp-buy-btn" data-listing-id="' + listing.id + '" data-method="crypto">Pay with crypto</button>' +
+          '<div class="form-error" data-buy-error hidden></div>' : '') +
       '</div>'
     );
+  }
+
+  function startCheckout(listingId, method, btn, errEl) {
+    if (!mpState.user) { openAuthModal(); return; }
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Starting checkout…";
+    errEl.hidden = true;
+    apiFetch("/api/orders", { method: "POST", body: JSON.stringify({ listingId: listingId, method: method }) }).then(function (res) {
+      if (res.status !== 200 || !res.data.ok) {
+        btn.disabled = false;
+        btn.textContent = originalText;
+        errEl.textContent = (res.data && res.data.error) || "Couldn't start checkout";
+        errEl.hidden = false;
+        return;
+      }
+      window.location.href = res.data.checkoutUrl;
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      errEl.textContent = "Network error - try again";
+      errEl.hidden = false;
+    });
+  }
+
+  function wireBuyButtons(container) {
+    Array.prototype.forEach.call(container.querySelectorAll(".mp-buy-btn"), function (btn) {
+      btn.addEventListener("click", function () {
+        var errEl = btn.parentElement.querySelector("[data-buy-error]");
+        startCheckout(btn.getAttribute("data-listing-id"), btn.getAttribute("data-method"), btn, errEl);
+      });
+    });
   }
 
   function loadBrowseListings() {
@@ -1692,8 +1753,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       }
       mpEls.mpBrowseGrid.innerHTML = listings.map(function (l) {
         var enriched = Object.assign({}, l, { thumbnailUrl: byId[l.assetId] ? byId[l.assetId].thumbnailUrl : null });
-        return '<div class="mp-card">' + mpListingCardHtml(enriched) + '</div>';
+        var isOwnListing = mpState.user && l.seller && l.seller.id === mpState.user.id;
+        return '<div class="mp-card">' + mpListingCardHtml(enriched, { showBuyButton: !isOwnListing }) + '</div>';
       }).join("");
+      wireBuyButtons(mpEls.mpBrowseGrid);
     }).catch(function () { mpEls.mpBrowseStatus.textContent = "Couldn't load listings."; });
   }
 
@@ -1882,12 +1945,98 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     });
   }
 
+  // ---------- My Orders ----------
+  var ORDER_STATUS_BADGE = {
+    pending_payment: "pending", paid_escrow: "pending", disputed: "rejected", completed: "approved",
+    refunded: "rejected", cancelled: "rejected",
+  };
+  var ORDER_STATUS_LABEL = {
+    pending_payment: "Awaiting payment", paid_escrow: "Paid - awaiting delivery", disputed: "Disputed - under review",
+    completed: "Completed", refunded: "Refunded", cancelled: "Cancelled",
+  };
+
+  function loadMyOrders() {
+    if (!mpState.user) { mpEls.mpOrdersList.innerHTML = ""; return; }
+    mpEls.mpOrdersList.innerHTML = "Loading…";
+    apiFetch("/api/orders/mine").then(function (res) {
+      if (res.status !== 200 || !res.data.ok) { mpEls.mpOrdersList.innerHTML = "Couldn't load orders."; return; }
+      var orders = res.data.orders || [];
+      if (!orders.length) { mpEls.mpOrdersList.innerHTML = '<div class="empty-state"><div class="glyph">🧾</div><div class="title">No orders yet</div>Buy or sell something to see it here.</div>'; return; }
+      mpEls.mpOrdersList.innerHTML = orders.map(function (o) {
+        var badge = ORDER_STATUS_BADGE[o.status] || "pending";
+        var label = ORDER_STATUS_LABEL[o.status] || o.status;
+        var roleLabel = o.role === "buyer" ? "Bought from " : "Sold to ";
+        var disputeBtn = o.status === "paid_escrow" ? '<button class="admin-app-actions reject" data-dispute-id="' + o.id + '" style="border:1px solid var(--border);background:var(--surface-2);color:var(--text);padding:6px 14px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Report a problem</button>' : '';
+        return '<div class="admin-app-row">' +
+          '<div class="info"><b>' + o.itemName.replace(/</g, "&lt;") + '</b> · ' + mpFmtUsd(o.priceUsd) +
+          '<br>' + roleLabel + (o.counterpartName ? o.counterpartName.replace(/</g, "&lt;") : "unknown") + '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;"><span class="badge ' + badge + '">' + label + '</span>' + disputeBtn + '</div>' +
+          '</div>';
+      }).join("");
+      Array.prototype.forEach.call(mpEls.mpOrdersList.querySelectorAll("[data-dispute-id]"), function (btn) {
+        btn.addEventListener("click", function () {
+          apiFetch("/api/orders/" + btn.getAttribute("data-dispute-id") + "/dispute", { method: "POST" }).then(function () { loadMyOrders(); });
+        });
+      });
+    }).catch(function () { mpEls.mpOrdersList.innerHTML = "Couldn't load orders."; });
+  }
+
+  // ---------- Admin: order review (awaiting completion + disputed) ----------
+  function renderAdminOrderQueue(container, status, emptyGlyph, emptyTitle) {
+    container.innerHTML = "Loading…";
+    apiFetch("/api/admin/orders?status=" + encodeURIComponent(status)).then(function (res) {
+      if (res.status !== 200 || !res.data.ok) { container.innerHTML = "Couldn't load orders."; return; }
+      var orders = res.data.orders || [];
+      if (!orders.length) { container.innerHTML = '<div class="empty-state"><div class="glyph">' + emptyGlyph + '</div><div class="title">' + emptyTitle + '</div></div>'; return; }
+      container.innerHTML = orders.map(function (o) {
+        return '<div class="admin-app-row" data-order-id="' + o.id + '">' +
+          '<div class="info"><b>' + o.itemName.replace(/</g, "&lt;") + '</b> · ' + mpFmtUsd(o.priceUsd) +
+          '<br>Paid ' + (o.createdAt ? formatHoverDate(o.createdAt) : "") + '</div>' +
+          '<div class="admin-app-actions">' +
+            '<button class="approve" data-action="complete">Mark delivered</button>' +
+            '<button class="reject" data-action="refund">Refund</button>' +
+          '</div></div>';
+      }).join("");
+      Array.prototype.forEach.call(container.querySelectorAll(".admin-app-row"), function (row) {
+        var id = row.getAttribute("data-order-id");
+        Array.prototype.forEach.call(row.querySelectorAll("button[data-action]"), function (btn) {
+          btn.addEventListener("click", function () {
+            apiFetch("/api/admin/orders/" + id + "/" + btn.getAttribute("data-action"), { method: "POST" }).then(function () { loadAdminOrders(); });
+          });
+        });
+      });
+    }).catch(function () { container.innerHTML = "Couldn't load orders."; });
+  }
+
+  function loadAdminOrders() {
+    if (!mpState.user || !mpState.user.isAdmin) { mpEls.mpAdminOrdersList.innerHTML = ""; mpEls.mpAdminDisputedList.innerHTML = ""; return; }
+    renderAdminOrderQueue(mpEls.mpAdminOrdersList, "paid_escrow", "✅", "Nothing awaiting completion");
+    renderAdminOrderQueue(mpEls.mpAdminDisputedList, "disputed", "🕊️", "No disputes open");
+  }
+
+  // ---------- Post-checkout redirect banner ----------
+  function showOrderBanner() {
+    var params = new URLSearchParams(window.location.search);
+    var orderResult = params.get("order");
+    if (!orderResult) return;
+    mpEls.mpOrderBanner.hidden = false;
+    if (orderResult === "success") {
+      mpEls.mpOrderBanner.innerHTML = '<span class="badge approved">Payment received</span> Your order is being processed - check My Orders for status.';
+    } else {
+      mpEls.mpOrderBanner.innerHTML = '<span class="badge rejected">Checkout cancelled</span> No payment was made.';
+    }
+    // Strip the query params so a refresh doesn't keep re-showing the banner.
+    window.history.replaceState({}, "", window.location.pathname);
+    setView("marketplace");
+    setMpTab("orders");
+  }
+
   // ---------- Boot ----------
   renderSortRow();
   renderPeriodGroup();
   resetAndLoad();
   setView("tracker");
-  mpLoadSession();
+  mpLoadSession().then(function () { showOrderBanner(); });
 })();
 </script>
 `;
@@ -3604,9 +3753,13 @@ function publicListing(listing, sellerMap) {
   };
 }
 
-// ---- Request body helper ---------------------------------------------------
+// ---- Request body helpers ---------------------------------------------------
 
-function readJsonBody(req, maxBytes = 1_000_000) {
+// Shared by readJsonBody() below and the Stripe webhook handler, which needs
+// the raw, unparsed bytes (Stripe's signature is computed over the exact
+// wire bytes - parsing to JSON and re-stringifying would produce a
+// byte-for-byte different payload and fail verification).
+function readRawBody(req, maxBytes = 1_000_000) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -3619,16 +3772,19 @@ function readJsonBody(req, maxBytes = 1_000_000) {
       }
       chunks.push(chunk);
     });
-    req.on("end", () => {
-      if (!chunks.length) return resolve({});
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+async function readJsonBody(req, maxBytes = 1_000_000) {
+  const raw = await readRawBody(req, maxBytes);
+  if (!raw.length) return {};
+  try {
+    return JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new Error("Invalid JSON body");
+  }
 }
 
 // ---- HTTP handlers: auth ---------------------------------------------------
@@ -3788,6 +3944,442 @@ async function handleRemoveListingRequest(req, res, id) {
 }
 
 
+// ============================================================================
+// Marketplace (Phase 2: Stripe Checkout + escrow)
+//
+// A "sale" here is: buyer pays -> money sits with the platform's Stripe
+// account (escrow, in the loose sense - actually just "not yet released to
+// the seller") -> an admin marks the order completed once the item has
+// actually been delivered (delivery is still manual/off-platform until the
+// Phase 3 delivery bot exists) -> a real payout to the seller is a further,
+// separate step not automated yet (Stripe Connect payouts, or an
+// off-platform transfer - deliberately out of scope for this phase).
+//
+// Crypto payments are a later phase; this phase is Stripe-only.
+// ============================================================================
+
+const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || "");
+const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || "");
+// Absolute base URL for Stripe's success/cancel redirects (Stripe rejects
+// relative URLs). Falls back to the request's own Host header, which is
+// right on Render (single public hostname) - set this explicitly only if
+// you're running behind a proxy/CDN with a different public hostname.
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+
+function stripeEnabled() {
+  return STRIPE_SECRET_KEY !== "";
+}
+
+let stripeClient = null;
+function getStripe() {
+  if (!stripeClient && stripeEnabled()) stripeClient = new Stripe(STRIPE_SECRET_KEY);
+  return stripeClient;
+}
+
+function baseUrlFromReq(req) {
+  return PUBLIC_BASE_URL || `https://${req.headers.host}`;
+}
+
+// ---- Coinbase Commerce (crypto payments) -----------------------------------
+// A plain REST integration - Coinbase Commerce's API is simple enough that
+// pulling in their SDK isn't worth a second payments dependency alongside
+// Stripe's.
+const COINBASE_COMMERCE_API_KEY = String(process.env.COINBASE_COMMERCE_API_KEY || "");
+const COINBASE_COMMERCE_WEBHOOK_SECRET = String(process.env.COINBASE_COMMERCE_WEBHOOK_SECRET || "");
+const COINBASE_COMMERCE_API = "https://api.commerce.coinbase.com";
+
+function coinbaseEnabled() {
+  return COINBASE_COMMERCE_API_KEY !== "";
+}
+
+async function createCoinbaseCharge({ name, priceUsd, orderId, redirectUrl, cancelUrl }) {
+  const r = await fetch(`${COINBASE_COMMERCE_API}/charges`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CC-Api-Key": COINBASE_COMMERCE_API_KEY,
+      "X-CC-Version": "2018-03-22",
+    },
+    body: JSON.stringify({
+      name,
+      description: `Limiteds Live order #${orderId}`,
+      pricing_type: "fixed_price",
+      local_price: { amount: priceUsd.toFixed(2), currency: "USD" },
+      metadata: { orderId: String(orderId) },
+      redirect_url: redirectUrl,
+      cancel_url: cancelUrl,
+    }),
+  });
+  if (!r.ok) throw new Error(`Coinbase Commerce ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const data = await r.json();
+  return data.data; // { id, code, hosted_url, ... }
+}
+
+// Coinbase signs webhooks with HMAC-SHA256 of the raw body using the shared
+// webhook secret (from the Commerce dashboard), hex-encoded, in the
+// X-CC-Webhook-Signature header - conceptually the same scheme as Stripe's,
+// just without a timestamp component or an SDK to do it for us.
+function verifyCoinbaseSignature(rawBody, signatureHeader) {
+  if (!signatureHeader) return false;
+  const expected = crypto.createHmac("sha256", COINBASE_COMMERCE_WEBHOOK_SECRET).update(rawBody).digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(String(signatureHeader), "hex"));
+  } catch {
+    return false; // length mismatch, non-hex header, etc - never a match
+  }
+}
+
+// Shared by both payment providers' webhooks: flips a still-pending order to
+// paid and its listing to sold, exactly once (checked by only acting while
+// the order is still "pending_payment" - both Stripe and Coinbase can
+// redeliver the same webhook more than once).
+async function markOrderPaidAndSold(orderId, provider, paymentReference) {
+  const order = orderId ? await mpGetOrderById(orderId) : null;
+  if (!order || order.status !== "pending_payment") return;
+  await mpUpdateOrder(order.id, { status: "paid_escrow", payment_provider: provider, payment_reference: paymentReference });
+  const listing = await mpGetListingById(order.listing_id);
+  if (listing && listing.status === "active") await mpUpdateListingStatus(listing.id, "sold");
+}
+
+memoryMarket.orders = []; // { id, listing_id, buyer_id, seller_id, price_usd, status, payment_provider, payment_reference, created_at, updated_at }
+memoryMarket.nextOrderId = 1;
+
+// ---- Data access: orders --------------------------------------------------
+
+async function mpCreateOrder({ listingId, buyerId, sellerId, priceUsd }) {
+  const order = {
+    id: snapshotStorageEnabled() ? undefined : memoryMarket.nextOrderId++,
+    listing_id: listingId,
+    buyer_id: buyerId,
+    seller_id: sellerId,
+    price_usd: priceUsd,
+    status: "pending_payment",
+    payment_provider: null,
+    payment_reference: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (!snapshotStorageEnabled()) {
+    memoryMarket.orders.push(order);
+    return order;
+  }
+  delete order.id;
+  const rows = await supabaseRequest("mp_orders", {
+    method: "POST", body: JSON.stringify(order), headers: { Prefer: "return=representation" }
+  });
+  return Array.isArray(rows) && rows[0] ? rows[0] : order;
+}
+
+async function mpGetOrderById(id) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.orders.find(o => String(o.id) === String(id)) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_orders?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+// Used to block a second buyer from starting checkout on a listing that
+// already has money moving on it. Listings only flip to "sold" once Stripe
+// confirms payment (webhook), so without this check two buyers could both
+// reach Stripe Checkout for the same one-of-a-kind listing at the same time.
+async function mpFindActiveOrderForListing(listingId) {
+  if (!snapshotStorageEnabled()) {
+    return memoryMarket.orders.find(o => String(o.listing_id) === String(listingId) &&
+      (o.status === "pending_payment" || o.status === "paid_escrow")) || null;
+  }
+  const rows = await supabaseRequest(
+    `mp_orders?listing_id=eq.${encodeURIComponent(listingId)}&status=in.(pending_payment,paid_escrow)&select=*&limit=1`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function mpUpdateOrder(id, patch) {
+  const fullPatch = Object.assign({}, patch, { updated_at: new Date().toISOString() });
+  if (!snapshotStorageEnabled()) {
+    const order = memoryMarket.orders.find(o => String(o.id) === String(id));
+    if (order) Object.assign(order, fullPatch);
+    return order || null;
+  }
+  await supabaseRequest(`mp_orders?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH", body: JSON.stringify(fullPatch)
+  });
+  return mpGetOrderById(id);
+}
+
+async function mpListOrdersForUser(userId) {
+  if (!snapshotStorageEnabled()) {
+    const mine = memoryMarket.orders.filter(o => o.buyer_id === userId || o.seller_id === userId);
+    return [...mine].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  }
+  const rows = await supabaseRequest(
+    `mp_orders?or=(buyer_id.eq.${encodeURIComponent(userId)},seller_id.eq.${encodeURIComponent(userId)})&select=*&order=created_at.desc&limit=200`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function mpListOrdersByStatus(status) {
+  if (!snapshotStorageEnabled()) {
+    return [...memoryMarket.orders].filter(o => o.status === status).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  }
+  const rows = await supabaseRequest(
+    `mp_orders?status=eq.${encodeURIComponent(status)}&select=*&order=created_at.desc&limit=200`,
+    { headers: { Prefer: "" } }
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function publicOrders(orders, viewerId) {
+  const listingIds = [...new Set(orders.map(o => o.listing_id))];
+  const userIds = [...new Set(orders.flatMap(o => [o.buyer_id, o.seller_id]))];
+  const [listings, users] = await Promise.all([
+    Promise.all(listingIds.map(id => mpGetListingById(id))),
+    Promise.all(userIds.map(id => mpGetUserById(id))),
+  ]);
+  const listingMap = new Map(listings.filter(Boolean).map(l => [String(l.id), l]));
+  const userMap = new Map(users.filter(Boolean).map(u => [u.id, u]));
+  return orders.map(o => {
+    const listing = listingMap.get(String(o.listing_id));
+    const counterpartId = viewerId && o.buyer_id === viewerId ? o.seller_id : o.buyer_id;
+    const counterpart = userMap.get(counterpartId);
+    return {
+      id: o.id,
+      itemName: listing ? listing.item_name : "(listing removed)",
+      priceUsd: Number(o.price_usd),
+      status: o.status,
+      role: viewerId ? (o.buyer_id === viewerId ? "buyer" : "seller") : null,
+      counterpartName: counterpart ? counterpart.display_name : null,
+      createdAt: o.created_at,
+    };
+  });
+}
+
+// ---- HTTP handlers: orders / checkout --------------------------------------
+
+async function handleCreateOrderRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+  const method = body.method === "crypto" ? "crypto" : "stripe";
+  if (method === "stripe" && !stripeEnabled()) return sendJson(res, 503, { ok: false, error: "Card payments aren't set up yet - check back soon" });
+  if (method === "crypto" && !coinbaseEnabled()) return sendJson(res, 503, { ok: false, error: "Crypto payments aren't set up yet - check back soon" });
+
+  const listing = await mpGetListingById(body.listingId);
+  if (!listing || listing.status !== "active") return sendJson(res, 404, { ok: false, error: "Listing not found or no longer available" });
+  if (listing.seller_id === user.id) return sendJson(res, 400, { ok: false, error: "You can't buy your own listing" });
+
+  const existingOrder = await mpFindActiveOrderForListing(listing.id);
+  if (existingOrder) return sendJson(res, 409, { ok: false, error: "This item already has a purchase in progress" });
+
+  const order = await mpCreateOrder({
+    listingId: listing.id, buyerId: user.id, sellerId: listing.seller_id, priceUsd: Number(listing.price_usd),
+  });
+  const base = baseUrlFromReq(req);
+
+  try {
+    if (method === "crypto") {
+      const charge = await createCoinbaseCharge({
+        name: listing.item_name,
+        priceUsd: Number(listing.price_usd),
+        orderId: order.id,
+        redirectUrl: `${base}/?order=success&orderId=${order.id}`,
+        cancelUrl: `${base}/?order=cancelled&orderId=${order.id}`,
+      });
+      await mpUpdateOrder(order.id, { payment_provider: "coinbase", payment_reference: charge.code });
+      return sendJson(res, 200, { ok: true, checkoutUrl: charge.hosted_url, orderId: order.id });
+    }
+
+    const stripe = getStripe();
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      customer_email: user.email,
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: listing.item_name },
+          unit_amount: Math.round(Number(listing.price_usd) * 100),
+        },
+        quantity: Number(listing.quantity) || 1,
+      }],
+      success_url: `${base}/?order=success&orderId=${order.id}`,
+      cancel_url: `${base}/?order=cancelled&orderId=${order.id}`,
+      metadata: { orderId: String(order.id) },
+    });
+    await mpUpdateOrder(order.id, { payment_provider: "stripe", payment_reference: session.id });
+    return sendJson(res, 200, { ok: true, checkoutUrl: session.url, orderId: order.id });
+  } catch (e) {
+    console.error(`Checkout session creation failed (${method}): ${e.message}`);
+    await mpUpdateOrder(order.id, { status: "cancelled" });
+    return sendJson(res, 502, { ok: false, error: "Couldn't start checkout - try again in a moment" });
+  }
+}
+
+async function handleMyOrdersRequest(req, res) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  const orders = await mpListOrdersForUser(user.id);
+  return sendJson(res, 200, { ok: true, orders: await publicOrders(orders, user.id) });
+}
+
+// Stripe requires the raw request body (untouched by any JSON parsing) to
+// verify the signature - see readRawBody()'s comment.
+async function handleStripeWebhookRequest(req, res) {
+  if (!stripeEnabled()) return sendJson(res, 503, { ok: false, error: "Stripe not configured" });
+  let rawBody;
+  try { rawBody = await readRawBody(req, 2_000_000); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+
+  let event;
+  try {
+    event = getStripe().webhooks.constructEvent(rawBody, req.headers["stripe-signature"], STRIPE_WEBHOOK_SECRET);
+  } catch (e) {
+    console.error(`Stripe webhook signature verification failed: ${e.message}`);
+    return sendJson(res, 400, { ok: false, error: "Invalid signature" });
+  }
+
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const orderId = session.metadata && session.metadata.orderId;
+      await markOrderPaidAndSold(orderId, "stripe", session.id);
+    } else if (event.type === "checkout.session.expired") {
+      // Buyer abandoned checkout - release the "purchase in progress" lock
+      // so someone else (or the same buyer) can try again.
+      const session = event.data.object;
+      const orderId = session.metadata && session.metadata.orderId;
+      const order = orderId ? await mpGetOrderById(orderId) : null;
+      if (order && order.status === "pending_payment") await mpUpdateOrder(order.id, { status: "cancelled" });
+    }
+  } catch (e) {
+    console.error(`Stripe webhook handling error: ${e.message}`);
+    // Still 200 - a 4xx/5xx here makes Stripe retry indefinitely, which
+    // won't help if the failure is a bug on our end rather than a transient
+    // one. The event is logged above for manual follow-up.
+  }
+  return sendJson(res, 200, { received: true });
+}
+
+// Coinbase Commerce requires the raw request body to verify its signature,
+// same reasoning as the Stripe webhook above.
+async function handleCoinbaseWebhookRequest(req, res) {
+  if (!coinbaseEnabled()) return sendJson(res, 503, { ok: false, error: "Coinbase Commerce not configured" });
+  let rawBody;
+  try { rawBody = await readRawBody(req, 2_000_000); } catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+
+  if (!verifyCoinbaseSignature(rawBody, req.headers["x-cc-webhook-signature"])) {
+    console.error("Coinbase webhook signature verification failed");
+    return sendJson(res, 400, { ok: false, error: "Invalid signature" });
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody.toString("utf8")).event;
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: "Invalid JSON body" });
+  }
+
+  try {
+    if (event.type === "charge:confirmed") {
+      const charge = event.data;
+      const orderId = charge.metadata && charge.metadata.orderId;
+      await markOrderPaidAndSold(orderId, "coinbase", charge.code);
+    } else if (event.type === "charge:failed" || event.type === "charge:delayed") {
+      // "delayed" = underpaid/late payment Coinbase flagged for manual
+      // review - don't auto-cancel; an admin can sort it out via the order.
+      // Only a hard failure releases the "purchase in progress" lock.
+      if (event.type === "charge:failed") {
+        const charge = event.data;
+        const orderId = charge.metadata && charge.metadata.orderId;
+        const order = orderId ? await mpGetOrderById(orderId) : null;
+        if (order && order.status === "pending_payment") await mpUpdateOrder(order.id, { status: "cancelled" });
+      }
+    }
+  } catch (e) {
+    console.error(`Coinbase webhook handling error: ${e.message}`);
+  }
+  return sendJson(res, 200, { received: true });
+}
+
+// ---- HTTP handlers: admin order review -------------------------------------
+
+async function handleAdminListOrdersRequest(req, res, parsedUrl) {
+  const admin = await getAuthUser(req);
+  if (!admin || !admin.is_admin) return sendJson(res, 403, { ok: false, error: "Admin access required" });
+  const status = (parsedUrl.searchParams.get("status") || "paid_escrow").trim();
+  const orders = await mpListOrdersByStatus(status);
+  return sendJson(res, 200, { ok: true, orders: await publicOrders(orders, null) });
+}
+
+async function handleAdminCompleteOrderRequest(req, res, id) {
+  const admin = await getAuthUser(req);
+  if (!admin || !admin.is_admin) return sendJson(res, 403, { ok: false, error: "Admin access required" });
+  const order = await mpGetOrderById(id);
+  if (!order) return sendJson(res, 404, { ok: false, error: "Order not found" });
+  if (!["paid_escrow", "disputed"].includes(order.status)) return sendJson(res, 409, { ok: false, error: "Order isn't awaiting completion" });
+  const updated = await mpUpdateOrder(id, { status: "completed" });
+  return sendJson(res, 200, { ok: true, order: (await publicOrders([updated], null))[0] });
+}
+
+async function handleAdminRefundOrderRequest(req, res, id) {
+  const admin = await getAuthUser(req);
+  if (!admin || !admin.is_admin) return sendJson(res, 403, { ok: false, error: "Admin access required" });
+  const order = await mpGetOrderById(id);
+  if (!order) return sendJson(res, 404, { ok: false, error: "Order not found" });
+  if (!["pending_payment", "paid_escrow", "disputed"].includes(order.status)) {
+    return sendJson(res, 409, { ok: false, error: "Order can't be refunded from its current status" });
+  }
+
+  let refundedViaStripe = false;
+  const wasPaid = order.status === "paid_escrow" || order.status === "disputed";
+  if (stripeEnabled() && wasPaid && order.payment_provider === "stripe" && order.payment_reference) {
+    try {
+      const stripe = getStripe();
+      const session = await stripe.checkout.sessions.retrieve(order.payment_reference);
+      if (session.payment_intent) {
+        await stripe.refunds.create({ payment_intent: session.payment_intent });
+        refundedViaStripe = true;
+      }
+    } catch (e) {
+      console.error(`Stripe refund failed for order ${id}: ${e.message}`);
+      // Fall through - the order still gets marked refunded below so an
+      // admin can see it needs manual attention in the Stripe dashboard.
+    }
+  }
+  // Coinbase Commerce has no refund API - crypto payments are irreversible
+  // on-chain, so a crypto refund means the admin manually sends the coins
+  // back to the buyer's wallet and records it as done here.
+
+  const updated = await mpUpdateOrder(id, { status: "refunded" });
+  const listing = await mpGetListingById(order.listing_id);
+  if (listing && listing.status === "sold") await mpUpdateListingStatus(listing.id, "active");
+  return sendJson(res, 200, { ok: true, refundedViaStripe, order: (await publicOrders([updated], null))[0] });
+}
+
+// ---- HTTP handlers: disputes ------------------------------------------------
+
+// Either side of a paid order can flag it - this just moves it into the
+// admin queue (alongside the plain "awaiting completion" one) rather than
+// resolving anything itself. An admin still makes the actual call via the
+// complete/refund actions above, which both now accept "disputed" too.
+async function handleDisputeOrderRequest(req, res, id) {
+  const user = await getAuthUser(req);
+  if (!user) return sendJson(res, 401, { ok: false, error: "Sign in first" });
+  const order = await mpGetOrderById(id);
+  if (!order) return sendJson(res, 404, { ok: false, error: "Order not found" });
+  if (order.buyer_id !== user.id && order.seller_id !== user.id && !user.is_admin) {
+    return sendJson(res, 403, { ok: false, error: "Not your order" });
+  }
+  if (order.status !== "paid_escrow") return sendJson(res, 409, { ok: false, error: "Only a paid order can be disputed" });
+  const updated = await mpUpdateOrder(id, { status: "disputed" });
+  return sendJson(res, 200, { ok: true, order: (await publicOrders([updated], user.id))[0] });
+}
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "OPTIONS") {
@@ -3834,6 +4426,26 @@ const server = http.createServer(async (req, res) => {
       const listingMatch = parsedUrl.pathname.match(/^\/api\/listings\/([^/]+)$/);
       if (listingMatch && req.method === "GET") return await handleGetListingRequest(req, res, decodeURIComponent(listingMatch[1]));
       if (listingMatch && req.method === "DELETE") return await handleRemoveListingRequest(req, res, decodeURIComponent(listingMatch[1]));
+    }
+
+    // ---- Payments / orders ----
+    if (parsedUrl.pathname === "/api/orders" && req.method === "POST") return await handleCreateOrderRequest(req, res);
+    if (parsedUrl.pathname === "/api/orders/mine" && req.method === "GET") return await handleMyOrdersRequest(req, res);
+    if (parsedUrl.pathname === "/api/stripe/webhook" && req.method === "POST") return await handleStripeWebhookRequest(req, res);
+    if (parsedUrl.pathname === "/api/coinbase/webhook" && req.method === "POST") return await handleCoinbaseWebhookRequest(req, res);
+    if (parsedUrl.pathname === "/api/admin/orders" && req.method === "GET") return await handleAdminListOrdersRequest(req, res, parsedUrl);
+    {
+      const orderActionMatch = parsedUrl.pathname.match(/^\/api\/admin\/orders\/([^/]+)\/(complete|refund)$/);
+      if (orderActionMatch && req.method === "POST") {
+        const id = decodeURIComponent(orderActionMatch[1]);
+        return orderActionMatch[2] === "complete"
+          ? await handleAdminCompleteOrderRequest(req, res, id)
+          : await handleAdminRefundOrderRequest(req, res, id);
+      }
+    }
+    {
+      const disputeMatch = parsedUrl.pathname.match(/^\/api\/orders\/([^/]+)\/dispute$/);
+      if (disputeMatch && req.method === "POST") return await handleDisputeOrderRequest(req, res, decodeURIComponent(disputeMatch[1]));
     }
 
     sendJson(res, 404, { error: "Not found" });
