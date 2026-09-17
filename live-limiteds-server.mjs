@@ -308,6 +308,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .mp-row .mp-price.na { color: var(--muted-2); font-weight: 500; }
   .mp-row.best { color: var(--accent); }
   .mp-row.best .mp-name, .mp-row.best .mp-price { color: var(--accent); }
+  .mp-row.spread { border-top: 1px solid var(--border, rgba(255,255,255,0.1)); margin-top: 4px; padding-top: 7px; }
+  .mp-row.spread .mp-price.pos { color: #4ade80; }
 
   .range-row { display: flex; align-items: center; gap: 6px; }
   .range-sep { color: var(--muted-2); font-size: 12px; }
@@ -673,6 +675,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     { key: "overpriced_sales_desc", label: "Overpriced (Most Sales)" },
     { key: "rap_above_value_desc", label: "RAP > Value" },
     { key: "external_price_asc", label: "Best Real-Money Price" },
+    { key: "external_deal_desc", label: "Best Deals (Marketplace)" },
+    { key: "price_spread_desc", label: "Profit" },
     { key: "changes", label: "Changes" },
     { key: "sales", label: "Sales" },
   ];
@@ -1032,6 +1036,27 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       if (!item.externalBestPrice) return { label: "Best Price", text: "Not listed", cls: "" };
       return { label: "Best Price", text: fmtUsd(item.externalBestPrice) + " · " + item.externalBestSource, cls: "pos" };
     }
+    if (state.sortKey === "external_deal_desc") {
+      if (item.externalDealPercent === null || item.externalDealPercent === undefined) {
+        return { label: "Deal vs RAP", text: "Not listed", cls: "" };
+      }
+      return {
+        label: "Deal vs RAP",
+        text: fmtPercent(item.externalDealPercent) + (item.externalBestSource ? " · " + item.externalBestSource : ""),
+        cls: item.externalDealPercent >= 0 ? "pos" : "neg",
+      };
+    }
+    if (state.sortKey === "price_spread_desc") {
+      if (item.priceSpreadValue === null || item.priceSpreadValue === undefined) {
+        return { label: "Profit", text: "Not enough listings", cls: "" };
+      }
+      return {
+        label: "Profit",
+        text: fmtUsd(item.priceSpreadValue) + " (" + fmtPercent(item.priceSpreadPercent) + ") · " +
+          item.priceSpreadLowSource + " → " + item.priceSpreadHighSource,
+        cls: "pos",
+      };
+    }
     var c24 = item.change24h;
     if (c24 === null || c24 === undefined) return null;
     return { label: "Change 24h", text: fmtPercent(c24), cls: Number(c24) > 0 ? "pos" : (Number(c24) < 0 ? "neg" : "") };
@@ -1209,6 +1234,12 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         '<span class="mp-price tabular' + (r.price === null ? " na" : "") + '">' + (r.price !== null ? fmtUsd(r.price) : "Not listed") + '</span>' +
       '</div>';
     }).join("");
+    if (data.priceSpreadValue !== null && data.priceSpreadValue !== undefined) {
+      html += '<div class="mp-row spread">' +
+        '<span class="mp-name">Profit: ' + escapeHtml(data.priceSpreadLowSource) + ' → ' + escapeHtml(data.priceSpreadHighSource) + '</span>' +
+        '<span class="mp-price tabular pos">' + fmtUsd(data.priceSpreadValue) + ' (' + fmtPercent(data.priceSpreadPercent) + ')</span>' +
+      '</div>';
+    }
     return html;
   }
   function escapeHtml(s) {
@@ -2394,6 +2425,29 @@ function pickBest(prices) {
   return { bestPrice, bestSource };
 }
 
+// The "Profit" sort: how much spread exists between the cheapest and priciest
+// listing for the same item across the marketplaces this tracker checks -
+// buy at the low, the arbitrage opportunity is the gap up to the high. Needs
+// at least two different stores actually listing the item to mean anything;
+// a single listing has nothing to spread against.
+function computePriceSpread(prices) {
+  let low = null, lowSource = null, high = null, highSource = null, count = 0;
+  for (const [source, price] of Object.entries(prices)) {
+    if (price === null) continue;
+    count++;
+    if (low === null || price < low) { low = price; lowSource = source; }
+    if (high === null || price > high) { high = price; highSource = source; }
+  }
+  if (count < 2 || low === null || high === null || low <= 0) {
+    return { spreadValue: null, spreadPercent: null, spreadLow: null, spreadLowSource: null, spreadHigh: null, spreadHighSource: null };
+  }
+  return {
+    spreadValue: Math.round((high - low) * 100) / 100,
+    spreadPercent: Math.round(((high - low) / low) * 10000) / 100,
+    spreadLow: low, spreadLowSource: lowSource, spreadHigh: high, spreadHighSource: highSource,
+  };
+}
+
 async function scanExternalMarketplacePrices() {
   if (externalPricesScanPromise) return externalPricesScanPromise;
   externalPricesScanPromise = (async () => {
@@ -2464,6 +2518,7 @@ async function scanExternalMarketplacePrices() {
           };
           const { bestPrice, bestSource } = pickBest(prices);
           if (bestPrice === null) continue;
+          const spread = computePriceSpread(prices);
           orphanItems.push({
             assetId, name, acronym: "", rap: null, value: null, demand: -1, demandLabel: null, trend: -1, trendLabel: null,
             projected: false, hyped: false, rare: false, lowestPrice: null,
@@ -2475,6 +2530,13 @@ async function scanExternalMarketplacePrices() {
             // real tracked classic limited (no RAP/Value ever coming for it).
             notRolimonsTracked: true,
             externalBestPrice: bestPrice, externalBestSource: bestSource,
+            // No RAP for a store-only item, so the RAP-based "Best Deals"
+            // metric can't apply here - but the cross-store spread ("Profit")
+            // still can, since it only needs two store prices to compare.
+            externalDealValue: null, externalDealPercent: null,
+            priceSpreadValue: spread.spreadValue, priceSpreadPercent: spread.spreadPercent,
+            priceSpreadLow: spread.spreadLow, priceSpreadLowSource: spread.spreadLowSource,
+            priceSpreadHigh: spread.spreadHigh, priceSpreadHighSource: spread.spreadHighSource,
             limitedsMarketPriceUsd: prices.LimitedsMarket,
             gamixiePriceUsd: prices.Gamixie, rblxVaultPriceUsd: prices.RBLXVault,
             bloxbazzarPriceUsd: prices.BloxBazzar, rbxswiftPriceUsd: prices.RBXSwift,
@@ -2638,7 +2700,19 @@ async function fetchStoredSnapshots(assetId) {
 // minutes-long requests that just hung forever client-side. A handful of
 // paginated bulk queries plus a short cache fixes that.
 let snapshotsByAssetCache = { fetchedAt: 0, map: new Map() };
-async function fetchAllStoredSnapshotsGrouped() {
+// This data only actually changes once per hourly snapshot, but the first
+// request to hit it after any 5-minute expiry used to await the full
+// paginated rebuild INLINE - up to 500 sequential Supabase round trips for a
+// large history table, easily minutes long. That's exactly what showed up
+// as "Changes not showing / taking forever". Same fix as the sales-metrics
+// and external-price caches elsewhere in this file: never block a request on
+// this rebuild, serve whatever's cached (even if stale/empty) and refresh in
+// the background.
+const SNAPSHOTS_CACHE_TTL_MS = Number(process.env.SNAPSHOTS_CACHE_TTL_MS || 20 * 60 * 1000);
+let snapshotsWarmupRunning = false;
+let snapshotsScanPromise = null;
+
+async function scanAllStoredSnapshotsGrouped() {
   if (!snapshotStorageEnabled()) {
     const map = new Map();
     for (const r of memorySnapshots) {
@@ -2650,36 +2724,66 @@ async function fetchAllStoredSnapshotsGrouped() {
     }
     return map;
   }
-  if (Date.now() - snapshotsByAssetCache.fetchedAt < CACHE_TTL_MS && snapshotsByAssetCache.map.size > 0) {
-    return snapshotsByAssetCache.map;
-  }
-  try {
-    const map = new Map();
-    const pageSize = 1000;
-    for (let page = 0, offset = 0; page < 500; page++, offset += pageSize) {
-      const rows = await supabaseRequest(
-        `limited_snapshots?select=asset_id,rap,lowest_price,saved_at&order=saved_at.asc&limit=${pageSize}&offset=${offset}`,
-        { headers: { Prefer: "" } }
-      );
-      if (!Array.isArray(rows) || rows.length === 0) break;
-      for (const r of rows) {
-        const id = Number(r.asset_id);
-        const value = Number(r.rap);
-        const date = String(r.saved_at || "");
-        if (id > 0 && value > 0 && Number.isFinite(Date.parse(date))) {
-          const arr = map.get(id) || [];
-          arr.push({ value, lowestPrice: Number(r.lowest_price) || null, date, source: "own" });
-          map.set(id, arr);
+  // Dedup concurrent callers into one in-flight rebuild - the same fix that
+  // stopped the sales-metrics scan from tripping rate limits under a cold
+  // cache plus concurrent visitors.
+  if (snapshotsScanPromise) return snapshotsScanPromise;
+  snapshotsScanPromise = (async () => {
+    try {
+      const map = new Map();
+      const pageSize = 1000;
+      for (let page = 0, offset = 0; page < 500; page++, offset += pageSize) {
+        const rows = await supabaseRequest(
+          `limited_snapshots?select=asset_id,rap,lowest_price,saved_at&order=saved_at.asc&limit=${pageSize}&offset=${offset}`,
+          { headers: { Prefer: "" } }
+        );
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        for (const r of rows) {
+          const id = Number(r.asset_id);
+          const value = Number(r.rap);
+          const date = String(r.saved_at || "");
+          if (id > 0 && value > 0 && Number.isFinite(Date.parse(date))) {
+            const arr = map.get(id) || [];
+            arr.push({ value, lowestPrice: Number(r.lowest_price) || null, date, source: "own" });
+            map.set(id, arr);
+          }
         }
+        if (rows.length < pageSize) break;
       }
-      if (rows.length < pageSize) break;
+      return map;
+    } finally {
+      snapshotsScanPromise = null;
     }
+  })();
+  return snapshotsScanPromise;
+}
+
+async function warmSnapshotsByAsset() {
+  if (!snapshotStorageEnabled() || snapshotsWarmupRunning) return;
+  snapshotsWarmupRunning = true;
+  try {
+    console.log("Snapshot-history warm-up started.");
+    const map = await scanAllStoredSnapshotsGrouped();
     if (map.size > 0) snapshotsByAssetCache = { fetchedAt: Date.now(), map };
-    return snapshotsByAssetCache.map;
+    console.log(`Snapshot-history warm-up done (${map.size} items).`);
   } catch (e) {
-    console.warn(`Bulk snapshot fetch failed: ${e.message} - keeping previous cache (${snapshotsByAssetCache.map.size} items).`);
+    console.warn(`Snapshot-history warm-up failed: ${e.message} - keeping previous cache (${snapshotsByAssetCache.map.size} items).`);
+  } finally {
+    snapshotsWarmupRunning = false;
+  }
+}
+
+// Never blocks a request on the rebuild - serves whatever's cached
+// (possibly stale, possibly empty right after a cold start) and kicks off a
+// background refresh when it's due. This is what "Changes"/"Loss"/"Profit"
+// sorts now call instead of awaiting the scan directly.
+async function getSnapshotsByAssetMap() {
+  if (!snapshotStorageEnabled()) return scanAllStoredSnapshotsGrouped();
+  if (Date.now() - snapshotsByAssetCache.fetchedAt < SNAPSHOTS_CACHE_TTL_MS && snapshotsByAssetCache.map.size > 0) {
     return snapshotsByAssetCache.map;
   }
+  warmSnapshotsByAsset().catch(() => {});
+  return snapshotsByAssetCache.map;
 }
 
 async function saveSnapshotRows(rows) {
@@ -3054,6 +3158,26 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
       item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
       item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
+      // "Best Deals" for the Marketplaces view: same RAP-vs-price gap the
+      // Tracker's own Best Deals sort uses, but against the cheapest
+      // real-money price found across stores instead of Roblox's own resale
+      // price - the items where what it's really worth (RAP) is far above
+      // what you can actually buy it for right now.
+      item.externalDealValue = calculateDealValue(item.rap, item.externalBestPrice);
+      item.externalDealPercent = calculateDealPercent(item.rap, item.externalBestPrice);
+      // "Profit": the spread between the cheapest and priciest listing for
+      // this item across the stores this tracker checks - an arbitrage
+      // signal, independent of RAP entirely.
+      const spread = computePriceSpread({
+        LimitedsMarket: item.limitedsMarketPriceUsd, Gamixie: item.gamixiePriceUsd,
+        RBLXVault: item.rblxVaultPriceUsd, BloxBazzar: item.bloxbazzarPriceUsd, RBXSwift: item.rbxswiftPriceUsd,
+      });
+      item.priceSpreadValue = spread.spreadValue;
+      item.priceSpreadPercent = spread.spreadPercent;
+      item.priceSpreadLow = spread.spreadLow;
+      item.priceSpreadLowSource = spread.spreadLowSource;
+      item.priceSpreadHigh = spread.spreadHigh;
+      item.priceSpreadHighSource = spread.spreadHighSource;
     }
   }
 
@@ -3084,6 +3208,30 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   else if (sort === "value_desc") items.sort((a, b) => (b.value || 0) - (a.value || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
+  else if (sort === "external_deal_desc") {
+    // "Best Deals" against the marketplace price instead of Roblox's own -
+    // items with no deal at all (no external listing, or externally priced
+    // at/above RAP) sink to the end instead of tying at a false 0%.
+    items.sort((a, b) => {
+      const av = a.externalDealPercent, bv = b.externalDealPercent;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return (bv - av) || ((b.externalDealValue || 0) - (a.externalDealValue || 0));
+    });
+  }
+  else if (sort === "price_spread_desc") {
+    // "Profit" - the arbitrage spread between an item's cheapest and
+    // priciest listing across stores. Needs at least two stores actually
+    // listing it; anything with fewer sinks to the end.
+    items.sort((a, b) => {
+      const av = a.priceSpreadPercent, bv = b.priceSpreadPercent;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return (bv - av) || ((b.priceSpreadValue || 0) - (a.priceSpreadValue || 0));
+    });
+  }
   else if (sort === "rap_above_value_desc") {
     // Items with no rapVsValuePercent (missing RAP or Value) have nothing to
     // rank here - push them to the very end instead of tying them with a
@@ -3126,7 +3274,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
     const suffix = sort.replace("loss_", "").replace("profit_", "");
     const days = { "_1h": 1 / 24, "_24h": 1, "_7d": 7, "_30d": 30, "_1y": 365, "_all": null }[`_${suffix}`];
     const fieldSuffix = suffix === "all" ? "AllTime" : suffix;
-    const snapshotsByAsset = await fetchAllStoredSnapshotsGrouped();
+    const snapshotsByAsset = await getSnapshotsByAssetMap();
     for (const item of items) {
       const history = snapshotsByAsset.get(item.assetId) || [];
       Object.assign(item, buildRapChangeMetrics(history, item.rap));
@@ -3238,6 +3386,18 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
       item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
       item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
+      item.externalDealValue = calculateDealValue(rap, item.externalBestPrice);
+      item.externalDealPercent = calculateDealPercent(rap, item.externalBestPrice);
+      const spread = computePriceSpread({
+        LimitedsMarket: item.limitedsMarketPriceUsd, Gamixie: item.gamixiePriceUsd,
+        RBLXVault: item.rblxVaultPriceUsd, BloxBazzar: item.bloxbazzarPriceUsd, RBXSwift: item.rbxswiftPriceUsd,
+      });
+      item.priceSpreadValue = spread.spreadValue;
+      item.priceSpreadPercent = spread.spreadPercent;
+      item.priceSpreadLow = spread.spreadLow;
+      item.priceSpreadLowSource = spread.spreadLowSource;
+      item.priceSpreadHigh = spread.spreadHigh;
+      item.priceSpreadHighSource = spread.spreadHighSource;
     }
 
     // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
@@ -3335,6 +3495,7 @@ async function runSnapshot() {
       marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
       pageCache.clear();
       warmSalesMetrics().catch(e => console.error(`Sales warm-up error: ${e.message}`));
+      warmSnapshotsByAsset().catch(e => console.error(`Snapshot-history warm-up error: ${e.message}`));
       warmExternalPrices().catch(e => console.error(`External price warm-up error: ${e.message}`));
     }
     // `rap` is a NOT NULL column in both tables. A handful of items (very
