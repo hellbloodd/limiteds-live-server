@@ -310,6 +310,16 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .mp-row.best .mp-name, .mp-row.best .mp-price { color: var(--accent); }
   .mp-row.spread { border-top: 1px solid var(--border, rgba(255,255,255,0.1)); margin-top: 4px; padding-top: 7px; }
   .mp-row.spread .mp-price.pos { color: #4ade80; }
+  .mp-warning {
+    background: rgba(234, 88, 12, 0.14);
+    border: 1px solid rgba(234, 88, 12, 0.4);
+    color: #f97316;
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 8px;
+  }
 
   .range-row { display: flex; align-items: center; gap: 6px; }
   .range-sep { color: var(--muted-2); font-size: 12px; }
@@ -408,6 +418,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     text-transform: uppercase;
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--border);
+  }
+  .card-badge.warning {
+    background: rgba(234, 88, 12, 0.16);
+    color: #f97316;
   }
   .card-thumb {
     width: 100%;
@@ -1101,6 +1115,19 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       badge.textContent = "Store-only · not on Rolimons";
       card.appendChild(badge);
     }
+    // Rolimons flags an item "projected" when a small group is running its
+    // RAP up on purpose, past what the wider market would actually pay - the
+    // RAP is real (Roblox counted the trades) but manufactured, not earned
+    // from genuine demand. A deal or rate that looks unusually good is much
+    // more likely "this RAP is fake" than "this is a steal", so it's flagged
+    // instead of celebrated - shown regardless of which sort is active,
+    // since the underlying RAP is unreliable either way.
+    if (item.projected && item.projectedTooGoodWarning) {
+      var warnBadge = document.createElement("div");
+      warnBadge.className = "card-badge warning";
+      warnBadge.textContent = "⚠ Projected item · rate may be inflated RAP, not a real deal";
+      card.appendChild(warnBadge);
+    }
 
     var thumb = document.createElement("div");
     thumb.className = "card-thumb";
@@ -1234,7 +1261,13 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       if (b.price === null) return -1;
       return a.price - b.price;
     });
-    var html = '<div class="mp-title">Real-Money Prices</div>';
+    var html = '';
+    if (data.projected && data.projectedTooGoodWarning) {
+      html += '<div class="mp-warning">⚠ Rolimons flags this item as <strong>projected</strong> - its RAP has ' +
+        'been pushed up on purpose by a small group of traders, not earned from genuine demand. ' +
+        'The unusually good rate/deal shown here is more likely inflated RAP than a real bargain.</div>';
+    }
+    html += '<div class="mp-title">Real-Money Prices</div>';
     html += rows.map(function (r, i) {
       var isBest = r.price !== null && i === 0;
       return '<div class="mp-row' + (isBest ? " best" : "") + '">' +
@@ -2020,6 +2053,23 @@ function calculateDealPercent(rap, price) {
 function calculateRate(rap, priceUsd) {
   if (!rap || !priceUsd || rap <= 0 || priceUsd <= 0) return null;
   return Math.round((priceUsd / rap) * 1000 * 100) / 100;
+}
+
+// Rolimons flags an item "projected" when a small group has been coordinating
+// to run its trade-up price far past what the wider market would actually
+// pay for it - its RAP is real (Roblox does average those trades in), but
+// inflated on purpose rather than reflecting genuine demand. That makes any
+// "great deal" math built on that RAP suspect for exactly this item: a price
+// that looks amazingly cheap next to RAP, or a rate that looks amazingly low,
+// is far more likely explained by "the RAP itself is fake" than "this is a
+// steal" - so it gets flagged instead of celebrated.
+const PROJECTED_RATE_WARNING_THRESHOLD = Number(process.env.PROJECTED_RATE_WARNING_THRESHOLD || 1.0); // $ per 1000 RAP
+const PROJECTED_DEAL_WARNING_PERCENT = Number(process.env.PROJECTED_DEAL_WARNING_PERCENT || 40); // % below RAP
+function computeProjectedTooGoodWarning(item) {
+  if (!item?.projected) return false;
+  if (item.externalRate !== null && item.externalRate !== undefined && item.externalRate < PROJECTED_RATE_WARNING_THRESHOLD) return true;
+  if (item.dealPercent !== null && item.dealPercent !== undefined && item.dealPercent >= PROJECTED_DEAL_WARNING_PERCENT) return true;
+  return false;
 }
 
 function calculateOverpricedValue(rap, price) {
@@ -3200,6 +3250,7 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       item.priceSpreadLowSource = spread.spreadLowSource;
       item.priceSpreadHigh = spread.spreadHigh;
       item.priceSpreadHighSource = spread.spreadHighSource;
+      item.projectedTooGoodWarning = computeProjectedTooGoodWarning(item);
     }
   }
 
@@ -3423,6 +3474,7 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       item.priceSpreadLowSource = spread.spreadLowSource;
       item.priceSpreadHigh = spread.spreadHigh;
       item.priceSpreadHighSource = spread.spreadHighSource;
+      item.projectedTooGoodWarning = computeProjectedTooGoodWarning(item);
     }
 
     // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
