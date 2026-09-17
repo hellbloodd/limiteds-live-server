@@ -1185,7 +1185,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   var MARKETPLACE_SOURCES = [
     { key: "rbxswiftPriceUsd", label: "RBXSwift" },
     { key: "rblxVaultPriceUsd", label: "RBLXVault" },
-    { key: "aduritePriceUsd", label: "Adurite" },
     { key: "bloxbazzarPriceUsd", label: "BloxBazzar" },
     { key: "gamixiePriceUsd", label: "Gamixie" },
     { key: "limitedsMarketPriceUsd", label: "LimitedsMarket" },
@@ -1484,8 +1483,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   // "Marketplaces" is a read-only price-comparison view of the same catalog,
   // not a separate feature with its own controls. The only difference is
   // that every card in Marketplaces view always shows the best real-money
-  // price found across Adurite/LimitedsMarket/Gamixie/RBLXVault, regardless
-  // of which sort is active.
+  // price found across RBXSwift/RBLXVault/BloxBazzar/Gamixie/LimitedsMarket,
+  // regardless of which sort is active.
   function setView(view) {
     var changed = state.view !== view;
     state.view = view;
@@ -2170,7 +2169,6 @@ async function getSalesMetricsMap(days) {
 // "Refresh now" (see /api/refresh-prices below) bypasses this entirely for
 // someone who wants the truly current state right now.
 const EXTERNAL_PRICES_CACHE_TTL_MS = Number(process.env.EXTERNAL_PRICES_CACHE_TTL_MS || 5 * 60 * 1000);
-const ADURITE_MARKET_URL = "https://adurite.com/api/market/roblox";
 const LIMITEDSMARKET_URL = "https://limitedsmarket.com/market";
 const GAMIXIE_LIMITEDS_URL = "https://gamixie.online/roblox-limiteds/";
 // RBLXVault's storefront is a client-rendered SPA that reads straight from
@@ -2216,62 +2214,18 @@ async function fetchText(url, options = {}) {
   return response.text();
 }
 
-// Adurite's public market API returns a dict of listings keyed by internal
-// listing id, not by item - the same limited is very often listed by
-// several different sellers at once. We only want each item's CHEAPEST
-// listing, so this groups by Roblox assetId (limited_id) and keeps the
-// minimum numeric_price seen.
-// Every assetId-keyed source stores { price, name } rather than a bare
-// number - the name is what lets an item Adurite/RBLXVault/RBXSwift lists
-// but our own Rolimons-derived catalog doesn't track (a newer or
-// non-classic limited) still show up as its own card instead of silently
-// vanishing (see buildOrphanItems below).
-async function fetchAduriteOffers() {
-  const offers = new Map(); // assetId -> { price, name }
-  try {
-    // A plain custom User-Agent (what fetchJson sends by default) is exactly
-    // the kind of request a datacenter-hosted bot check is built to flag,
-    // and Render's outbound IPs are commonly on the "cloud hosting" lists
-    // those checks consult - unlike the other five sources here, Adurite is
-    // also the one directly handling payments, so it has the strongest
-    // incentive to run one. Sending headers that match what its own site
-    // sends a real browser (Referer, Accept-Language, a normal browser UA)
-    // costs nothing and is the standard fix when a JSON endpoint quietly
-    // 403s/empties out for a script but works fine from a real browser.
-    const data = await fetchJson(ADURITE_MARKET_URL, {
-      timeoutMs: 12000, retries: 3,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Referer: "https://adurite.com/market",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    const listings = data?.items?.items;
-    let rowCount = 0;
-    if (listings && typeof listings === "object") {
-      for (const key of Object.keys(listings)) {
-        rowCount++;
-        const row = listings[key];
-        const assetId = Number(row?.limited_id);
-        // numeric_price is Adurite's own float field - the sibling `price`
-        // field is comma-formatted for display and not safe to parse.
-        const price = Number(row?.numeric_price);
-        if (!(assetId > 0) || !(price > 0)) continue;
-        const prev = offers.get(assetId);
-        if (!prev || price < prev.price) offers.set(assetId, { price, name: String(row?.limited_name || "").trim() });
-      }
-    }
-    // Logged every scan (not just on error) so a "why is Adurite showing
-    // nothing" report can be diagnosed straight from Render's logs: a
-    // rowCount of 0 means the fetch is being blocked/empties out
-    // server-side, while a healthy rowCount with a low offers.size would
-    // point at a real parsing bug instead.
-    console.log(`Adurite: parsed ${rowCount} raw listings into ${offers.size} priced items.`);
-  } catch (e) {
-    console.warn(`Adurite offers fetch failed: ${e.message}`);
-  }
-  return offers;
-}
+// Adurite is deliberately NOT integrated here. Its public market API
+// returns good data to a real browser, but every server-side request from
+// Render gets a flat 403 even with realistic browser headers attached - the
+// signature of a WAF/anti-bot service blocking datacenter IP ranges rather
+// than checking request headers. That's the same kind of block ro.place's
+// Cloudflare challenge presented earlier in this project, and disguising
+// server traffic further to get past it would mean deliberately bypassing
+// that anti-bot protection - not something this tracker does, even though
+// the underlying data (public prices) is harmless. If Adurite ever opens
+// this endpoint back up to non-browser clients, this is the place to add
+// fetchAduriteOffers() back (see git history / an earlier version of this
+// file for a working implementation against their current schema).
 
 // LimitedsMarket has no public API - its listings only exist in the
 // server-rendered HTML of /market. There's no Roblox assetId in the markup
@@ -2350,9 +2304,8 @@ async function fetchGamixieOffers() {
 
 // RBLXVault exposes its own product catalog straight from Supabase's public
 // REST API (see the constants above for why this is fine to call directly).
-// Unlike every other source here, it gives an exact roblox_asset_id per
-// listing - the same reliable exact-match this feature already uses for
-// Adurite, and a nice cross-check for it.
+// It gives an exact roblox_asset_id per listing, same as RBXSwift below -
+// the most reliable match method among the sources actually in use here.
 async function fetchRblxVaultOffers() {
   const offers = new Map(); // assetId -> { price, name }
   try {
@@ -2401,9 +2354,8 @@ async function fetchBloxbazzarOffers() {
   return offers;
 }
 
-// RBXSwift's API gives an exact Roblox itemId per listing - an
-// assetId-exact match like Adurite/RBLXVault, and the strongest of the
-// sources here.
+// RBXSwift's API gives an exact Roblox itemId per listing - an assetId-exact
+// match like RBLXVault above, and the strongest of the sources here.
 async function fetchRbxswiftOffers() {
   const offers = new Map(); // assetId -> { price, name }
   try {
@@ -2426,8 +2378,8 @@ async function fetchRbxswiftOffers() {
 // Runs every marketplace fetch (independent of each other, so in parallel),
 // then matches every offer against our own catalog. Two different matching
 // strategies, because that's what each site's data actually supports:
-//   - Adurite, RBLXVault: exact Roblox assetId match (both expose one).
-//   - LimitedsMarket, Gamixie: lowercased item-name match (neither exposes
+//   - RBLXVault, RBXSwift: exact Roblox assetId match (both expose one).
+//   - LimitedsMarket, Gamixie, BloxBazzar: lowercased item-name match (none exposes
 //     an assetId in their markup).
 // Name-matching is inherently the weaker of the two - it'll miss an item if
 // a site spells/punctuates its name differently - so assetId sources are
@@ -2446,9 +2398,8 @@ async function scanExternalMarketplacePrices() {
   if (externalPricesScanPromise) return externalPricesScanPromise;
   externalPricesScanPromise = (async () => {
     try {
-      const [catalog, aduriteOffers, limitedsMarketOffers, gamixieOffers, rblxVaultOffers, bloxbazzarOffers, rbxswiftOffers] = await Promise.all([
+      const [catalog, limitedsMarketOffers, gamixieOffers, rblxVaultOffers, bloxbazzarOffers, rbxswiftOffers] = await Promise.all([
         getRobloxMarketIndex(),
-        fetchAduriteOffers(),
         fetchLimitedsMarketOffers(),
         fetchGamixieOffers(),
         fetchRblxVaultOffers(),
@@ -2460,13 +2411,12 @@ async function scanExternalMarketplacePrices() {
       // blocked/empty" (0 here) apart from "a source works but nothing
       // matches our catalog" (nonzero here, but few/no hits in the per-item
       // match loop below).
-      console.log(`Marketplace scan raw counts - Adurite: ${aduriteOffers.size}, LimitedsMarket: ${limitedsMarketOffers.size}, Gamixie: ${gamixieOffers.size}, RBLXVault: ${rblxVaultOffers.size}, BloxBazzar: ${bloxbazzarOffers.size}, RBXSwift: ${rbxswiftOffers.size}.`);
+      console.log(`Marketplace scan raw counts - LimitedsMarket: ${limitedsMarketOffers.size}, Gamixie: ${gamixieOffers.size}, RBLXVault: ${rblxVaultOffers.size}, BloxBazzar: ${bloxbazzarOffers.size}, RBXSwift: ${rbxswiftOffers.size}.`);
       const byAssetId = new Map();
       const catalogAssetIds = new Set(catalog.map(i => i.assetId));
       for (const item of catalog) {
         const nameKey = item.name.toLowerCase();
         const prices = {
-          Adurite: aduriteOffers.get(item.assetId)?.price ?? null,
           LimitedsMarket: limitedsMarketOffers.get(nameKey) ?? null,
           Gamixie: gamixieOffers.get(nameKey) ?? null,
           RBLXVault: rblxVaultOffers.get(item.assetId)?.price ?? null,
@@ -2477,7 +2427,6 @@ async function scanExternalMarketplacePrices() {
         if (bestPrice === null) continue;
         byAssetId.set(item.assetId, {
           bestPrice, bestSource,
-          aduritePrice: prices.Adurite,
           limitedsMarketPrice: prices.LimitedsMarket,
           gamixiePrice: prices.Gamixie,
           rblxVaultPrice: prices.RBLXVault,
@@ -2493,13 +2442,11 @@ async function scanExternalMarketplacePrices() {
       // handleLimitedsRequest, which skips that filter). Case (a) still
       // needs a synthetic entry built here, since it has no catalog row to
       // attach a price to at all. Only the exact-assetId sources
-      // (Adurite/RBLXVault/RBXSwift) can build one reliably - a name-only
-      // source's unmatched rows have no assetId to hang a card on, so they
-      // just don't surface as their own orphan card (their price still
-      // counts wherever their name happens to match a real catalog or
-      // orphan item above/below).
+      // (RBLXVault/RBXSwift) can build one reliably - a name-only source's
+      // unmatched rows have no assetId to hang a card on, so they just don't
+      // surface as their own orphan card (their price still counts wherever
+      // their name happens to match a real catalog or orphan item above).
       const orphanAssetIds = new Map(); // assetId -> name
-      for (const [assetId, { name }] of aduriteOffers) if (!catalogAssetIds.has(assetId) && name) orphanAssetIds.set(assetId, name);
       for (const [assetId, { name }] of rblxVaultOffers) if (!catalogAssetIds.has(assetId) && name) orphanAssetIds.set(assetId, name);
       for (const [assetId, { name }] of rbxswiftOffers) if (!catalogAssetIds.has(assetId) && name) orphanAssetIds.set(assetId, name);
 
@@ -2509,7 +2456,6 @@ async function scanExternalMarketplacePrices() {
         for (const [assetId, name] of orphanAssetIds) {
           const nameKey = name.toLowerCase();
           const prices = {
-            Adurite: aduriteOffers.get(assetId)?.price ?? null,
             LimitedsMarket: limitedsMarketOffers.get(nameKey) ?? null,
             Gamixie: gamixieOffers.get(nameKey) ?? null,
             RBLXVault: rblxVaultOffers.get(assetId)?.price ?? null,
@@ -2529,7 +2475,7 @@ async function scanExternalMarketplacePrices() {
             // real tracked classic limited (no RAP/Value ever coming for it).
             notRolimonsTracked: true,
             externalBestPrice: bestPrice, externalBestSource: bestSource,
-            aduritePriceUsd: prices.Adurite, limitedsMarketPriceUsd: prices.LimitedsMarket,
+            limitedsMarketPriceUsd: prices.LimitedsMarket,
             gamixiePriceUsd: prices.Gamixie, rblxVaultPriceUsd: prices.RBLXVault,
             bloxbazzarPriceUsd: prices.BloxBazzar, rbxswiftPriceUsd: prices.RBXSwift,
           });
@@ -3103,7 +3049,6 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       const ext = externalMap.get(item.assetId);
       item.externalBestPrice = ext?.bestPrice ?? null;
       item.externalBestSource = ext?.bestSource ?? null;
-      item.aduritePriceUsd = ext?.aduritePrice ?? null;
       item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
       item.gamixiePriceUsd = ext?.gamixiePrice ?? null;
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
@@ -3288,7 +3233,6 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       const ext = externalMap.get(assetId);
       item.externalBestPrice = ext?.bestPrice ?? null;
       item.externalBestSource = ext?.bestSource ?? null;
-      item.aduritePriceUsd = ext?.aduritePrice ?? null;
       item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
       item.gamixiePriceUsd = ext?.gamixiePrice ?? null;
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
