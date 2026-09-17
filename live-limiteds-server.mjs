@@ -232,6 +232,30 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .pill.active.loss { background: var(--red-soft); border-color: var(--red); color: var(--red); }
   .pill.active.profit { background: var(--green-soft); border-color: var(--green); color: var(--green); }
 
+  .view-tabs {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 16px 28px 0;
+    display: flex;
+    gap: 8px;
+  }
+  .view-tab {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .12s ease;
+  }
+  .view-tab:hover { color: var(--text); border-color: var(--muted-2); }
+  .view-tab.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .card-stats .stat-row.market-price .v { color: var(--accent); }
+
   .range-row { display: flex; align-items: center; gap: 6px; }
   .range-sep { color: var(--muted-2); font-size: 12px; }
   .range-input {
@@ -488,6 +512,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   </div>
 </header>
 
+<div class="view-tabs" id="view-tabs">
+  <button class="view-tab" id="view-tab-tracker">Tracker</button>
+  <button class="view-tab" id="view-tab-marketplace">Marketplaces</button>
+</div>
+
 <div class="controls">
   <div class="control-group" id="sort-group">
     <div class="label">Sort</div>
@@ -584,6 +613,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   var PERIOD_LABEL = { "1h": "1h", "24h": "24h", "7d": "7d", "30d": "30d", "1y": "1y", all: "All" };
 
   var state = {
+    view: "tracker", // tracker | marketplace
     minSalesPerDay: null,
     minRapVsValue: null,
     maxRapVsValue: null,
@@ -606,6 +636,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   };
 
   var els = {
+    viewTabTracker: document.getElementById("view-tab-tracker"),
+    viewTabMarketplace: document.getElementById("view-tab-marketplace"),
     sortGroup: document.getElementById("sort-group"),
     sortRow: document.getElementById("sort-row"),
     periodGroup: document.getElementById("period-group"),
@@ -972,6 +1004,19 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       row.className += " metric";
       stats.appendChild(row);
     }
+    // In Marketplaces view, always show the best real-money price found -
+    // regardless of which sort is active - unless the active sort's own
+    // metric row above is already that same figure (external_price_asc),
+    // to avoid showing it twice.
+    if (state.view === "marketplace" && state.sortKey !== "external_price_asc") {
+      var mpRow = statRow(
+        "Best Price",
+        item.externalBestPrice ? (fmtUsd(item.externalBestPrice) + " · " + item.externalBestSource) : "Not listed",
+        item.externalBestPrice ? "pos" : ""
+      );
+      mpRow.className += " market-price";
+      stats.appendChild(mpRow);
+    }
     card.appendChild(stats);
 
     card.addEventListener("click", function () { openDetails(item); });
@@ -1314,7 +1359,24 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   els.overlay.addEventListener("click", function (e) { if (e.target === els.overlay) closeModal(); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !els.overlay.hidden) closeModal(); });
 
+  // ---------- View tabs (Tracker / Marketplaces) ----------
+  // Both views share the exact same grid, sort pills and filters below -
+  // "Marketplaces" is a read-only price-comparison view of the same catalog,
+  // not a separate feature with its own controls. The only difference is
+  // that every card in Marketplaces view always shows the best real-money
+  // price found across Adurite/LimitedsMarket/Gamixie/RBLXVault, regardless
+  // of which sort is active.
+  function setView(view) {
+    state.view = view;
+    els.viewTabTracker.classList.toggle("active", view === "tracker");
+    els.viewTabMarketplace.classList.toggle("active", view === "marketplace");
+    renderGrid();
+  }
+  els.viewTabTracker.addEventListener("click", function () { setView("tracker"); });
+  els.viewTabMarketplace.addEventListener("click", function () { setView("marketplace"); });
+
   // ---------- Boot ----------
+  setView("tracker");
   renderSortRow();
   renderPeriodGroup();
   resetAndLoad();
@@ -1949,6 +2011,19 @@ async function getSalesMetricsMap(days) {
 const EXTERNAL_PRICES_CACHE_TTL_MS = Number(process.env.EXTERNAL_PRICES_CACHE_TTL_MS || 20 * 60 * 1000);
 const ADURITE_MARKET_URL = "https://adurite.com/api/market/roblox";
 const LIMITEDSMARKET_URL = "https://limitedsmarket.com/market";
+const GAMIXIE_LIMITEDS_URL = "https://gamixie.online/roblox-limiteds/";
+// RBLXVault's storefront is a client-rendered SPA that reads straight from
+// its own Supabase project on the frontend - this is the exact same public,
+// read-only REST endpoint + anon key their own site ships to every visitor's
+// browser (Supabase's anon key is meant to be public; access is enforced
+// server-side by Postgres row-level security, not by hiding this key). We're
+// not bypassing any login or authorization - just reading the same public
+// product listing their page already renders, straight from the source
+// instead of scraping the rendered HTML.
+const RBLXVAULT_SUPABASE_URL = "https://crkcgrbivoraagujbybx.supabase.co/rest/v1/products";
+const RBLXVAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNya2NncmJpdm9yYWFndWpieWJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyOTMzNjEsImV4cCI6MjEwMzg2OTM2MX0.IokLO_lwc0UcVibJI4tCpsbreaKXQS1V1O-izSbCGgg";
+const BLOXBAZZAR_LISTINGS_URL = "https://bloxbazzar.com/api/get_items.php?search=&limit=1000&offset=0&sort=rap_desc";
+const RBXSWIFT_LISTINGS_URL = "https://rbxswift.com/api/listings?sort=price_desc";
 let externalPricesWarmupRunning = false;
 let externalPricesScanPromise = null;
 
@@ -2050,32 +2125,163 @@ async function fetchLimitedsMarketOffers() {
   }
 }
 
-// Runs both marketplace fetches (independent of each other, so in
-// parallel), then matches every offer against our own catalog: Adurite by
-// assetId (exact), LimitedsMarket by lowercased item name (its listings
-// don't expose an assetId at all). Returns assetId -> { bestPrice,
-// bestSource, aduritePrice, limitedsMarketPrice }.
+// Gamixie's whole catalog is one server-rendered page (no pagination seen -
+// "All Roblox Limiteds for Sale" lists every listing at once). Cards are
+// clean and don't need locale-prefix stripping like LimitedsMarket's do:
+//   <a class="item-card mini" href="/item/...">
+//     <h3>Item Name</h3>
+//     <div class="item-card-price"><strong>$123.45</strong>...
+// No Roblox assetId in the markup, so this matches by name like
+// LimitedsMarket does.
+function parseGamixieHtml(html) {
+  const offers = new Map(); // lowercased item name -> price (USD)
+  const cardRe = /<h3>([^<]*)<\/h3>\s*<div class="item-card-price"><strong>\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)<\/strong>/g;
+  let m;
+  while ((m = cardRe.exec(html))) {
+    const name = m[1].trim();
+    const price = parseFloat(m[2].replace(/,/g, ""));
+    if (!name || !(price > 0)) continue;
+    const key = name.toLowerCase();
+    const prev = offers.get(key);
+    if (prev === undefined || price < prev) offers.set(key, price);
+  }
+  return offers;
+}
+
+async function fetchGamixieOffers() {
+  try {
+    const html = await fetchText(GAMIXIE_LIMITEDS_URL, { timeoutMs: 12000, retries: 2 });
+    return parseGamixieHtml(html);
+  } catch (e) {
+    console.warn(`Gamixie offers fetch failed: ${e.message}`);
+    return new Map();
+  }
+}
+
+// RBLXVault exposes its own product catalog straight from Supabase's public
+// REST API (see the constants above for why this is fine to call directly).
+// Unlike every other source here, it gives an exact roblox_asset_id per
+// listing - the same reliable exact-match this feature already uses for
+// Adurite, and a nice cross-check for it.
+async function fetchRblxVaultOffers() {
+  const offers = new Map(); // assetId -> price (USD)
+  try {
+    const url = `${RBLXVAULT_SUPABASE_URL}?select=roblox_asset_id,rblx_vault_price,availability&category=eq.limited&limit=1000`;
+    const rows = await fetchJson(url, {
+      timeoutMs: 12000, retries: 2,
+      headers: { apikey: RBLXVAULT_SUPABASE_ANON_KEY, Authorization: `Bearer ${RBLXVAULT_SUPABASE_ANON_KEY}` },
+    });
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (row?.availability && row.availability !== "available") continue;
+        const assetId = Number(row?.roblox_asset_id);
+        const price = Number(row?.rblx_vault_price);
+        if (!(assetId > 0) || !(price > 0)) continue;
+        const prev = offers.get(assetId);
+        if (prev === undefined || price < prev) offers.set(assetId, price);
+      }
+    }
+  } catch (e) {
+    console.warn(`RBLXVault offers fetch failed: ${e.message}`);
+  }
+  return offers;
+}
+
+// BloxBazzar's own item API doesn't populate asset_id (always 0 in every
+// listing observed), so this has to match by name like LimitedsMarket and
+// Gamixie do. Names sometimes carry a stray leading space (e.g.
+// " Fiery Horns of the Netherworld") - trimmed before lowercasing.
+async function fetchBloxbazzarOffers() {
+  const offers = new Map(); // lowercased item name -> price (USD)
+  try {
+    const data = await fetchJson(BLOXBAZZAR_LISTINGS_URL, { timeoutMs: 12000, retries: 2 });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    for (const row of items) {
+      if (row?.status && row.status !== "active") continue;
+      const name = String(row?.name || "").trim();
+      const price = Number(row?.price);
+      if (!name || !(price > 0)) continue;
+      const key = name.toLowerCase();
+      const prev = offers.get(key);
+      if (prev === undefined || price < prev) offers.set(key, price);
+    }
+  } catch (e) {
+    console.warn(`BloxBazzar offers fetch failed: ${e.message}`);
+  }
+  return offers;
+}
+
+// RBXSwift's API gives an exact Roblox itemId per listing - an
+// assetId-exact match like Adurite/RBLXVault, and the strongest of the
+// sources here.
+async function fetchRbxswiftOffers() {
+  const offers = new Map(); // assetId -> price (USD)
+  try {
+    const data = await fetchJson(RBXSWIFT_LISTINGS_URL, { timeoutMs: 12000, retries: 2 });
+    const items = Array.isArray(data) ? data : [];
+    for (const row of items) {
+      if (row?.status && row.status !== "active") continue;
+      const assetId = Number(row?.itemId);
+      const price = Number(row?.price);
+      if (!(assetId > 0) || !(price > 0)) continue;
+      const prev = offers.get(assetId);
+      if (prev === undefined || price < prev) offers.set(assetId, price);
+    }
+  } catch (e) {
+    console.warn(`RBXSwift offers fetch failed: ${e.message}`);
+  }
+  return offers;
+}
+
+// Runs every marketplace fetch (independent of each other, so in parallel),
+// then matches every offer against our own catalog. Two different matching
+// strategies, because that's what each site's data actually supports:
+//   - Adurite, RBLXVault: exact Roblox assetId match (both expose one).
+//   - LimitedsMarket, Gamixie: lowercased item-name match (neither exposes
+//     an assetId in their markup).
+// Name-matching is inherently the weaker of the two - it'll miss an item if
+// a site spells/punctuates its name differently - so assetId sources are
+// preferred as the "best" price whenever both agree closely, but the raw
+// minimum is what's actually shown, same as a real price-comparison site.
 async function scanExternalMarketplacePrices() {
   if (externalPricesScanPromise) return externalPricesScanPromise;
   externalPricesScanPromise = (async () => {
     try {
-      const [catalog, aduriteOffers, limitedsMarketOffers] = await Promise.all([
+      const [catalog, aduriteOffers, limitedsMarketOffers, gamixieOffers, rblxVaultOffers, bloxbazzarOffers, rbxswiftOffers] = await Promise.all([
         getRobloxMarketIndex(),
         fetchAduriteOffers(),
         fetchLimitedsMarketOffers(),
+        fetchGamixieOffers(),
+        fetchRblxVaultOffers(),
+        fetchBloxbazzarOffers(),
+        fetchRbxswiftOffers(),
       ]);
       const byAssetId = new Map();
       for (const item of catalog) {
-        const aduritePrice = aduriteOffers.get(item.assetId) ?? null;
-        const limitedsMarketPrice = limitedsMarketOffers.get(item.name.toLowerCase()) ?? null;
-        if (aduritePrice === null && limitedsMarketPrice === null) continue;
-        let bestPrice, bestSource;
-        if (aduritePrice !== null && (limitedsMarketPrice === null || aduritePrice <= limitedsMarketPrice)) {
-          bestPrice = aduritePrice; bestSource = "Adurite";
-        } else {
-          bestPrice = limitedsMarketPrice; bestSource = "LimitedsMarket";
+        const nameKey = item.name.toLowerCase();
+        const prices = {
+          Adurite: aduriteOffers.get(item.assetId) ?? null,
+          LimitedsMarket: limitedsMarketOffers.get(nameKey) ?? null,
+          Gamixie: gamixieOffers.get(nameKey) ?? null,
+          RBLXVault: rblxVaultOffers.get(item.assetId) ?? null,
+          BloxBazzar: bloxbazzarOffers.get(nameKey) ?? null,
+          RBXSwift: rbxswiftOffers.get(item.assetId) ?? null,
+        };
+        let bestPrice = null, bestSource = null;
+        for (const [source, price] of Object.entries(prices)) {
+          if (price === null) continue;
+          if (bestPrice === null || price < bestPrice) { bestPrice = price; bestSource = source; }
         }
-        byAssetId.set(item.assetId, { bestPrice, bestSource, aduritePrice, limitedsMarketPrice });
+        if (bestPrice === null) continue;
+        byAssetId.set(item.assetId, {
+          bestPrice, bestSource,
+          aduritePrice: prices.Adurite,
+          limitedsMarketPrice: prices.LimitedsMarket,
+          gamixiePrice: prices.Gamixie,
+          rblxVaultPrice: prices.RBLXVault,
+          bloxbazzarPrice: prices.BloxBazzar,
+          rbxswiftPrice: prices.RBXSwift,
+        });
       }
       return byAssetId;
     } finally {
@@ -2610,6 +2816,10 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       item.externalBestSource = ext?.bestSource ?? null;
       item.aduritePriceUsd = ext?.aduritePrice ?? null;
       item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
+      item.gamixiePriceUsd = ext?.gamixiePrice ?? null;
+      item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
+      item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
+      item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
     }
   }
 
@@ -2777,6 +2987,10 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       item.externalBestSource = ext?.bestSource ?? null;
       item.aduritePriceUsd = ext?.aduritePrice ?? null;
       item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
+      item.gamixiePriceUsd = ext?.gamixiePrice ?? null;
+      item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
+      item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
+      item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
     }
 
     // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
