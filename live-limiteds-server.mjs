@@ -256,6 +256,35 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   .view-tab.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .card-stats .stat-row.market-price .v { color: var(--accent); }
 
+  .marketplace-prices {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .marketplace-prices .mp-title {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-2);
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .mp-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 13px;
+  }
+  .mp-row .mp-name { color: var(--muted); }
+  .mp-row .mp-price { font-weight: 700; color: var(--text); }
+  .mp-row .mp-price.na { color: var(--muted-2); font-weight: 500; }
+  .mp-row.best { color: var(--accent); }
+  .mp-row.best .mp-name, .mp-row.best .mp-price { color: var(--accent); }
+
   .range-row { display: flex; align-items: center; gap: 6px; }
   .range-sep { color: var(--muted-2); font-size: 12px; }
   .range-input {
@@ -1076,8 +1105,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         modalStatHtml("Available", "…") +
         modalStatHtml("Total copies", "…") +
         modalStatHtml("Creator", "…") +
-        modalStatHtml("Best Real-Money Price", "…") +
       '</div>' +
+      '<div class="marketplace-prices" id="marketplace-prices"><div class="mp-title">Real-Money Prices</div><div class="mp-row"><span class="mp-name">Loading…</span></div></div>' +
       '<div class="chart-wrap">' +
         '<div class="chart-head"><div class="chart-caption" id="chart-caption">Loading history…</div>' +
         '<div class="range-pills" id="range-pills"></div></div>' +
@@ -1092,6 +1121,40 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 
   function modalStatHtml(k, v, cls) {
     return '<div class="modal-stat"><span class="k">' + k + '</span><span class="v tabular' + (cls ? " " + cls : "") + '">' + v + "</span></div>";
+  }
+
+  // Every marketplace this tracker checks, listed every time - not just
+  // whichever one happens to be cheapest. Missing sources still show up as
+  // "Not listed" so it's clear which sites were actually checked.
+  var MARKETPLACE_SOURCES = [
+    { key: "rbxswiftPriceUsd", label: "RBXSwift" },
+    { key: "rblxVaultPriceUsd", label: "RBLXVault" },
+    { key: "aduritePriceUsd", label: "Adurite" },
+    { key: "bloxbazzarPriceUsd", label: "BloxBazzar" },
+    { key: "gamixiePriceUsd", label: "Gamixie" },
+    { key: "limitedsMarketPriceUsd", label: "LimitedsMarket" },
+  ];
+  function marketplacePricesHtml(data) {
+    var rows = MARKETPLACE_SOURCES.map(function (s) {
+      return { label: s.label, price: data[s.key] || null };
+    });
+    // Cheapest first; sources with no listing sink to the bottom instead of
+    // tying at the top.
+    rows.sort(function (a, b) {
+      if (a.price === null && b.price === null) return 0;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return a.price - b.price;
+    });
+    var html = '<div class="mp-title">Real-Money Prices</div>';
+    html += rows.map(function (r, i) {
+      var isBest = r.price !== null && i === 0;
+      return '<div class="mp-row' + (isBest ? " best" : "") + '">' +
+        '<span class="mp-name">' + escapeHtml(r.label) + (isBest ? " ★" : "") + '</span>' +
+        '<span class="mp-price tabular' + (r.price === null ? " na" : "") + '">' + (r.price !== null ? fmtUsd(r.price) : "Not listed") + '</span>' +
+      '</div>';
+    }).join("");
+    return html;
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -1163,9 +1226,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         modalStatHtml("Sales (" + rangeLabel(activeChartRange) + ")", salesForRange > 0 ? fmtNum(salesForRange) : "—") +
         modalStatHtml("Available", fmtNum(data.availableCopies)) +
         modalStatHtml("Total copies", fmtNum(data.totalCopies)) +
-        modalStatHtml("Creator", data.creatorName || "Roblox") +
-        modalStatHtml("Best Real-Money Price", data.externalBestPrice ? (fmtUsd(data.externalBestPrice) + " (" + data.externalBestSource + ")") : "Not listed");
+        modalStatHtml("Creator", data.creatorName || "Roblox");
     }
+    var mpWrap = els.modalBody.querySelector("#marketplace-prices");
+    if (mpWrap) mpWrap.innerHTML = marketplacePricesHtml(data);
     // re-highlight active pill (skeleton pills persist across re-renders)
     document.querySelectorAll("#range-pills .rp").forEach(function (b, i) {
       b.classList.toggle("active", RANGES[i] === activeChartRange);
