@@ -576,6 +576,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     { key: "overpriced_desc", label: "Overpriced" },
     { key: "overpriced_sales_desc", label: "Overpriced (Most Sales)" },
     { key: "rap_above_value_desc", label: "RAP > Value" },
+    { key: "external_price_asc", label: "Best Real-Money Price" },
     { key: "changes", label: "Changes" },
     { key: "sales", label: "Sales" },
   ];
@@ -647,6 +648,11 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     v = Number(v);
     if (v === null || v === undefined || !isFinite(v)) return "N/A";
     return Math.abs(v).toFixed(1) + "%";
+  }
+  function fmtUsd(v) {
+    v = Number(v);
+    if (v === null || v === undefined || !isFinite(v) || v <= 0) return "N/A";
+    return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function thumbUrl(item) {
     // The backend resolves this via Roblox's real thumbnail API and caches
@@ -916,6 +922,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       if (rv === null || rv === undefined) return { label: "RAP vs Value", text: "N/A", cls: "" };
       return { label: "RAP vs Value", text: fmtPercent(rv), cls: rv >= 0 ? "pos" : "neg" };
     }
+    if (state.sortKey === "external_price_asc") {
+      if (!item.externalBestPrice) return { label: "Best Price", text: "Not listed", cls: "" };
+      return { label: "Best Price", text: fmtUsd(item.externalBestPrice) + " · " + item.externalBestSource, cls: "pos" };
+    }
     var c24 = item.change24h;
     if (c24 === null || c24 === undefined) return null;
     return { label: "Change 24h", text: fmtPercent(c24), cls: Number(c24) > 0 ? "pos" : (Number(c24) < 0 ? "neg" : "") };
@@ -1021,6 +1031,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         modalStatHtml("Available", "…") +
         modalStatHtml("Total copies", "…") +
         modalStatHtml("Creator", "…") +
+        modalStatHtml("Best Real-Money Price", "…") +
       '</div>' +
       '<div class="chart-wrap">' +
         '<div class="chart-head"><div class="chart-caption" id="chart-caption">Loading history…</div>' +
@@ -1107,7 +1118,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
         modalStatHtml("Sales (" + rangeLabel(activeChartRange) + ")", salesForRange > 0 ? fmtNum(salesForRange) : "—") +
         modalStatHtml("Available", fmtNum(data.availableCopies)) +
         modalStatHtml("Total copies", fmtNum(data.totalCopies)) +
-        modalStatHtml("Creator", data.creatorName || "Roblox");
+        modalStatHtml("Creator", data.creatorName || "Roblox") +
+        modalStatHtml("Best Real-Money Price", data.externalBestPrice ? (fmtUsd(data.externalBestPrice) + " (" + data.externalBestSource + ")") : "Not listed");
     }
     // re-highlight active pill (skeleton pills persist across re-renders)
     document.querySelectorAll("#range-pills .rp").forEach(function (b, i) {
@@ -1383,6 +1395,11 @@ const portfolioCache = new Map();
 // reused across every page/cursor/filter combination for CACHE_TTL_MS,
 // instead of being recomputed per request like the old per-request scan was.
 const salesActivityCache = new Map(); // key: days -> { fetchedAt, map: Map<assetId, salesFields> }
+// Best real-money price for each item across third-party marketplaces
+// (Adurite, LimitedsMarket, ...). Same shape as salesActivityCache: one
+// shared cache, refreshed in the background so a page load never blocks on
+// a live fetch to an external site.
+const externalPricesCache = { fetchedAt: 0, byAssetId: new Map() };
 let robloxCsrfToken = "";
 let snapshotRunning = false;
 let memorySnapshots = [];
@@ -1924,6 +1941,178 @@ async function getSalesMetricsMap(days) {
   return cached ? cached.map : new Map();
 }
 
+// ==== External marketplace prices (Adurite, LimitedsMarket, ...) ====
+// Read-only price comparison: for every tracked limited, show the cheapest
+// real-money price found across third-party marketplaces, alongside
+// Roblox's own resale price. No accounts, no automation of anyone's Roblox
+// session - this only ever reads each site's own public listings.
+const EXTERNAL_PRICES_CACHE_TTL_MS = Number(process.env.EXTERNAL_PRICES_CACHE_TTL_MS || 20 * 60 * 1000);
+const ADURITE_MARKET_URL = "https://adurite.com/api/market/roblox";
+const LIMITEDSMARKET_URL = "https://limitedsmarket.com/market";
+let externalPricesWarmupRunning = false;
+let externalPricesScanPromise = null;
+
+// fetchJson always parses the response as JSON - LimitedsMarket has no JSON
+// API (it's a server-rendered Next.js page), so this is a thin sibling that
+// returns the raw HTML text instead.
+async function fetchText(url, options = {}) {
+  const retries = options.retries ?? 2;
+  const timeoutMs = options.timeoutMs ?? 8000;
+  let response;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { Accept: "text/html", "User-Agent": "LimitedsLiveMarketViewer/1.0" },
+      });
+    } catch (error) {
+      throw new Error(`Network error for ${url}: ${error.cause?.message || error.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (response.status !== 429) break;
+    await sleep(400 + attempt * 500);
+  }
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
+  return response.text();
+}
+
+// Adurite's public market API returns a dict of listings keyed by internal
+// listing id, not by item - the same limited is very often listed by
+// several different sellers at once. We only want each item's CHEAPEST
+// listing, so this groups by Roblox assetId (limited_id) and keeps the
+// minimum numeric_price seen.
+async function fetchAduriteOffers() {
+  const offers = new Map(); // assetId -> price (USD)
+  try {
+    const data = await fetchJson(ADURITE_MARKET_URL, { timeoutMs: 12000, retries: 2 });
+    const listings = data?.items?.items;
+    if (listings && typeof listings === "object") {
+      for (const key of Object.keys(listings)) {
+        const row = listings[key];
+        const assetId = Number(row?.limited_id);
+        // numeric_price is Adurite's own float field - the sibling `price`
+        // field is comma-formatted for display and not safe to parse.
+        const price = Number(row?.numeric_price);
+        if (!(assetId > 0) || !(price > 0)) continue;
+        const prev = offers.get(assetId);
+        if (prev === undefined || price < prev) offers.set(assetId, price);
+      }
+    }
+  } catch (e) {
+    console.warn(`Adurite offers fetch failed: ${e.message}`);
+  }
+  return offers;
+}
+
+// LimitedsMarket has no public API - its listings only exist in the
+// server-rendered HTML of /market. There's no Roblox assetId in the markup
+// either, so matching back to our own catalog has to go by item name
+// (case-insensitive). Cards look like:
+//   <img alt="ItemName" src="...">  ... <span class="...">$123.45</span>
+// (or "Dès $123.45" for a French-locale multi-seller "starting from" price).
+// Rather than depend on the exact div nesting (which can change), this pairs
+// each <img alt="..."> with the first "$<number>" that follows it before the
+// next <img alt="...">, which matches how the cards are laid out.
+function parseLimitedsMarketHtml(html) {
+  const offers = new Map(); // lowercased item name -> price (USD)
+  const altRe = /<img[^>]*\balt="([^"]*)"[^>]*>/g;
+  const positions = [];
+  let m;
+  while ((m = altRe.exec(html))) positions.push({ name: m[1], index: m.index });
+  for (let i = 0; i < positions.length; i++) {
+    const name = (positions[i].name || "").trim();
+    if (!name) continue;
+    const start = positions[i].index;
+    const end = i + 1 < positions.length ? positions[i + 1].index : html.length;
+    const chunk = html.slice(start, Math.min(end, start + 4000));
+    const priceMatch = chunk.match(/\$\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)/);
+    if (!priceMatch) continue;
+    const price = parseFloat(priceMatch[1].replace(",", "."));
+    if (!(price > 0)) continue;
+    const key = name.toLowerCase();
+    const prev = offers.get(key);
+    if (prev === undefined || price < prev) offers.set(key, price);
+  }
+  return offers;
+}
+
+async function fetchLimitedsMarketOffers() {
+  try {
+    const html = await fetchText(LIMITEDSMARKET_URL, { timeoutMs: 12000, retries: 2 });
+    return parseLimitedsMarketHtml(html);
+  } catch (e) {
+    console.warn(`LimitedsMarket offers fetch failed: ${e.message}`);
+    return new Map();
+  }
+}
+
+// Runs both marketplace fetches (independent of each other, so in
+// parallel), then matches every offer against our own catalog: Adurite by
+// assetId (exact), LimitedsMarket by lowercased item name (its listings
+// don't expose an assetId at all). Returns assetId -> { bestPrice,
+// bestSource, aduritePrice, limitedsMarketPrice }.
+async function scanExternalMarketplacePrices() {
+  if (externalPricesScanPromise) return externalPricesScanPromise;
+  externalPricesScanPromise = (async () => {
+    try {
+      const [catalog, aduriteOffers, limitedsMarketOffers] = await Promise.all([
+        getRobloxMarketIndex(),
+        fetchAduriteOffers(),
+        fetchLimitedsMarketOffers(),
+      ]);
+      const byAssetId = new Map();
+      for (const item of catalog) {
+        const aduritePrice = aduriteOffers.get(item.assetId) ?? null;
+        const limitedsMarketPrice = limitedsMarketOffers.get(item.name.toLowerCase()) ?? null;
+        if (aduritePrice === null && limitedsMarketPrice === null) continue;
+        let bestPrice, bestSource;
+        if (aduritePrice !== null && (limitedsMarketPrice === null || aduritePrice <= limitedsMarketPrice)) {
+          bestPrice = aduritePrice; bestSource = "Adurite";
+        } else {
+          bestPrice = limitedsMarketPrice; bestSource = "LimitedsMarket";
+        }
+        byAssetId.set(item.assetId, { bestPrice, bestSource, aduritePrice, limitedsMarketPrice });
+      }
+      return byAssetId;
+    } finally {
+      externalPricesScanPromise = null;
+    }
+  })();
+  return externalPricesScanPromise;
+}
+
+async function warmExternalPrices() {
+  if (externalPricesWarmupRunning) return;
+  externalPricesWarmupRunning = true;
+  try {
+    console.log("External marketplace price warm-up started.");
+    const byAssetId = await scanExternalMarketplacePrices();
+    externalPricesCache.fetchedAt = Date.now();
+    externalPricesCache.byAssetId = byAssetId;
+    console.log(`External marketplace price warm-up done (${byAssetId.size} items matched).`);
+  } catch (e) {
+    console.warn(`External marketplace price warm-up failed: ${e.message} - keeping previous cache.`);
+  } finally {
+    externalPricesWarmupRunning = false;
+  }
+}
+
+// Same non-blocking pattern as getSalesMetricsMap: never make a visitor's
+// request wait on a live fetch to Adurite/LimitedsMarket - serve whatever is
+// cached (possibly nothing, right after a cold start) and kick off a
+// background refresh if the cache is stale or empty.
+async function getExternalPricesMap() {
+  if (Date.now() - externalPricesCache.fetchedAt < EXTERNAL_PRICES_CACHE_TTL_MS && externalPricesCache.byAssetId.size > 0) {
+    return externalPricesCache.byAssetId;
+  }
+  warmExternalPrices().catch(() => {});
+  return externalPricesCache.byAssetId;
+}
+
 function buildRapChangeMetrics(ownHistory, currentRap) {
   const rawHistory = ownHistory.slice(-5000);
   if (rawHistory.length < 2) return {
@@ -2410,7 +2599,32 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
     });
   }
 
-  if (sort === "price_asc") items.sort((a, b) => (a.lowestPrice || Infinity) - (b.lowestPrice || Infinity));
+  // Attach best-external-price fields to every item up front (cheap - it's
+  // just a cache lookup, the live fetches happen in the background) so any
+  // sort/filter can see them and the "external_price_asc" sort below works.
+  {
+    const externalMap = await getExternalPricesMap();
+    for (const item of items) {
+      const ext = externalMap.get(item.assetId);
+      item.externalBestPrice = ext?.bestPrice ?? null;
+      item.externalBestSource = ext?.bestSource ?? null;
+      item.aduritePriceUsd = ext?.aduritePrice ?? null;
+      item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
+    }
+  }
+
+  if (sort === "external_price_asc") {
+    // Items with no external listing at all have nothing to rank here -
+    // push them to the end instead of tying them with a legitimate $0.
+    items.sort((a, b) => {
+      const av = a.externalBestPrice, bv = b.externalBestPrice;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return av - bv;
+    });
+  }
+  else if (sort === "price_asc") items.sort((a, b) => (a.lowestPrice || Infinity) - (b.lowestPrice || Infinity));
   else if (sort === "rap_desc") items.sort((a, b) => (b.rap || 0) - (a.rap || 0));
   else if (sort === "value_desc") items.sort((a, b) => (b.value || 0) - (a.value || 0));
   else if (sort === "deal_desc") items.sort(compareDealItems);
@@ -2504,10 +2718,11 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
     // needs catalogDetails.collectibleItemId first. Running the independent
     // three in parallel is a straightforward win for how long the item modal
     // takes to open, especially on a cache-cold hit.
-    const [rolimonsItems, catalogDetails, ownHistory] = await Promise.all([
+    const [rolimonsItems, catalogDetails, ownHistory, externalMap] = await Promise.all([
       fetchRolimonsCatalog(),
       fetchCatalogDetailsBatch([assetId]).then(m => m.get(assetId) || {}),
       fetchStoredSnapshots(assetId),
+      getExternalPricesMap(),
     ]);
     const rolimonsItem = rolimonsItems.get(assetId);
 
@@ -2555,6 +2770,14 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       dealValue: calculateDealValue(rap, lowestPrice), dealPercent: calculateDealPercent(rap, lowestPrice),
       overpricedValue: calculateOverpricedValue(rap, lowestPrice), overpricedPercent: calculateOverpricedPercent(rap, lowestPrice)
     };
+
+    {
+      const ext = externalMap.get(assetId);
+      item.externalBestPrice = ext?.bestPrice ?? null;
+      item.externalBestSource = ext?.bestSource ?? null;
+      item.aduritePriceUsd = ext?.aduritePrice ?? null;
+      item.limitedsMarketPriceUsd = ext?.limitedsMarketPrice ?? null;
+    }
 
     // resaleDetails.priceDataPoints is Roblox's OWN historical record for this
     // item - typically stretching back over its whole resale life, not just
@@ -2651,6 +2874,7 @@ async function runSnapshot() {
       marketIndexCache.set("roblox", { items, cachedAt: Date.now() });
       pageCache.clear();
       warmSalesMetrics().catch(e => console.error(`Sales warm-up error: ${e.message}`));
+      warmExternalPrices().catch(e => console.error(`External price warm-up error: ${e.message}`));
     }
     // `rap` is a NOT NULL column in both tables. A handful of items (very
     // rare, brand-new/untraded ones) still come back with no rap at all even
