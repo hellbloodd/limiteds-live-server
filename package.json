@@ -8,8 +8,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "stripe": "^17.7.0"
   }
 }
