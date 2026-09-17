@@ -761,6 +761,14 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     if (v === null || v === undefined || !isFinite(v) || v <= 0) return "N/A";
     return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  function fmtRate(v) {
+    v = Number(v);
+    if (v === null || v === undefined || !isFinite(v) || v <= 0) return "N/A";
+    // Rate = dollars per 1000 RAP - the RAP-trading community's own unit for
+    // a robux-for-cash deal (rate 1 = $1 buys 1000 RAP; rate 3 = $3 buys the
+    // same 1000 RAP, three times worse). Lower is always the better deal.
+    return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " rate";
+  }
   function thumbUrl(item) {
     // The backend resolves this via Roblox's real thumbnail API and caches
     // it (item.thumbnailUrl, a hotlinkable rbxcdn.com URL) - the old trick of
@@ -1037,13 +1045,13 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       return { label: "Best Price", text: fmtUsd(item.externalBestPrice) + " · " + item.externalBestSource, cls: "pos" };
     }
     if (state.sortKey === "external_deal_desc") {
-      if (item.externalDealPercent === null || item.externalDealPercent === undefined) {
-        return { label: "Deal vs RAP", text: "Not listed", cls: "" };
+      if (item.externalRate === null || item.externalRate === undefined) {
+        return { label: "Rate", text: "Not listed", cls: "" };
       }
       return {
-        label: "Deal vs RAP",
-        text: fmtPercent(item.externalDealPercent) + (item.externalBestSource ? " · " + item.externalBestSource : ""),
-        cls: item.externalDealPercent >= 0 ? "pos" : "neg",
+        label: "Rate",
+        text: fmtRate(item.externalRate) + (item.externalBestSource ? " · " + item.externalBestSource : ""),
+        cls: "pos",
       };
     }
     if (state.sortKey === "price_spread_desc") {
@@ -2000,6 +2008,20 @@ function calculateDealPercent(rap, price) {
   return Math.round((dv / rap) * 10000) / 100;
 }
 
+// "Rate" is the RAP-trading community's own unit for a robux-for-cash deal:
+// how many real dollars it costs to buy 1000 RAP worth of item. Rate 1 means
+// $1 buys 1000 RAP (a great deal); rate 3 means the same 1000 RAP costs $3
+// (three times worse) - lower rate is always the better deal. This is the
+// right way to compare an item's RAP (robux) against a marketplace's price
+// (real USD) - straight subtraction/percent of the two (as calculateDealValue
+// does for the Roblox-vs-Roblox "Best Deals" sort) mixes units when one side
+// is dollars, which is exactly why the marketplace "Best Deals" sort uses
+// this instead.
+function calculateRate(rap, priceUsd) {
+  if (!rap || !priceUsd || rap <= 0 || priceUsd <= 0) return null;
+  return Math.round((priceUsd / rap) * 1000 * 100) / 100;
+}
+
 function calculateOverpricedValue(rap, price) {
   if (!rap || !price || rap <= 0 || price <= rap) return null;
   return Math.round(price - rap);
@@ -2533,7 +2555,7 @@ async function scanExternalMarketplacePrices() {
             // No RAP for a store-only item, so the RAP-based "Best Deals"
             // metric can't apply here - but the cross-store spread ("Profit")
             // still can, since it only needs two store prices to compare.
-            externalDealValue: null, externalDealPercent: null,
+            externalRate: null, externalDealValue: null, externalDealPercent: null,
             priceSpreadValue: spread.spreadValue, priceSpreadPercent: spread.spreadPercent,
             priceSpreadLow: spread.spreadLow, priceSpreadLowSource: spread.spreadLowSource,
             priceSpreadHigh: spread.spreadHigh, priceSpreadHighSource: spread.spreadHighSource,
@@ -3158,11 +3180,11 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
       item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
       item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
-      // "Best Deals" for the Marketplaces view: same RAP-vs-price gap the
-      // Tracker's own Best Deals sort uses, but against the cheapest
-      // real-money price found across stores instead of Roblox's own resale
-      // price - the items where what it's really worth (RAP) is far above
-      // what you can actually buy it for right now.
+      // "Best Deals" for the Marketplaces view: the item's rate (how many
+      // real dollars it costs to buy 1000 RAP worth of it, at the cheapest
+      // store) - lower rate is the better deal. See calculateRate() for why
+      // this replaces a plain RAP-vs-price subtraction once one side is USD.
+      item.externalRate = calculateRate(item.rap, item.externalBestPrice);
       item.externalDealValue = calculateDealValue(item.rap, item.externalBestPrice);
       item.externalDealPercent = calculateDealPercent(item.rap, item.externalBestPrice);
       // "Profit": the spread between the cheapest and priciest listing for
@@ -3209,15 +3231,17 @@ async function handleLimitedsRequest(req, res, parsedUrl) {
   else if (sort === "deal_desc") items.sort(compareDealItems);
   else if (sort === "overpriced_desc") items.sort(compareOverpricedItems);
   else if (sort === "external_deal_desc") {
-    // "Best Deals" against the marketplace price instead of Roblox's own -
-    // items with no deal at all (no external listing, or externally priced
-    // at/above RAP) sink to the end instead of tying at a false 0%.
+    // "Best Deals" against the marketplace price, ranked by rate ($ per 1000
+    // RAP - see calculateRate()) instead of a plain RAP-vs-price gap, since
+    // one side of that gap is USD. Lower rate is the better deal, so this
+    // sorts ascending; items with no rate at all (no external listing, or no
+    // RAP to rate against) sink to the end instead of tying at a false 0.
     items.sort((a, b) => {
-      const av = a.externalDealPercent, bv = b.externalDealPercent;
+      const av = a.externalRate, bv = b.externalRate;
       if (av === null && bv === null) return 0;
       if (av === null) return 1;
       if (bv === null) return -1;
-      return (bv - av) || ((b.externalDealValue || 0) - (a.externalDealValue || 0));
+      return av - bv;
     });
   }
   else if (sort === "price_spread_desc") {
@@ -3386,6 +3410,7 @@ async function handleItemDetailsRequest(req, res, parsedUrl) {
       item.rblxVaultPriceUsd = ext?.rblxVaultPrice ?? null;
       item.bloxbazzarPriceUsd = ext?.bloxbazzarPrice ?? null;
       item.rbxswiftPriceUsd = ext?.rbxswiftPrice ?? null;
+      item.externalRate = calculateRate(rap, item.externalBestPrice);
       item.externalDealValue = calculateDealValue(rap, item.externalBestPrice);
       item.externalDealPercent = calculateDealPercent(rap, item.externalBestPrice);
       const spread = computePriceSpread({
