@@ -424,29 +424,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     background: rgba(234, 88, 12, 0.16);
     color: #f97316;
   }
-  .bb-badge-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 10px 12px 0;
-  }
-  .bb-badge {
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--muted);
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .bb-rarity-secret { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
-  .bb-rarity-limited { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
-  .bb-rarity-unique { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
-  .bb-rarity-normal { background: var(--surface-2); color: var(--muted); }
-  .bb-badge-boosted { background: rgba(74, 222, 128, 0.18); color: #4ade80; }
-  .bb-badge-nuked { background: rgba(248, 113, 113, 0.18); color: #f87171; }
-  .bb-card .card-stats { padding-top: 10px; }
   .card-thumb {
     width: 100%;
     aspect-ratio: 1;
@@ -618,7 +595,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 <div class="view-tabs" id="view-tabs">
   <button class="view-tab" id="view-tab-tracker">Tracker</button>
   <button class="view-tab" id="view-tab-marketplace">Marketplaces</button>
-  <button class="view-tab" id="view-tab-bladeball">Blade Ball</button>
   <div class="prices-freshness" id="prices-freshness" hidden>
     <span id="prices-freshness-text"></span>
     <button id="refresh-prices-btn" type="button">Refresh now</button>
@@ -721,21 +697,12 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     { key: "changes", label: "Changes" },
     { key: "sales", label: "Sales" },
   ];
-  // Blade Ball is a different game/economy entirely (bbvalues.uk's own Trade
-  // Tokens, not Roblox limiteds) - fresh, simpler sort set rather than
-  // reusing the tracker's Roblox-price-based options, none of which apply.
-  var BLADEBALL_SORTS = [
-    { key: "rap_desc", label: "Highest RAP" },
-    { key: "rap_asc", label: "Lowest RAP" },
-    { key: "eldorado_desc", label: "Profit (Eldorado $)" },
-  ];
   var PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"];
   var PERIOD_LABEL = { "1h": "1h", "24h": "24h", "7d": "7d", "30d": "30d", "1y": "1y", all: "All" };
 
   var state = {
     view: "tracker", // tracker | marketplace
     pricesUpdatedAt: null,
-    eldoradoRatePerThousandTokens: null,
     minSalesPerDay: null,
     minRapVsValue: null,
     maxRapVsValue: null,
@@ -760,7 +727,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   var els = {
     viewTabTracker: document.getElementById("view-tab-tracker"),
     viewTabMarketplace: document.getElementById("view-tab-marketplace"),
-    viewTabBladeBall: document.getElementById("view-tab-bladeball"),
     trackerFilters: document.getElementById("tracker-filters"),
     pricesFreshness: document.getElementById("prices-freshness"),
     pricesFreshnessText: document.getElementById("prices-freshness-text"),
@@ -846,7 +812,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 
   // ---------- Rendering: controls ----------
   function activeSorts() {
-    return state.view === "bladeball" ? BLADEBALL_SORTS : SORTS;
+    return SORTS;
   }
   function renderSortRow() {
     els.sortRow.innerHTML = "";
@@ -978,29 +944,22 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     els.loadMore.textContent = "Loading…";
     els.loadMore.disabled = true;
 
-    var url = state.view === "bladeball"
-      ? buildUrl("/api/bladeball", {
-          sort: remoteSort(),
-          keyword: state.search,
-          cursor: state.cursor,
-          limit: PAGE_LIMIT,
-        })
-      : buildUrl("/api/limiteds", {
-          view: state.view === "marketplace" ? "marketplace" : "tracker",
-          sort: remoteSort(),
-          keyword: state.search,
-          cursor: state.cursor,
-          limit: PAGE_LIMIT,
-          minRap: state.minRap,
-          maxRap: state.maxRap,
-          minPrice: state.minPrice,
-          maxPrice: state.maxPrice,
-          minSalesPerDay: state.minSalesPerDay,
-          minRapVsValue: state.minRapVsValue,
-          maxRapVsValue: state.maxRapVsValue,
-          minPriceVsRap: state.minPriceVsRap,
-          maxPriceVsRap: state.maxPriceVsRap,
-        });
+    var url = buildUrl("/api/limiteds", {
+      view: state.view === "marketplace" ? "marketplace" : "tracker",
+      sort: remoteSort(),
+      keyword: state.search,
+      cursor: state.cursor,
+      limit: PAGE_LIMIT,
+      minRap: state.minRap,
+      maxRap: state.maxRap,
+      minPrice: state.minPrice,
+      maxPrice: state.maxPrice,
+      minSalesPerDay: state.minSalesPerDay,
+      minRapVsValue: state.minRapVsValue,
+      maxRapVsValue: state.maxRapVsValue,
+      minPriceVsRap: state.minPriceVsRap,
+      maxPriceVsRap: state.maxPriceVsRap,
+    });
 
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       state.loading = false;
@@ -1011,7 +970,6 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       }
       setLive(true, "updated " + new Date().toLocaleTimeString());
       state.pricesUpdatedAt = data.pricesUpdatedAt || null;
-      state.eldoradoRatePerThousandTokens = data.eldoradoRatePerThousandTokens || null;
       renderPricesFreshness();
       var newItems = data.items || [];
       state.cursor = data.nextPageCursor || "";
@@ -1031,13 +989,12 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
       els.loadMore.disabled = false;
       els.loadMore.textContent = "Load more";
 
-      var noun = state.view === "bladeball" ? "items" : "limiteds";
       if (state.items.length === 0) {
         setStatus(isChangeSort()
           ? "No limiteds with a " + state.changeMode + " right now for this period."
-          : (state.search ? "No " + noun + " found for \\"" + state.search + "\\"." : "No " + noun + " found."));
+          : (state.search ? "No limiteds found for \\"" + state.search + "\\"." : "No limiteds found."));
       } else {
-        setStatus(state.items.length + " " + noun + " loaded");
+        setStatus(state.items.length + " limiteds loaded");
       }
     }).catch(function () {
       state.loading = false;
@@ -1138,71 +1095,10 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
     els.grid.innerHTML = "";
     if (state.items.length === 0) return;
     var frag = document.createDocumentFragment();
-    var builder = state.view === "bladeball" ? buildBladeBallCard : buildCard;
     state.items.forEach(function (item) {
-      frag.appendChild(builder(item));
+      frag.appendChild(buildCard(item));
     });
     els.grid.appendChild(frag);
-  }
-
-  // Blade Ball items don't come from Roblox's catalog at all (no assetId, no
-  // rbxcdn.com thumbnail, no Roblox resale price) - a dedicated, simpler card
-  // instead of stretching the Roblox-limiteds card to fit a shape it was
-  // never built for.
-  var BLADEBALL_RARITY_CLASS = {
-    Secret: "bb-rarity-secret", Limited: "bb-rarity-limited", Unique: "bb-rarity-unique", Normal: "bb-rarity-normal",
-  };
-  function buildBladeBallCard(item) {
-    var card = document.createElement("div");
-    card.className = "card bb-card";
-
-    var title = document.createElement("div");
-    title.className = "card-title";
-    title.textContent = item.name;
-    card.appendChild(title);
-
-    var badgeRow = document.createElement("div");
-    badgeRow.className = "bb-badge-row";
-    var catBadge = document.createElement("span");
-    catBadge.className = "bb-badge";
-    catBadge.textContent = item.category;
-    badgeRow.appendChild(catBadge);
-    if (item.rarity) {
-      var rarityBadge = document.createElement("span");
-      rarityBadge.className = "bb-badge " + (BLADEBALL_RARITY_CLASS[item.rarity] || "");
-      rarityBadge.textContent = item.rarity;
-      badgeRow.appendChild(rarityBadge);
-    }
-    if (item.status === "boosted") {
-      var boostedBadge = document.createElement("span");
-      boostedBadge.className = "bb-badge bb-badge-boosted";
-      boostedBadge.textContent = "Boosted";
-      badgeRow.appendChild(boostedBadge);
-    } else if (item.status === "nuked") {
-      var nukedBadge = document.createElement("span");
-      nukedBadge.className = "bb-badge bb-badge-nuked";
-      nukedBadge.textContent = "Nuked";
-      badgeRow.appendChild(nukedBadge);
-    }
-    card.appendChild(badgeRow);
-
-    var stats = document.createElement("div");
-    stats.className = "card-stats";
-    stats.appendChild(statRow("RAP", fmtNum(item.rap) + " tokens"));
-    stats.appendChild(statRow("Value", fmtNum(item.value) + " tokens"));
-    if (item.change24h !== null && item.change24h !== undefined) {
-      var chRow = statRow("Change 24h", fmtPercent(item.change24h), Number(item.change24h) > 0 ? "pos" : (Number(item.change24h) < 0 ? "neg" : ""));
-      stats.appendChild(chRow);
-    }
-    if (state.sortKey === "eldorado_desc") {
-      var evRow = statRow("Value (Eldorado $)", item.eldoradoValueUsd !== null && item.eldoradoValueUsd !== undefined ? fmtUsd(item.eldoradoValueUsd) : "N/A", "pos");
-      evRow.className += " metric";
-      stats.appendChild(evRow);
-    } else if (item.eldoradoValueUsd !== null && item.eldoradoValueUsd !== undefined) {
-      stats.appendChild(statRow("≈ Real $ (Eldorado)", fmtUsd(item.eldoradoValueUsd)));
-    }
-    card.appendChild(stats);
-    return card;
   }
 
   function buildCard(item) {
@@ -1670,29 +1566,15 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   // regardless of which sort is active.
   function setView(view) {
     var changed = state.view !== view;
-    var wasBladeBall = state.view === "bladeball";
     state.view = view;
     els.viewTabTracker.classList.toggle("active", view === "tracker");
     els.viewTabMarketplace.classList.toggle("active", view === "marketplace");
-    els.viewTabBladeBall.classList.toggle("active", view === "bladeball");
     els.pricesFreshness.hidden = view !== "marketplace";
-    // Blade Ball has no Roblox price, RAP-vs-Value, or sales history to filter
-    // on at all - those controls (and the tracker's own sort pills) belong to
-    // the Roblox-limiteds views, not this one.
-    els.trackerFilters.hidden = view === "bladeball";
-    if (view === "bladeball" && !BLADEBALL_SORTS.some(function (s) { return s.key === state.sortKey; })) {
-      state.sortKey = "rap_desc";
-    } else if (wasBladeBall && view !== "bladeball" && !SORTS.some(function (s) { return s.key === state.sortKey; })) {
-      state.sortKey = "rap_desc";
-    }
-    renderSortRow();
-    renderPeriodGroup();
     renderPricesFreshness();
     if (changed) resetAndLoad(); else renderGrid();
   }
   els.viewTabTracker.addEventListener("click", function () { setView("tracker"); });
   els.viewTabMarketplace.addEventListener("click", function () { setView("marketplace"); });
-  els.viewTabBladeBall.addEventListener("click", function () { setView("bladeball"); });
 
   // "I want real time" - prices are cached server-side for a few minutes so
   // the tracker doesn't hammer six external sites on every page load, but
@@ -2643,208 +2525,6 @@ function computePriceSpread(prices) {
     spreadPercent: Math.round(((high - low) / low) * 10000) / 100,
     spreadLow: low, spreadLowSource: lowSource, spreadHigh: high, spreadHighSource: highSource,
   };
-}
-
-// ==== Blade Ball (bbvalues.uk values + Eldorado real-money Tokens rate) ====
-// A separate game/category entirely - Blade Ball's economy runs on its own
-// in-game currency ("Trade Tokens"), tracked by bbvalues.uk the same way
-// Rolimons tracks classic-limiteds RAP. There's no Roblox resale price here
-// (Blade Ball items aren't limiteds), so this doesn't reuse handleLimitedsRequest
-// at all - it's its own endpoint, its own cache, its own sort set.
-//
-// bbvalues.uk's whole site sits behind a Cloudflare managed challenge (visible
-// as a cdn-cgi/challenge-platform script on every page) - a real browser
-// solves it automatically and gets a session cookie, but a plain server-side
-// request never runs that JS at all, so it has nothing to present. Realistic
-// browser headers are attached below on the chance the challenge is only
-// scored on headers/TLS fingerprint for this endpoint specifically, but if
-// Render's logs show a 403/503 here the same way Adurite did, this needs the
-// same call: removed rather than escalated into JS-challenge solving, which
-// is bot-protection evasion this tracker doesn't do.
-const BBVALUES_ITEMS_URL = "https://bbvalues.uk/api/items";
-const BBVALUES_CACHE_TTL_MS = Number(process.env.BBVALUES_CACHE_TTL_MS || 5 * 60 * 1000);
-let bbvaluesWarmupRunning = false;
-let bbvaluesScanPromise = null;
-let bbvaluesCache = { fetchedAt: 0, items: [] };
-
-// Eldorado only sells Blade Ball Trade Tokens in bulk (e.g. "5000 Tokens" for
-// a flat price) - individual named items aren't listed for sale there by
-// name. So there's no per-item Eldorado price to arbitrage against; the one
-// real number it provides is a live Tokens-to-USD exchange rate (cheapest
-// active seller, per 1000 tokens), used below to convert each item's Token
-// value into what it's actually worth in real money right now.
-const ELDORADO_BLADEBALL_TOKENS_URL = "https://www.eldorado.gg/api/predefinedOffers/augmentedGame/offers?gameId=203&category=Currency&pageIndex=1&pageSize=150";
-const ELDORADO_RATE_CACHE_TTL_MS = Number(process.env.ELDORADO_RATE_CACHE_TTL_MS || 15 * 60 * 1000);
-let eldoradoRateWarmupRunning = false;
-let eldoradoRateScanPromise = null;
-let eldoradoRateCache = { fetchedAt: 0, ratePerThousandTokens: null };
-
-const BROWSER_LIKE_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-  Accept: "application/json, text/plain, */*",
-  "Accept-Language": "en-US,en;q=0.9",
-  Referer: "https://bbvalues.uk/",
-};
-
-async function scanBladeBallItems() {
-  if (bbvaluesScanPromise) return bbvaluesScanPromise;
-  bbvaluesScanPromise = (async () => {
-    try {
-      const raw = await fetchJson(BBVALUES_ITEMS_URL, { timeoutMs: 12000, retries: 2, headers: BROWSER_LIKE_HEADERS });
-      const rows = Array.isArray(raw) ? raw : [];
-      const items = [];
-      for (const row of rows) {
-        const name = String(row?.n || "").trim();
-        if (!name) continue;
-        // bbvalues shows two different numbers per item: "p" is the
-        // community/admin-set reference value, "a" is the recent average
-        // trade price - the one that actually fluctuates with real trades,
-        // exactly like Rolimons' RAP for classic limiteds. Fall back to the
-        // reference value for a brand-new item with no trade average yet.
-        const value = Number(row?.p) || 0;
-        const rap = Number(row?.a) > 0 ? Number(row.a) : value;
-        items.push({
-          id: String(row?.id || name),
-          name,
-          category: row?.c || "Item",
-          rarity: row?.r || null,
-          value,
-          rap,
-          change24h: row?.ch !== null && row?.ch !== undefined ? Number(row.ch) : null,
-          status: row?.st || "stable",
-          tag: row?.tg || null,
-          frozen: !!row?.f,
-        });
-      }
-      console.log(`Blade Ball scan raw count - bbvalues.uk: ${items.length}.`);
-      return items;
-    } finally {
-      bbvaluesScanPromise = null;
-    }
-  })();
-  return bbvaluesScanPromise;
-}
-
-async function warmBladeBallItems() {
-  if (bbvaluesWarmupRunning) return;
-  bbvaluesWarmupRunning = true;
-  try {
-    const items = await scanBladeBallItems();
-    if (items.length > 0) bbvaluesCache = { fetchedAt: Date.now(), items };
-  } catch (e) {
-    console.warn(`Blade Ball warm-up failed: ${e.message} - keeping previous cache (${bbvaluesCache.items.length} items).`);
-  } finally {
-    bbvaluesWarmupRunning = false;
-  }
-}
-
-async function getBladeBallItems() {
-  if (Date.now() - bbvaluesCache.fetchedAt < BBVALUES_CACHE_TTL_MS && bbvaluesCache.items.length > 0) {
-    return bbvaluesCache.items;
-  }
-  warmBladeBallItems().catch(() => {});
-  return bbvaluesCache.items;
-}
-
-async function scanEldoradoTokenRate() {
-  if (eldoradoRateScanPromise) return eldoradoRateScanPromise;
-  eldoradoRateScanPromise = (async () => {
-    try {
-      const data = await fetchJson(ELDORADO_BLADEBALL_TOKENS_URL, { timeoutMs: 10000, retries: 2 });
-      const results = Array.isArray(data?.results) ? data.results : [];
-      let rate = null;
-      for (const row of results) {
-        const offer = row?.offer;
-        if (!offer || offer.offerState !== "Active") continue;
-        const usd = Number(offer.pricePerUnitInUSD?.amount);
-        if (!(usd > 0)) continue;
-        // unitSystem "Unit1000" is every listing seen here - Eldorado sells
-        // this currency in blocks of 1000 tokens, so pricePerUnit is already
-        // "$ per 1000 tokens" with no conversion needed.
-        if (rate === null || usd < rate) rate = usd;
-      }
-      console.log(`Eldorado Blade Ball Tokens rate scan - ${results.length} offers, best $${rate ?? "n/a"} per 1000 tokens.`);
-      return rate;
-    } finally {
-      eldoradoRateScanPromise = null;
-    }
-  })();
-  return eldoradoRateScanPromise;
-}
-
-async function warmEldoradoTokenRate() {
-  if (eldoradoRateWarmupRunning) return;
-  eldoradoRateWarmupRunning = true;
-  try {
-    const rate = await scanEldoradoTokenRate();
-    if (rate !== null) eldoradoRateCache = { fetchedAt: Date.now(), ratePerThousandTokens: rate };
-  } catch (e) {
-    console.warn(`Eldorado rate warm-up failed: ${e.message} - keeping previous rate (${eldoradoRateCache.ratePerThousandTokens ?? "n/a"}).`);
-  } finally {
-    eldoradoRateWarmupRunning = false;
-  }
-}
-
-async function getEldoradoTokenRate() {
-  if (Date.now() - eldoradoRateCache.fetchedAt < ELDORADO_RATE_CACHE_TTL_MS && eldoradoRateCache.ratePerThousandTokens !== null) {
-    return eldoradoRateCache.ratePerThousandTokens;
-  }
-  warmEldoradoTokenRate().catch(() => {});
-  return eldoradoRateCache.ratePerThousandTokens;
-}
-
-// What this item's Token value is actually worth in real money right now,
-// at Eldorado's cheapest active Tokens rate - not an arbitrage between two
-// listed prices (Eldorado doesn't sell this item by name), just a live
-// dollar-equivalent for a value that's otherwise only meaningful in Tokens.
-function calculateEldoradoValueUsd(tokens, ratePerThousandTokens) {
-  if (!(tokens > 0) || !(ratePerThousandTokens > 0)) return null;
-  return Math.round((tokens / 1000) * ratePerThousandTokens * 100) / 100;
-}
-
-async function handleBladeBallRequest(req, res, parsedUrl) {
-  const p = parsedUrl.searchParams;
-  const sort = p.get("sort") || "rap_desc";
-  const keyword = (p.get("keyword") || "").trim();
-  const cursor = (p.get("cursor") || "").trim();
-  const limit = normalizeLimit(p.get("limit"));
-
-  const [rawItems, eldoradoRate] = await Promise.all([getBladeBallItems(), getEldoradoTokenRate()]);
-
-  let items = rawItems.map(i => ({
-    ...i,
-    eldoradoValueUsd: calculateEldoradoValueUsd(i.rap, eldoradoRate),
-  }));
-
-  if (keyword) {
-    const lk = keyword.toLowerCase();
-    items = items.filter(i => i.name.toLowerCase().includes(lk));
-  }
-
-  if (sort === "rap_asc") items.sort((a, b) => (a.rap || 0) - (b.rap || 0));
-  else if (sort === "eldorado_desc") {
-    items.sort((a, b) => {
-      const av = a.eldoradoValueUsd, bv = b.eldoradoValueUsd;
-      if (av === null && bv === null) return 0;
-      if (av === null) return 1;
-      if (bv === null) return -1;
-      return bv - av;
-    });
-  }
-  else items.sort((a, b) => (b.rap || 0) - (a.rap || 0)); // rap_desc, default
-
-  const startIdx = cursor ? parseInt(cursor, 10) || 0 : 0;
-  const page = items.slice(startIdx, startIdx + limit);
-  const nextPageCursor = startIdx + limit < items.length ? String(startIdx + limit) : "";
-
-  sendJson(res, 200, {
-    ok: true,
-    items: page,
-    nextPageCursor,
-    updatedAt: bbvaluesCache.fetchedAt ? new Date(bbvaluesCache.fetchedAt).toISOString() : null,
-    eldoradoRatePerThousandTokens: eldoradoRate,
-    eldoradoRateUpdatedAt: eldoradoRateCache.fetchedAt ? new Date(eldoradoRateCache.fetchedAt).toISOString() : null,
-  });
 }
 
 async function scanExternalMarketplacePrices() {
@@ -3887,8 +3567,6 @@ async function runSnapshot() {
   if (snapshotRunning) return;
   snapshotRunning = true;
   console.log("Snapshot started.");
-  warmBladeBallItems().catch(e => console.error(`Blade Ball warm-up error: ${e.message}`));
-  warmEldoradoTokenRate().catch(e => console.error(`Eldorado rate warm-up error: ${e.message}`));
   try {
     const items = await buildClassicLimitedsCatalog();
     if (items.length > 0) {
@@ -3938,7 +3616,6 @@ const server = http.createServer(async (req, res) => {
       return res.end(DASHBOARD_HTML);
     }
     if (parsedUrl.pathname === "/api/limiteds") return await handleLimitedsRequest(req, res, parsedUrl);
-    if (parsedUrl.pathname === "/api/bladeball") return await handleBladeBallRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/item") return await handleItemDetailsRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/portfolio") return await handlePortfolioRequest(req, res, parsedUrl);
     if (parsedUrl.pathname === "/api/trigger-snapshot" && req.method === "POST") {
