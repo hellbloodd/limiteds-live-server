@@ -81,8 +81,13 @@ function pick(block, re) {
 
 export function parseCategoryPage(html, category) {
   const items = [];
-  for (const chunk of html.split('<div class="itemcell"').slice(1)) {
-    const id = pick(chunk, /^\s*id="([^"]*)"/);
+  // Each item is an itemcolumn (carrying the numeric data-value) wrapping an itemcell.
+  for (const chunk of html.split('<div class="itemcolumn"').slice(1)) {
+    if (!chunk.includes('class="itemcell"')) continue;
+    const id = pick(chunk, /class="itemcell"\s+id="([^"]*)"/);
+    // Low tiers show a trade ratio ("x4 T1 Legendaries") instead of a number; data-value has the number.
+    const valueText = pick(chunk, /class="itemvalue[^"]*">([^<]*)</);
+    const dataValue = Number(pick(chunk, /^[^>]*data-value="([^"]*)"/));
     const name = pick(chunk, /class="itemhead">([\s\S]*?)<\/div>/);
     if (!name) continue;
     const image = pick(chunk, /<img class="itemimage" src="([^"]+)"/);
@@ -90,7 +95,8 @@ export function parseCategoryPage(html, category) {
       key: `${category}:${id || name}`,
       name,
       category,
-      value: parseNumber(pick(chunk, /class="itemvalue[^"]*">([^<]*)</)),
+      value: Number.isFinite(dataValue) && pick(chunk, /^[^>]*data-value="([^"]*)"/) !== "" ? dataValue : parseNumber(valueText),
+      valueText: /^[\d,.\s]*$/.test(valueText) ? "" : valueText,
       range: pick(chunk, /class="itemrange">([^<]*)</),
       stability: pick(chunk, /class="itemstability[^"]*">([^<]*)</),
       demand: parseNumber(pick(chunk, /Demand - <b>([^<]*)</)),
@@ -150,7 +156,7 @@ export async function fetchSvHistory(item) {
   if (!m) return [];
   return JSON.parse(m[1])
     .map((p) => [Date.parse(`${String(p.t).replace(" ", "T")}Z`), Number(p.v)])
-    .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v))
+    .filter(([t, v]) => Number.isFinite(t) && v >= 1) // below 1 = the fractional sort order used before an item had a real value
     .slice(-MM2_HISTORY_MAX_POINTS);
 }
 
@@ -158,7 +164,7 @@ export async function fetchSvHistory(item) {
 export function mergeMm2History(history, items, now) {
   let changed = false;
   for (const item of items) {
-    if (item.value == null) continue;
+    if (item.value == null || item.valueText) continue;
     const points = history[item.key] || (history[item.key] = []);
     const last = points[points.length - 1];
     if (!last || last[1] !== item.value) {
@@ -208,6 +214,27 @@ export function startMm2Tracker() {
   setInterval(tick, every).unref();
 }
 
+// History without points from before the item had a real value (fractional sort-order numbers below 1).
+function numericHistory(key) {
+  return (mm2History[key] || []).filter(([, v]) => v >= 1);
+}
+
+const MM2_PERIODS = { "24h": 1, "7d": 7, "30d": 30, "1y": 365, all: 0 };
+
+// Value change over each period, from history: compares the current value with the value
+// that was in effect at the start of the period (or the first recorded value if the item is newer).
+function periodChanges(points, current) {
+  const out = {};
+  if (!points?.length || current == null) return out;
+  const now = Date.now();
+  for (const [period, days] of Object.entries(MM2_PERIODS)) {
+    const cutoff = now - days * 864e5;
+    const base = days ? (points.filter(([t]) => t <= cutoff).pop() || points[0])[1] : points[0][1];
+    out[period] = { abs: current - base, pct: base ? Math.round((current - base) / base * 1000) / 10 : 0 };
+  }
+  return out;
+}
+
 // Last ~90 days of values, sampled to at most 30 points, for the mini chart on each card.
 function sparkline(points) {
   if (!points?.length) return [];
@@ -235,7 +262,9 @@ export async function handleMm2Request(url, res, sendJson) {
     const category = url.searchParams.get("category") || "";
     const items = mm2Items
       .filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category))
-      .map((it) => ({ ...it, spark: sparkline(mm2History[it.key]) }));
+      // Ratio-valued items ("x2 T1 Commons") have no real number to chart or compare.
+      .map((it) => (it.valueText ? { ...it, spark: [], changes: {} }
+        : { ...it, spark: sparkline(numericHistory(it.key)), changes: periodChanges(numericHistory(it.key), it.value) }));
     sendJson(res, 200, {
       updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
       source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items,
@@ -245,7 +274,8 @@ export async function handleMm2Request(url, res, sendJson) {
   }
   if (url.pathname === "/api/mm2/history") {
     const key = url.searchParams.get("key") || "";
-    sendJson(res, 200, { key, points: mm2History[key] || [] });
+    const ratio = mm2Items.find((it) => it.key === key)?.valueText;
+    sendJson(res, 200, { key, points: ratio ? [] : numericHistory(key) });
     return true;
   }
   return false;

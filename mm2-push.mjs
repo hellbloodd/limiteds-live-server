@@ -20,7 +20,8 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
-async function refreshHistories(items, history, historyFetched, now) {
+async function refreshHistories(allItems, history, historyFetched, now) {
+  const items = allItems.filter((it) => !it.valueText); // ratio-valued items have no numeric history
   const changed = items.filter((it) => {
     const points = history[it.key];
     return !points?.length || points[points.length - 1][1] !== it.value;
@@ -62,8 +63,9 @@ async function pushOnce() {
     const pulled = await refreshHistories(items, history, historyFetched, now);
     mergeMm2History(history, items, now); // ensures the current value is the latest point
     await writeMm2State({ updatedAt: new Date(now).toISOString(), items }, history, historyFetched);
-    const withHistory = items.filter((it) => historyFetched[it.key]).length;
-    console.log(`[${stamp()}] Pushed ${items.length} MM2 values (${pulled} histories updated, ${withHistory}/${items.length} have full history).`);
+    const numeric = items.filter((it) => !it.valueText);
+    const withHistory = numeric.filter((it) => historyFetched[it.key]).length;
+    console.log(`[${stamp()}] Pushed ${items.length} MM2 values (${pulled} histories updated, ${withHistory}/${numeric.length} numeric weapons have full history).`);
     return true;
   } catch (e) {
     console.error(`[${stamp()}] MM2 push failed: ${e.message}`);

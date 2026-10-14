@@ -60,6 +60,13 @@
   .range { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:3px 10px; font:700 12px inherit; cursor:pointer; }
   .range.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .card { position:relative; }
+  .val.ratio { font-size:14px; }
+  .periods { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-bottom:10px; font-size:13px; }
+  .periods button { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:4px 12px; font:700 12px "Manrope", sans-serif; cursor:pointer; }
+  .periods button.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+  .ptable { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:0 0 14px; }
+  .ptable div { background:var(--surface-2); border-radius:10px; padding:8px; text-align:center; display:flex; flex-direction:column; gap:2px; font-size:12px; }
+  .ptable b { font-size:14px; }
   svg.spark { position:absolute; right:12px; bottom:12px; width:70px; height:30px; }
   .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
   a { color:var(--accent); }
@@ -83,11 +90,15 @@
     <select id="sort">
       <option value="value">Highest value</option>
       <option value="valueAsc">Lowest value</option>
-      <option value="change">Biggest gain</option>
-      <option value="changeAsc">Biggest drop</option>
+      <option value="change">Biggest gain %</option>
+      <option value="changeAsc">Biggest drop %</option>
       <option value="demand">Demand</option>
       <option value="name">Name</option>
     </select>
+  </div>
+  <div class="periods" id="periods">
+    <span class="dim">Change:</span>
+    <button data-p="24h">24h</button><button data-p="7d" class="on">7d</button><button data-p="30d">30d</button><button data-p="1y">1y</button><button data-p="all">All</button>
   </div>
   <div class="stats" id="stats"></div>
   <div class="grid" id="grid"><div class="empty">Loading MM2 values… (the server may be waking up, give it ~30s)</div></div>
@@ -100,6 +111,13 @@
 
 <script>
 let items = [];
+let period = "7d";
+const PERIOD_LABEL = { "24h": "24h", "7d": "7 days", "30d": "30 days", "1y": "1 year", all: "all time" };
+const chg = (i) => i.changes?.[period];
+function changeText(c) {
+  if (!c || !c.abs) return "No change";
+  return `${c.abs > 0 ? "+" : ""}${fmt(c.abs)} (${c.pct > 0 ? "+" : ""}${c.pct}%)`;
+}
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => n == null ? "N/A" : n.toLocaleString();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -125,7 +143,7 @@ function render() {
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
-    change: (a, b) => v(b.change) - v(a.change), changeAsc: (a, b) => (a.change ?? 0) - (b.change ?? 0),
+    change: (a, b) => v(chg(b)?.pct) - v(chg(a)?.pct), changeAsc: (a, b) => (chg(a)?.pct ?? 0) - (chg(b)?.pct ?? 0),
     demand: (a, b) => v(b.demand) - v(a.demand), name: (a, b) => a.name.localeCompare(b.name),
   };
   list.sort(sorters[s]);
@@ -135,8 +153,8 @@ function render() {
       <div>
         <div class="name">${esc(i.name)}</div>
         <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>
-        <div class="val tabular">${fmt(i.value)}</div>
-        <div class="chg tabular ${cls(i.change)}">${i.change ? (i.change > 0 ? "+" : "") + fmt(i.change) + " (" + esc(i.changePct) + ")" : "No change"}</div>
+        <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}</div>
+        <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
       </div>
       ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">No weapons match.</div>`;
@@ -214,18 +232,26 @@ $("grid").addEventListener("click", async (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   const i = items.find((x) => x.key === card.dataset.key);
   $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(i.category)}</div>
-    <dl class="dl"><dt>Value</dt><dd class="tabular">${fmt(i.value)}</dd><dt>Range</dt><dd>${esc(i.range || "N/A")}</dd>
+    <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}</dd><dt>Range</dt><dd>${esc(i.range || "N/A")}</dd>
     <dt>Stability</dt><dd>${esc(i.stability || "N/A")}</dd><dt>Demand</dt><dd>${fmt(i.demand)}</dd>
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd><dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
-    <dt>Last change</dt><dd class="tabular ${cls(i.change)}">${i.change ? fmt(i.change) + " (" + esc(i.changePct) + ")" : "None"}</dd></dl>
+    </dl>
+    ${i.valueText ? `<p class="dim">Low-tier weapons are valued as trade ratios, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="hist" class="dim">Loading history…</div>
     <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on Supreme Values</a></p>`;
   $("dlg").showModal();
+  if (i.valueText) { $("hist").innerHTML = ""; return; }
   const h = await fetch("/api/mm2/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
   mountChart(h.points);
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+$("periods").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  period = b.dataset.p;
+  $("periods").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  render();
+});
 load();
 setInterval(load, 5 * 60 * 1000);
 </script>
