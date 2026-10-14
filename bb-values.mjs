@@ -37,18 +37,28 @@ async function bbJson(path) {
   return json;
 }
 
-// All valued items. Finisher / accessory versions of a sword are separate items ("Chroma Blade (Finisher)");
-// exact repeats (same name, category and version) keep the highest-valued one.
+// All valued items, named so every entry is unambiguous:
+// - swords sold with and without their finisher (bbvalues.uk flag f) are listed as
+//   "Fire Dragon (Finisher)" and "Fire Dragon (No Finisher)";
+// - an emote or explosion sharing its name with an item in another category gets the category,
+//   e.g. "Blue Bunny Scythe (Emote)" next to the sword "Blue Bunny Scythe".
+// Exact repeats (same name, category and version) keep the highest-valued one.
 export async function scrapeBbValues() {
   const raw = await bbJson("/api/items");
+  const categoriesByName = new Map();
+  for (const r of raw) categoriesByName.set(r.n, new Set([...(categoriesByName.get(r.n) || []), r.c]));
   const byName = new Map();
   for (const r of raw) {
     if (!(r.p > 0)) continue;
     const category = `${String(r.c).toLowerCase()}s`;
-    const variant = r.s && r.s !== "None" ? r.s.replace("SwordAccessory", "Accessory") : "";
+    const variant = r.s === "Finisher" ? "Finisher"
+      : r.s === "SwordAccessory" ? "Accessory"
+      : r.f && r.c === "Sword" ? "No Finisher"
+      : "";
+    const labels = [variant, r.c !== "Sword" && categoriesByName.get(r.n).size > 1 ? r.c : ""].filter(Boolean);
     const item = {
       key: r.id,
-      name: variant ? `${r.n} (${variant})` : r.n,
+      name: labels.length ? `${r.n} (${labels.join(", ")})` : r.n,
       baseName: r.n,
       variant,
       category,
@@ -113,9 +123,9 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
       const title = r.offer?.offerTitle || "";
       const all = byName.get(titleName(title));
       if (!(usd > 0) || !all) continue;
-      // Finisher versions only when the title says so; otherwise the plain version.
-      const finisher = /finisher/i.test(title);
-      const matches = all.filter((m) => (finisher ? m.variant === "Finisher" : !m.variant));
+      // "Finisher" in the title -> the Finisher version; "no finisher" or nothing -> the plain version.
+      const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o)\s*finisher/i.test(title);
+      const matches = all.filter((m) => (finisher ? m.variant === "Finisher" : m.variant === "No Finisher" || !m.variant));
       // A name shared by a sword and an emote/explosion: prefer the sword (what nearly all listings are).
       const it = matches.length === 1 ? matches[0] : matches.find((m) => m.category === "swords");
       if (it) (found[it.key] ||= []).push(usd);
