@@ -102,6 +102,7 @@ async function load() {
   try {
     const data = await fetch("/api/mm2").then((r) => r.json());
     items = data.items || [];
+    if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No MM2 values yet.")}</div>`; return; }
     const cat = $("cat");
     if (cat.options.length === 1) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> weapons</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="https://supremevalues.com/mm2" target="_blank" rel="noopener">${esc(data.source)}</a></span>`;
@@ -123,7 +124,7 @@ function render() {
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
     <div class="card" data-key="${esc(i.key)}">
-      <img src="${esc(i.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
       <div>
         <div class="name">${esc(i.name)}</div>
         <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>

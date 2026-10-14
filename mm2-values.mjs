@@ -1,6 +1,10 @@
-// MM2 weapon values tracker — scrapes Supreme Values, keeps a value history on disk,
-// and serves /api/mm2, /api/mm2/history and the /mm2 web page.
-import { readFile, writeFile } from "node:fs/promises";
+// MM2 weapon values tracker.
+//
+// Supreme Values sits behind Cloudflare, which blocks datacenter IPs like Render's.
+// So the values are scraped from a home PC by mm2-push.mjs and stored in Supabase
+// (table mm2_state, see mm2-tables.sql); the live server only reads them from there.
+// Without Supabase configured (local dev) the server scrapes directly instead.
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
@@ -8,17 +12,53 @@ import { execFile } from "node:child_process";
 const SV_ORIGIN = "https://supremevalues.com";
 const SV_BASE = `${SV_ORIGIN}/mm2`;
 // Weapon categories only (pets, sets and misc are skipped).
-const MM2_CATEGORIES = ["ancients", "godlies", "chromas", "uniques", "vintages", "evos", "legendaries", "rares", "uncommons", "commons"];
-const MM2_REFRESH_MS = 15 * 60 * 1000;
-const MM2_HISTORY_FILE = join(dirname(fileURLToPath(import.meta.url)), "mm2-history.json");
+export const MM2_CATEGORIES = ["ancients", "godlies", "chromas", "uniques", "vintages", "evos", "legendaries", "rares", "uncommons", "commons"];
+const MM2_SCRAPE_MS = 15 * 60 * 1000;
+const MM2_SUPABASE_POLL_MS = 5 * 60 * 1000;
 const MM2_HISTORY_MAX_POINTS = 500;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 let mm2Items = [];
 let mm2UpdatedAt = 0;
-let mm2Refreshing = null;
 let mm2History = {}; // { itemKey: [[timestamp, value], ...] }
-let mm2HistoryLoaded = false;
+let mm2LastError = "";
+
+// ---------- Supabase ----------
+
+function supabaseConfig() {
+  const url = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+  return url && key ? { url, key } : null;
+}
+
+async function supabaseFetch(path, options = {}) {
+  const { url, key } = supabaseConfig();
+  const res = await fetch(`${url}/rest/v1/${path}`, {
+    ...options,
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+export async function readMm2State() {
+  const rows = await supabaseFetch("mm2_state?select=id,data");
+  const byId = Object.fromEntries(rows.map((r) => [r.id, r.data]));
+  return { latest: byId.latest || null, history: byId.history || {} };
+}
+
+export async function writeMm2State(latest, history) {
+  const now = new Date().toISOString();
+  await supabaseFetch("mm2_state?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([{ id: "latest", data: latest, updated_at: now }, { id: "history", data: history, updated_at: now }]),
+  });
+}
+
+// ---------- Scraping ----------
 
 function decodeHtml(text) {
   return text.replace(/&amp;/g, "&").replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
@@ -26,7 +66,7 @@ function decodeHtml(text) {
 
 function parseNumber(text) {
   const n = Number(String(text || "").replace(/[^0-9.\-]/g, ""));
-  return Number.isFinite(n) ? n : null;
+  return text && Number.isFinite(n) ? n : null;
 }
 
 function pick(block, re) {
@@ -36,13 +76,11 @@ function pick(block, re) {
 
 export function parseCategoryPage(html, category) {
   const items = [];
-  const chunks = html.split('<div class="itemcell"').slice(1);
-  for (const chunk of chunks) {
+  for (const chunk of html.split('<div class="itemcell"').slice(1)) {
     const id = pick(chunk, /^\s*id="([^"]*)"/);
     const name = pick(chunk, /class="itemhead">([\s\S]*?)<\/div>/);
     if (!name) continue;
     const image = pick(chunk, /<img class="itemimage" src="([^"]+)"/);
-    const changeText = pick(chunk, /Change in Value - \(<b[^>]*>([^<]*)<\/b>/);
     items.push({
       key: `${category}:${id || name}`,
       name,
@@ -53,43 +91,41 @@ export function parseCategoryPage(html, category) {
       demand: parseNumber(pick(chunk, /Demand - <b>([^<]*)</)),
       rarity: parseNumber(pick(chunk, /Rarity - <b>([^<]*)</)),
       origin: pick(chunk, /class="itemorigin">([^<]*)</),
-      change: parseNumber(changeText),
+      change: parseNumber(pick(chunk, /Change in Value - \(<b[^>]*>([^<]*)<\/b>/)),
       changePct: pick(chunk, /class="sv-pctchange[^"]*">([^<]*)</),
-      image: image && image.startsWith("/media/") ? `/api/mm2/image?path=${encodeURIComponent(image)}` : "",
+      image: image.startsWith("/") ? SV_ORIGIN + image : image,
       sourceUrl: `${SV_BASE}/${category}?item=${encodeURIComponent(id || name)}`,
     });
   }
   return items;
 }
 
-// Uses curl (built into Windows 10+) because Cloudflare on Supreme Values blocks Node's own HTTP clients.
-function curlGet(url, { binary = false } = {}) {
+// curl rather than fetch(): Cloudflare blocks Node's own HTTP clients even from home IPs.
+function curlGet(url) {
   return new Promise((resolve, reject) => {
     execFile("curl", ["-sSL", "--fail", "--max-time", "30", "-A", UA,
-      "-H", "Accept: text/html,application/xhtml+xml,image/webp,*/*", "-H", "Accept-Language: en-US,en;q=0.9", url],
-    { maxBuffer: 20 * 1024 * 1024, windowsHide: true, encoding: binary ? "buffer" : "utf8" },
+      "-H", "Accept: text/html,application/xhtml+xml", "-H", "Accept-Language: en-US,en;q=0.9", url],
+    { maxBuffer: 20 * 1024 * 1024, windowsHide: true },
     (error, stdout, stderr) => (error ? reject(new Error(String(stderr).trim() || error.message)) : resolve(stdout)));
   });
 }
 
-const mm2ImageCache = new Map(); // path -> Promise<Buffer>
-
-async function fetchCategory(category) {
-  return parseCategoryPage(await curlGet(`${SV_BASE}/${category}`), category);
+// Scrapes every category. Throws if nothing at all could be fetched.
+export async function scrapeMm2Values() {
+  const results = await Promise.allSettled(MM2_CATEGORIES.map(async (c) => parseCategoryPage(await curlGet(`${SV_BASE}/${c}`), c)));
+  const items = [];
+  const errors = [];
+  results.forEach((r, i) => (r.status === "fulfilled" ? items.push(...r.value) : errors.push(`${MM2_CATEGORIES[i]}: ${r.reason.message}`)));
+  if (!items.length) throw new Error(`No MM2 values scraped (${errors[0] || "empty pages"})`);
+  return { items, errors };
 }
 
-async function loadHistory() {
-  if (mm2HistoryLoaded) return;
-  mm2HistoryLoaded = true;
-  try { mm2History = JSON.parse(await readFile(MM2_HISTORY_FILE, "utf8")); }
-  catch { mm2History = {}; }
-}
-
-async function recordHistory(items, now) {
+// Appends changed values to history in place. Returns true if anything changed.
+export function mergeMm2History(history, items, now) {
   let changed = false;
   for (const item of items) {
     if (item.value == null) continue;
-    const points = mm2History[item.key] || (mm2History[item.key] = []);
+    const points = history[item.key] || (history[item.key] = []);
     const last = points[points.length - 1];
     if (!last || last[1] !== item.value) {
       points.push([now, item.value]);
@@ -97,71 +133,66 @@ async function recordHistory(items, now) {
       changed = true;
     }
   }
-  if (changed) await writeFile(MM2_HISTORY_FILE, JSON.stringify(mm2History));
+  return changed;
 }
 
-export function refreshMm2Values() {
-  if (mm2Refreshing) return mm2Refreshing;
-  mm2Refreshing = (async () => {
-    await loadHistory();
-    const results = await Promise.allSettled(MM2_CATEGORIES.map(fetchCategory));
-    const items = [];
-    const errors = [];
-    results.forEach((r, i) => (r.status === "fulfilled" ? items.push(...r.value) : errors.push(`${MM2_CATEGORIES[i]}: ${r.reason.message}`)));
-    if (errors.length) console.warn(`MM2 refresh errors: ${errors.join("; ")}`);
-    if (items.length) {
-      const now = Date.now();
-      await recordHistory(items, now);
-      mm2Items = items;
-      mm2UpdatedAt = now;
-      console.log(`MM2 values refreshed: ${items.length} weapons.`);
+// ---------- Server ----------
+
+async function loadFromSupabase() {
+  try {
+    const { latest, history } = await readMm2State();
+    if (latest?.items?.length) {
+      mm2Items = latest.items;
+      mm2UpdatedAt = Date.parse(latest.updatedAt) || 0;
     }
-    return { items: mm2Items, errors };
-  })().finally(() => { mm2Refreshing = null; });
-  return mm2Refreshing;
+    mm2History = history;
+    mm2LastError = latest ? "" : "No MM2 values in Supabase yet — run mm2-push.mjs on a home PC.";
+  } catch (e) {
+    mm2LastError = e.message;
+    console.warn(`MM2 Supabase read failed: ${e.message}`);
+  }
+}
+
+async function scrapeLocally() {
+  try {
+    const { items, errors } = await scrapeMm2Values();
+    if (errors.length) console.warn(`MM2 scrape errors: ${errors.join("; ")}`);
+    mm2UpdatedAt = Date.now();
+    mergeMm2History(mm2History, items, mm2UpdatedAt);
+    mm2Items = items;
+    mm2LastError = "";
+    console.log(`MM2 values scraped: ${items.length} weapons.`);
+  } catch (e) {
+    mm2LastError = e.message;
+    console.warn(`MM2 scrape failed: ${e.message}`);
+  }
 }
 
 export function startMm2Tracker() {
-  refreshMm2Values().catch((e) => console.warn(`MM2 refresh failed: ${e.message}`));
-  setInterval(() => refreshMm2Values().catch((e) => console.warn(`MM2 refresh failed: ${e.message}`)), MM2_REFRESH_MS).unref();
+  const [tick, every] = supabaseConfig() ? [loadFromSupabase, MM2_SUPABASE_POLL_MS] : [scrapeLocally, MM2_SCRAPE_MS];
+  tick();
+  setInterval(tick, every).unref();
 }
 
 // Returns true if the request was handled.
 export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/mm2" || url.pathname === "/mm2/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(await readFile(join(dirname(fileURLToPath(import.meta.url)), "mm2.html"), "utf8"));
+    res.end(await readFile(join(HERE, "mm2.html"), "utf8"));
     return true;
   }
   if (url.pathname === "/api/mm2") {
-    if (!mm2Items.length) await refreshMm2Values();
     const q = (url.searchParams.get("q") || "").toLowerCase();
     const category = url.searchParams.get("category") || "";
     const items = mm2Items.filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category));
-    sendJson(res, 200, { updatedAt: new Date(mm2UpdatedAt).toISOString(), source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items });
-    return true;
-  }
-  if (url.pathname === "/api/mm2/image") {
-    const path = url.searchParams.get("path") || "";
-    if (!/^\/media\/[\w\-\/%.]+\.(webp|png|jpe?g|gif)$/i.test(path) || path.includes("..")) {
-      sendJson(res, 400, { error: "Bad image path" });
-      return true;
-    }
-    if (!mm2ImageCache.has(path)) {
-      mm2ImageCache.set(path, curlGet(SV_ORIGIN + path, { binary: true }).catch((e) => { mm2ImageCache.delete(path); throw e; }));
-    }
-    try {
-      const buf = await mm2ImageCache.get(path);
-      const ext = path.split(".").pop().toLowerCase();
-      res.writeHead(200, { "Content-Type": `image/${ext === "jpg" ? "jpeg" : ext}`, "Cache-Control": "public, max-age=86400" });
-      res.end(buf);
-    } catch {
-      sendJson(res, 404, { error: "Image not found" });
-    }
+    sendJson(res, 200, {
+      updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
+      source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items,
+      ...(mm2Items.length ? {} : { error: mm2LastError || "MM2 values are still loading." }),
+    });
     return true;
   }
   if (url.pathname === "/api/mm2/history") {
-    await loadHistory();
     const key = url.searchParams.get("key") || "";
     sendJson(res, 200, { key, points: mm2History[key] || [] });
     return true;
