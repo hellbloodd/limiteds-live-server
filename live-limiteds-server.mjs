@@ -3645,7 +3645,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    if (parsedUrl.pathname === "/api/refresh-values") return sendJson(res, 200, requestRefresh());
+    if (parsedUrl.pathname === "/api/refresh-values") return sendJson(res, 200, requestRefresh(parsedUrl.searchParams.get("game")));
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;

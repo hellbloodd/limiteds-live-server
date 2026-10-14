@@ -157,10 +157,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
 
 let lastUpdatedAt = null;
+let lastPricesAt = null;
 async function load() {
   try {
     const data = await fetch(GAME.api).then((r) => r.json());
     lastUpdatedAt = data.updatedAt;
+    lastPricesAt = data.pricesUpdatedAt;
     items = data.items || [];
     if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No values yet.")}</div>`; return; }
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
@@ -300,40 +302,38 @@ $("periods").addEventListener("click", (e) => {
 load();
 setInterval(load, 5 * 60 * 1000);
 
-// "Refresh now": ask for a fresh update, then check every 5s until new values arrive (~30s usually).
+// "Refresh now": values first (~15-30s), then Eldorado prices (this game's first, ~1 min; MM2 longer).
+// Checks every 5s and redraws as each part arrives.
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+async function waitFor(field, before, tries) {
+  for (let i = 0; i < tries; i++) {
+    await sleep(5000);
+    const data = await fetch(GAME.api).then((x) => x.json()).catch(() => null);
+    if (data?.[field] && data[field] !== before) return true;
+  }
+  return false;
+}
 $("refresh").addEventListener("click", async () => {
   const btn = $("refresh"), status = $("refresh-status");
-  const before = lastUpdatedAt;
+  const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 10000); };
+  const valuesBefore = lastUpdatedAt, pricesBefore = lastPricesAt;
   btn.disabled = true;
-  status.textContent = "Refreshing… usually takes about 30 seconds";
+  status.textContent = "Refreshing values… usually about 30 seconds";
+  let r;
   try {
-    const r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json());
+    r = await fetch(`/api/refresh-values?game=${encodeURIComponent(GAME.tab)}`, { method: "POST" }).then((x) => x.json());
     if (r.error) throw new Error(r.error);
-    if (r.recent) { // an update finished less than a minute ago
-      await load();
-      status.textContent = "Already up to date ✓";
-      setTimeout(() => { status.textContent = ""; }, 8000);
-      btn.disabled = false;
-      return;
-    }
   } catch {
-    status.textContent = "Couldn't request a refresh — try again in a minute.";
-    btn.disabled = false;
-    return;
+    return done("Couldn't request a refresh — try again in a minute.");
   }
-  for (let i = 0; i < 30; i++) {
-    await new Promise((res) => setTimeout(res, 5000));
-    const data = await fetch(GAME.api).then((x) => x.json()).catch(() => null);
-    if (data?.updatedAt && data.updatedAt !== before) {
-      await load();
-      status.textContent = "Updated just now ✓";
-      setTimeout(() => { status.textContent = ""; }, 8000);
-      btn.disabled = false;
-      return;
-    }
-  }
-  status.textContent = "The values sites are slow right now — new values will appear in a moment.";
-  btn.disabled = false;
+  if (r.recent) { await load(); return done("Already up to date ✓ (prices can be refreshed again a few minutes after the last time)"); }
+  if (!(await waitFor("updatedAt", valuesBefore, 30))) return done("The values sites are slow right now — new values will appear in a moment.");
+  await load();
+  if (!r.prices) return done("Values updated ✓ (Eldorado prices were refreshed a few minutes ago)");
+  status.textContent = "Values updated ✓ — updating Eldorado prices…";
+  if (!(await waitFor("pricesUpdatedAt", pricesBefore, 120))) return done("Values updated ✓ — Eldorado prices are taking longer, they'll appear shortly.");
+  await load();
+  done("Values and Eldorado prices updated ✓");
 });
 </script>
 </body>

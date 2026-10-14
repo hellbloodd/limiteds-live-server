@@ -87,15 +87,23 @@ const stamp = () => new Date().toLocaleTimeString();
 // Eldorado price refreshes (hourly, a few minutes each) run in the background so a value update -
 // and the site's "Refresh now" button - never waits for them. One per game at a time.
 let forcePrices = false;
+let priorityGame = null; // the game whose page clicked "Refresh now" gets its prices first
 const pricesRunning = {};
+const wantedPrices = []; // [game, job] collected during an update, started when it finishes
 export const pendingPrices = [];
 function refreshPricesInBackground(game, lastUpdatedAt, job) {
   if (pricesRunning[game]) return;
   if (!forcePrices && Date.now() - (Date.parse(lastUpdatedAt) || 0) <= ELDORADO_EVERY_MS) return;
   pricesRunning[game] = true;
-  pendingPrices.push(eldoradoExclusive(job)
-    .then(async (msg) => { console.log(`[${stamp()}] ${msg}`); await reloadAllTrackers(); }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
-    .finally(() => { pricesRunning[game] = false; }));
+  wantedPrices.push([game, job]);
+}
+function startWantedPrices() {
+  const jobs = wantedPrices.splice(0).sort(([a], [b]) => (b === priorityGame) - (a === priorityGame));
+  for (const [game, job] of jobs) {
+    pendingPrices.push(eldoradoExclusive(job)
+      .then(async (msg) => { console.log(`[${stamp()}] ${msg}`); await reloadAllTrackers(); }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
+      .finally(() => { pricesRunning[game] = false; }));
+  }
 }
 
 async function pushBladeBall() {
@@ -218,21 +226,29 @@ async function pushMm2() {
 // One update at a time, whether from the timer or a "Refresh now" click.
 let running = null;
 let lastFinished = 0;
-export function runUpdate({ prices = false } = {}) {
-  if (prices) forcePrices = true;
-  running ||= pushOnce()
+export function runUpdate({ prices = false, priority = null } = {}) {
+  if (running) return running;
+  forcePrices = prices;
+  priorityGame = priority;
+  running = pushOnce()
     .then(async (ok) => { lastFinished = Date.now(); await reloadAllTrackers(); return ok; })
-    .finally(() => { running = null; forcePrices = false; });
+    .finally(() => { startWantedPrices(); running = null; forcePrices = false; });
   return running;
 }
 
-// "Refresh now": start an update unless one finished in the last minute (the page then waits for
-// the new "Updated" time). Returns right away.
-export function requestRefresh() {
-  if (running) return { started: false, running: true };
-  if (Date.now() - lastFinished < 60 * 1000) return { started: false, recent: true };
-  runUpdate().catch(() => {});
-  return { started: true };
+// "Refresh now": refreshes values, and Eldorado prices too unless they were refreshed by a click in
+// the last 5 minutes (Eldorado rate-limits). Returns right away; the page then watches the
+// "Updated" / prices times. `game` (the page's game) gets its prices first.
+const GAME_NAMES = { mm2: "MM2", bladeball: "Blade Ball", adoptme: "Adopt Me", stealabrainrot: "Steal a Brainrot" };
+const PRICES_MIN_GAP_MS = 5 * 60 * 1000;
+let lastPricesRequest = 0;
+export function requestRefresh(game) {
+  if (running) return { started: false, running: true, prices: false };
+  const prices = Date.now() - lastPricesRequest >= PRICES_MIN_GAP_MS && !Object.values(pricesRunning).some(Boolean);
+  if (!prices && Date.now() - lastFinished < 60 * 1000) return { started: false, recent: true, prices: false };
+  if (prices) lastPricesRequest = Date.now();
+  runUpdate({ prices, priority: GAME_NAMES[game] || null }).catch(() => {});
+  return { started: true, prices };
 }
 
 // Update every 15 minutes while the server is up (Render's free plan sleeps when idle; the first
