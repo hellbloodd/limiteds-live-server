@@ -3,6 +3,7 @@ import { URL } from "url";
 import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
 import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
+import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, startAutoUpdates } from "./updater.mjs";
 
 // ============================================================================
@@ -602,6 +603,7 @@ const DASHBOARD_HTML = `<title>Agony Values</title>
   <a class="view-tab" href="/mm2" style="text-decoration:none">MM2 Values</a>
   <a class="view-tab" href="/bladeball" style="text-decoration:none">Blade Ball Values</a>
   <a class="view-tab" href="/adoptme" style="text-decoration:none">Adopt Me Values</a>
+  <a class="view-tab" href="/stealabrainrot" style="text-decoration:none">Steal a Brainrot Values</a>
   <div class="prices-freshness" id="prices-freshness" hidden>
     <span id="prices-freshness-text"></span>
     <button id="refresh-prices-btn" type="button">Refresh now</button>
@@ -3647,6 +3649,7 @@ const server = http.createServer(async (req, res) => {
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;
+    if (await handleSabRequest(parsedUrl, res, sendJson)) return;
 
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
@@ -3665,6 +3668,7 @@ startServer();
 startMm2Tracker();
 startBbTracker();
 startAmTracker();
+startSabTracker();
 // The server fetches values itself (every 15 min + "Refresh now"); needs Supabase to store them.
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) startAutoUpdates();
 if (snapshotStorageEnabled()) {

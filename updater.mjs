@@ -8,6 +8,7 @@ import {
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
+import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
 
 // The updater is the only writer, so it reads each game's state from Supabase once and keeps it in
 // memory; each run then writes only the rows that changed (plus a tiny "heartbeat" with the time).
@@ -93,7 +94,7 @@ function refreshPricesInBackground(game, lastUpdatedAt, job) {
   if (!forcePrices && Date.now() - (Date.parse(lastUpdatedAt) || 0) <= ELDORADO_EVERY_MS) return;
   pricesRunning[game] = true;
   pendingPrices.push(eldoradoExclusive(job)
-    .then((msg) => console.log(`[${stamp()}] ${msg}`), (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
+    .then(async (msg) => { console.log(`[${stamp()}] ${msg}`); await reloadAllTrackers(); }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
     .finally(() => { pricesRunning[game] = false; }));
 }
 
@@ -151,8 +152,34 @@ async function pushAdoptMe() {
   }
 }
 
+// Steal a Brainrot (Secret + OG) from sabrvalues.com item pages. Which page is which rarity is kept
+// in the history_fetched row so most runs only re-read the Secret/OG pages. History is recorded
+// from our own updates.
+async function pushStealABrainrot() {
+  try {
+    const state = await getState(SB_PREFIX);
+    const { history, historyFetched, eldorado } = state;
+    const { items } = await scrapeSabValues(historyFetched);
+    const now = Date.now();
+    mergeMm2History(history, items, now);
+    state.latest = { items: items.map(compactSabItem) };
+    await writeChangedRows(SB_PREFIX, { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
+    console.log(`[${stamp()}] Pushed ${items.length} Steal a Brainrot values.`);
+    refreshPricesInBackground("Steal a Brainrot", eldorado?.updatedAt, async () => {
+      const prices = await fetchSabEldoradoPrices(items);
+      state.eldorado = { updatedAt: new Date().toISOString(), prices };
+      await writeChangedRows(SB_PREFIX, { eldorado: state.eldorado });
+      return `Steal a Brainrot Eldorado prices: ${Object.keys(prices).length} brainrots listed.`;
+    });
+    return true;
+  } catch (e) {
+    console.error(`[${stamp()}] Steal a Brainrot push failed: ${e.message}`);
+    return false;
+  }
+}
+
 async function pushOnce() {
-  const results = await Promise.all([pushMm2(), pushBladeBall(), pushAdoptMe()]);
+  const results = await Promise.all([pushMm2(), pushBladeBall(), pushAdoptMe(), pushStealABrainrot()]);
   return results.every(Boolean);
 }
 

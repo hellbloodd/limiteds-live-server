@@ -67,6 +67,7 @@
   .range.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .card { position:relative; }
   .val.ratio { font-size:14px; }
+  .val .unit { font-size:13px; }
   .price { font-size:12px; margin-top:2px; color:var(--text); }
   .vpd { font-weight:700; }
   .periods { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-bottom:10px; font-size:13px; }
@@ -93,6 +94,7 @@
     <a class="tab" data-tab="mm2" href="/mm2">MM2 Values</a>
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
+    <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
   </nav>
   <div class="controls">
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
@@ -134,11 +136,13 @@ document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("a
 document.getElementById("q").placeholder = `Search ${GAME.noun}…`;
 let items = [];
 // Detail rows are left out when the values site doesn't provide that field.
+// "og" -> "OG", "pet wear" -> "Pet wear"
+const catLabel = (c) => (c.length <= 2 ? c.toUpperCase() : c[0].toUpperCase() + c.slice(1));
 const row = (label, html) => (html ? `<dt>${label}</dt><dd>${html}</dd>` : "");
 let period = "7d";
 let medianVpd = 0;
 const usd = (n) => "$" + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
-const fmtVpd = (n) => n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(1);
+const fmtVpd = (n) => n >= 100 ? Math.round(n).toLocaleString() : n >= 1 ? n.toFixed(1) : Number(n.toPrecision(2)).toString();
 // Green = more value per dollar than the typical weapon, red = less.
 const vpdClass = (n) => !medianVpd ? "" : n >= medianVpd * 1.25 ? "up" : n <= medianVpd * 0.75 ? "down" : "flat";
 const PERIOD_LABEL = { "24h": "24h", "7d": "7 days", "30d": "30 days", "1y": "1 year", all: "all time" };
@@ -162,7 +166,7 @@ async function load() {
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
-    if (cat.options.length === 2) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
+    if (cat.options.length === 2) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
     render();
   } catch (e) {
@@ -189,8 +193,8 @@ function render() {
       <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
       <div>
         <div class="name">${esc(i.name)}</div>
-        <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>
-        <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}</div>
+        <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
+        <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
         ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
       </div>
@@ -269,8 +273,8 @@ function mountChart(points) {
 $("grid").addEventListener("click", async (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   const i = items.find((x) => x.key === card.dataset.key);
-  $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(i.category)}</div>
-    <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}</dd>${row("Range", i.range && i.range !== "[N/A]" ? esc(i.range) : "")}
+  $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(catLabel(i.category))}</div>
+    <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unitName ? ` ${esc(GAME.unitName)}` : ""}</dd>${row("Range", i.range && i.range !== "[N/A]" ? esc(i.range) : "")}
     ${row("Stability", esc(i.stability))}${row("Demand", i.demand != null ? fmt(i.demand) : "")}
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
