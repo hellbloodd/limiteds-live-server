@@ -1,0 +1,231 @@
+// Adopt Me values tracker — same idea as mm2-values.mjs, with values from adoptmevalues.app.
+//
+// adoptmevalues.app disallows /api/ in robots.txt, so we read the public values page instead: it is
+// server-rendered and embeds every item in a "packed" list (decoded the same way the site's own
+// unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
+// mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
+import {
+  curlGet, supabaseConfig, createStateReader, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+} from "./mm2-values.mjs";
+
+const AM_ORIGIN = "https://www.adoptmevalues.app";
+const AM_VALUES_PAGE = `${AM_ORIGIN}/values`;
+export const AM_PREFIX = "am_";
+const AM_SUPABASE_POLL_MS = 5 * 60 * 1000;
+
+let amItems = [];
+let amUpdatedAt = 0;
+let amHistory = {};
+let amLastError = "";
+let amEldorado = { updatedAt: null, prices: {} };
+let amCategories = [];
+
+// ---------- adoptmevalues.app ----------
+
+// The page streams its data as Next.js "self.__next_f.push([1, "..."])" chunks.
+function extractPacked(html) {
+  const payload = [...html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g)]
+    .map((m) => JSON.parse(`"${m[1]}"`)).join("");
+  const start = payload.indexOf('{"imageBase"');
+  if (start < 0) throw new Error("adoptmevalues.app: item list not found on the values page");
+  let depth = 0;
+  for (let i = start; i < payload.length; i++) {
+    const ch = payload[i];
+    if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") { if (--depth === 0) return JSON.parse(payload.slice(start, i + 1)); }
+  }
+  throw new Error("adoptmevalues.app: item list is cut off");
+}
+
+const round = (n) => (n == null ? null : Math.round(n * 100) / 100);
+const fmtV = (n) => (n ? round(n).toLocaleString("en-US") : "—");
+
+export async function scrapeAmValues() {
+  const packed = extractPacked(await curlGet(AM_VALUES_PAGE));
+  const items = [];
+  const seen = new Map();
+  for (const e of packed.items) {
+    // Field order from the site's unpackPets(): id, name, image, rarity, type, category, score,
+    // then [default, fly, ride, fly ride, no potion] for normal, neon and mega neon.
+    const [id, name, image, rarityIdx, typeIdx] = e;
+    const [r, rF, rR, rFR, rNP, n, nF, nR, nFR, nNP, m, mF, mR, mFR, mNP] = e.slice(7, 22);
+    const value = round(r || rFR);
+    if (!(value > 0)) continue;
+    const type = packed.types[typeIdx] || "other";
+    const item = {
+      key: String(id),
+      name,
+      category: type,
+      value,
+      rarity: (packed.rarities[rarityIdx] || "").replace(/\b\w/g, (c) => c.toUpperCase()),
+      stability: "",
+      origin: "",
+      demand: null,
+      image: image && !image.startsWith("http") ? `${packed.imageBase}/${encodeURI(image)}` : image,
+      // Shown in the detail view.
+      extra: type === "pets" ? [
+        ["Fly Ride", fmtV(rFR)], ["No Potion", fmtV(rNP)],
+        ["Neon", fmtV(n)], ["Neon Fly Ride", fmtV(nFR)],
+        ["Mega Neon", fmtV(m)], ["Mega Fly Ride", fmtV(mFR)],
+      ] : [],
+      flyRide: round(rFR) || null,
+    };
+    // A few non-pet items appear twice under the same name: keep the higher value.
+    const dupe = `${type}:${name.toLowerCase()}`;
+    const prev = seen.get(dupe);
+    if (prev && prev.value >= value) continue;
+    if (prev) items.splice(items.indexOf(prev), 1);
+    seen.set(dupe, item);
+    items.push(item);
+  }
+  if (!items.length) throw new Error("No Adopt Me values found");
+  return { items, categories: packed.types.filter((t) => items.some((i) => i.category === t)) };
+}
+
+// ---------- Eldorado prices ----------
+// Eldorado names Adopt Me pets and eggs exactly (Pets > Legendary > Frost Dragon) and has a Traits
+// filter (none, f, r, fr, n, nfr, m, mfr, ...). Pets are priced as Fly Ride - by far the most listed
+// version - and compared with the Fly Ride value; eggs have no traits.
+
+const AM_SHOP = "https://www.eldorado.gg/adopt-me-pets/i/201-2-0";
+const ELDORADO_WORKERS = 4;
+const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const RARITY = { "ultra rare": "Ultra-Rare", legendary: "Legendary", rare: "Rare", common: "Common", uncommon: "Uncommon" };
+
+async function fetchEldoradoLeaves() {
+  const tree = await eldoradoJson("/api/library/201/CustomItem?locale=en-US");
+  const leaves = [];
+  const walk = (n, path) => {
+    const p = path.concat(n.value);
+    if (n.childTradeEnvironments?.length) n.childTradeEnvironments.forEach((k) => walk(k, p));
+    else if (p.length === 3 && (p[0] === "Pets" || p[0] === "Eggs")) leaves.push(p);
+  };
+  tree.tradeEnvironments.forEach((n) => walk(n, []));
+  return leaves;
+}
+
+function matchLeaf(item, leaves) {
+  const group = item.category === "pets" ? "Pets" : item.category === "eggs" ? "Eggs" : null;
+  if (!group) return null;
+  let cands = leaves.filter((l) => l[0] === group && norm(l[2]) === norm(item.name));
+  if (cands.length > 1) {
+    const r = RARITY[item.rarity.toLowerCase()];
+    const byRarity = cands.filter((l) => l[1] === r);
+    if (byRarity.length) cands = byRarity;
+  }
+  return cands.length === 1 ? cands[0] : null;
+}
+
+export async function fetchAmEldoradoPrices(items) {
+  const leaves = await fetchEldoradoLeaves();
+  const queue = items.map((it) => [it, matchLeaf(it, leaves)]).filter(([, l]) => l);
+  const prices = {};
+  await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
+    for (let job; (job = queue.shift());) {
+      const [it, [type, rarity, name]] = job;
+      const pet = type === "Pets";
+      const filter = `tradeEnvironmentValue0=${encodeURIComponent(type)}&tradeEnvironmentValue1=${encodeURIComponent(rarity)}`
+        + `&tradeEnvironmentValue2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`;
+      try {
+        const j = await eldoradoJson("/api/v1/item-management/offers?gameId=201&category=CustomItem&pageIndex=1&pageSize=5"
+          + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
+        const list = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
+        if (!list.length) continue;
+        const median = list[Math.floor(list.length / 2)];
+        prices[it.key] = {
+          usd: list.find((v) => v >= median * 0.5), // skip mislabelled listings far below the rest
+          listings: j.recordCount || list.length,
+          variant: pet ? "Fly Ride" : "",
+          url: `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`,
+        };
+      } catch { /* no price this time */ }
+    }
+  }));
+  return prices;
+}
+
+// ---------- Server ----------
+
+// Stored compactly; the picture URL and detail rows are kept because they can't be rebuilt.
+export function compactAmItem(it) {
+  return [it.key, it.name, it.category, it.value, it.rarity, it.image, it.extra, it.flyRide];
+}
+const expandAmItem = (a) => {
+  const [key, name, category, value, rarity, image, extra, flyRide] = a;
+  return { key, name, category, value, rarity, image, extra, flyRide, stability: "", origin: "", demand: null, sourceUrl: AM_VALUES_PAGE };
+};
+
+let readAmRows;
+async function loadFromSupabase() {
+  try {
+    readAmRows ||= createStateReader(AM_PREFIX);
+    const { latest, history, eldorado, heartbeat } = await readAmRows();
+    if (eldorado?.prices) amEldorado = eldorado;
+    if (latest?.items?.length) {
+      amItems = latest.items.map(expandAmItem);
+      amCategories = latest.categories || [];
+      amUpdatedAt = Date.parse(heartbeat?.updatedAt) || 0;
+    }
+    amHistory = history;
+    amLastError = latest ? "" : "No Adopt Me values in Supabase yet — run mm2-push.mjs on a home PC.";
+  } catch (e) {
+    amLastError = e.message;
+    console.warn(`Adopt Me Supabase read failed: ${e.message}`);
+  }
+}
+
+async function scrapeLocally() {
+  try {
+    const { items, categories } = await scrapeAmValues();
+    amUpdatedAt = Date.now();
+    mergeMm2History(amHistory, items, amUpdatedAt);
+    amItems = items;
+    amCategories = categories;
+    amLastError = "";
+  } catch (e) {
+    amLastError = e.message;
+    console.warn(`Adopt Me scrape failed: ${e.message}`);
+  }
+}
+
+export function startAmTracker() {
+  const [tick, every] = supabaseConfig() ? [loadFromSupabase, AM_SUPABASE_POLL_MS] : [scrapeLocally, 15 * 60 * 1000];
+  tick();
+  setInterval(tick, every).unref();
+}
+
+function eldoradoFields(it) {
+  const p = amEldorado.prices[it.key];
+  if (!p) return {};
+  // Pets are priced as Fly Ride, so compare with the Fly Ride value.
+  const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10 };
+}
+
+// Returns true if the request was handled.
+export async function handleAmRequest(url, res, sendJson) {
+  if (url.pathname === "/adoptme" || url.pathname === "/adoptme/") {
+    await sendGamePage(res, { api: "/api/adoptme", title: "Adopt Me Values", tab: "adoptme", noun: "Adopt Me items",
+      sourceName: "adoptmevalues.app", sourceUrl: AM_VALUES_PAGE, shopUrl: AM_SHOP });
+    return true;
+  }
+  if (url.pathname === "/api/adoptme") {
+    const items = amItems.map((it) => {
+      const h = amHistory[it.key];
+      return { ...it, spark: sparkline(h), changes: periodChanges(h, it.value), ...eldoradoFields(it) };
+    });
+    sendJson(res, 200, {
+      updatedAt: amUpdatedAt ? new Date(amUpdatedAt).toISOString() : null,
+      pricesUpdatedAt: amEldorado.updatedAt,
+      source: "adoptmevalues.app", count: items.length, categories: amCategories, items,
+      ...(amItems.length ? {} : { error: amLastError || "Adopt Me values are still loading." }),
+    });
+    return true;
+  }
+  if (url.pathname === "/api/adoptme/history") {
+    const key = url.searchParams.get("key") || "";
+    sendJson(res, 200, { key, points: amHistory[key] || [] });
+    return true;
+  }
+  return false;
+}

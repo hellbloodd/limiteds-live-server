@@ -11,6 +11,7 @@ import {
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
+import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem } from "./am-values.mjs";
 
 // The pusher is the only writer, so it reads each game's state from Supabase once and keeps it in
 // memory; each run then writes only the rows that changed (plus a tiny "heartbeat" with the time).
@@ -19,7 +20,7 @@ async function getState(prefix) {
   if (!stateCache[prefix]) {
     // Row by row, skipping Blade Ball's item list (rebuilt every run): one big read times out
     // when Supabase's free tier is busy.
-    const s = await readMm2State(prefix, prefix === BB_PREFIX ? ["history", "history_fetched", "eldorado"] : undefined);
+    const s = await readMm2State(prefix, prefix === "" ? undefined : ["history", "history_fetched", "eldorado"]);
     rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado });
     stateCache[prefix] = s;
   }
@@ -126,9 +127,38 @@ async function pushBladeBall() {
   }
 }
 
+// Adopt Me values come from adoptmevalues.app's public values page (its /api/ is off-limits in
+// robots.txt). History is recorded from our own updates, like Blade Ball.
+async function pushAdoptMe() {
+  try {
+    const { items, categories } = await scrapeAmValues();
+    const state = await getState(AM_PREFIX);
+    const { history, eldorado } = state;
+    const now = Date.now();
+    mergeMm2History(history, items, now);
+    state.latest = { items: items.map(compactAmItem), categories };
+    await writeChangedRows(AM_PREFIX, { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
+    console.log(`[${stamp()}] Pushed ${items.length} Adopt Me values.`);
+    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
+      try {
+        const prices = await eldoradoExclusive(() => fetchAmEldoradoPrices(items));
+        state.eldorado = { updatedAt: new Date().toISOString(), prices };
+        await writeChangedRows(AM_PREFIX, { eldorado: state.eldorado });
+        console.log(`[${stamp()}] Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed.`);
+      } catch (e) {
+        console.error(`[${stamp()}] Adopt Me Eldorado price refresh failed: ${e.message}`);
+      }
+    }
+    return true;
+  } catch (e) {
+    console.error(`[${stamp()}] Adopt Me push failed: ${e.message}`);
+    return false;
+  }
+}
+
 async function pushOnce() {
-  const [mm2, bb] = await Promise.all([pushMm2(), pushBladeBall()]);
-  return mm2 && bb;
+  const results = await Promise.all([pushMm2(), pushBladeBall(), pushAdoptMe()]);
+  return results.every(Boolean);
 }
 
 async function pushMm2() {

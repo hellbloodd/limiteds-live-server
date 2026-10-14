@@ -86,6 +86,7 @@
     <a class="tab" href="/">Tracker</a>
     <a class="tab" data-tab="mm2" href="/mm2">MM2 Values</a>
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
   </nav>
   <div class="controls">
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
@@ -122,6 +123,8 @@ document.title = `${GAME.title} · Agony Values`;
 document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === GAME.tab));
 document.getElementById("q").placeholder = `Search ${GAME.noun}…`;
 let items = [];
+// Detail rows are left out when the values site doesn't provide that field.
+const row = (label, html) => (html ? `<dt>${label}</dt><dd>${html}</dd>` : "");
 let period = "7d";
 let medianVpd = 0;
 const usd = (n) => "$" + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
@@ -197,7 +200,7 @@ const RANGES = [["1M", 30], ["3M", 90], ["1Y", 365], ["All", 0]];
 const shortNum = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : n.toLocaleString();
 
 function chartView(allPoints, days) {
-  if (allPoints.length < 2) return `<p class="dim">No value history for this weapon yet.</p>`;
+  if (allPoints.length < 2) return `<p class="dim">No value history for this item yet — it fills in as values change.</p>`;
   let points = allPoints;
   if (days) {
     const cutoff = Date.now() - days * 864e5;
@@ -255,15 +258,16 @@ $("grid").addEventListener("click", async (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   const i = items.find((x) => x.key === card.dataset.key);
   $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(i.category)}</div>
-    <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}</dd><dt>Range</dt><dd>${esc(i.range || "N/A")}</dd>
-    <dt>Stability</dt><dd>${esc(i.stability || "N/A")}</dd><dt>Demand</dt><dd>${fmt(i.demand)}</dd>
+    <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}</dd>${row("Range", i.range && i.range !== "[N/A]" ? esc(i.range) : "")}
+    ${row("Stability", esc(i.stability))}${row("Demand", i.demand != null ? fmt(i.demand) : "")}
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
-    ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
-    <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}<dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
+    ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
+    ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
+    <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>
     ${i.valueText ? `<p class="dim">This item is valued as a trade ratio, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="hist" class="dim">Loading history…</div>
-    <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on Supreme Values</a></p>`;
+    <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
   $("dlg").showModal();
   if (i.valueText) { $("hist").innerHTML = ""; return; }
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
