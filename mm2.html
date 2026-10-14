@@ -96,6 +96,7 @@
       <option value="change">Biggest gain %</option>
       <option value="changeAsc">Biggest drop %</option>
       <option value="vpd">Best value per $</option>
+      <option value="usdAsc">Cheapest on Eldorado</option>
       <option value="demand">Demand</option>
       <option value="name">Name</option>
     </select>
@@ -162,7 +163,7 @@ function render() {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
     change: (a, b) => v(chg(b)?.pct) - v(chg(a)?.pct), changeAsc: (a, b) => (chg(a)?.pct ?? 0) - (chg(b)?.pct ?? 0),
     demand: (a, b) => v(b.demand) - v(a.demand),
-    vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), name: (a, b) => a.name.localeCompare(b.name),
+    vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
