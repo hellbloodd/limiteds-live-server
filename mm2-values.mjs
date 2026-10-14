@@ -93,7 +93,7 @@ export function parseCategoryPage(html, category) {
       origin: pick(chunk, /class="itemorigin">([^<]*)</),
       change: parseNumber(pick(chunk, /Change in Value - \(<b[^>]*>([^<]*)<\/b>/)),
       changePct: pick(chunk, /class="sv-pctchange[^"]*">([^<]*)</),
-      image: image.startsWith("/") ? SV_ORIGIN + image : image,
+      image: image ? new URL(image, `${SV_ORIGIN}/`).href : "",
       sourceUrl: `${SV_BASE}/${category}?item=${encodeURIComponent(id || name)}`,
     });
   }
