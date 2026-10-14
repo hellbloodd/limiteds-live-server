@@ -97,6 +97,35 @@ export async function writeChangedRows(prefix, rows) {
   return out.map((r) => r.id);
 }
 
+// When the row was last written (or null if it doesn't exist).
+export async function rowUpdatedAt(id) {
+  const rows = await supabaseFetch(`mm2_state?select=updated_at&id=eq.${id}`);
+  return rows[0]?.updated_at || null;
+}
+
+// ---------- "Refresh now" ----------
+// The live server can't reach the values sites (they block datacenter IPs), so the button leaves a
+// request in Supabase; the pusher on the home PC checks for it every few seconds and runs an update.
+// Meanwhile the server re-reads Supabase every 10s for a few minutes so new values show up quickly.
+const supabaseTicks = [];
+let lastRefreshRequest = 0;
+let fastPollTimer = null;
+
+export async function requestRefresh() {
+  const now = Date.now();
+  if (now - lastRefreshRequest < 60 * 1000) return { requestedAt: new Date(lastRefreshRequest).toISOString(), already: true };
+  lastRefreshRequest = now;
+  await writeMm2Row("refresh_request", { requestedAt: new Date(now).toISOString() });
+  clearInterval(fastPollTimer);
+  let polls = 0;
+  fastPollTimer = setInterval(() => {
+    supabaseTicks.forEach((tick) => tick());
+    if (++polls >= 18) clearInterval(fastPollTimer); // 3 minutes
+  }, 10 * 1000);
+  fastPollTimer.unref();
+  return { requestedAt: new Date(now).toISOString(), already: false };
+}
+
 export async function writeMm2Row(id, data, prefix = "") {
   await supabaseFetch("mm2_state?on_conflict=id", {
     method: "POST",
@@ -350,6 +379,7 @@ async function scrapeLocally() {
 
 export function startMm2Tracker() {
   const [tick, every] = supabaseConfig() ? [loadFromSupabase, MM2_SUPABASE_POLL_MS] : [scrapeLocally, MM2_SCRAPE_MS];
+  registerSupabaseTick(tick);
   tick();
   setInterval(tick, every).unref();
 }
@@ -396,6 +426,11 @@ export function sparkline(points) {
   return out;
 }
 
+// Each game's Supabase reader, so a refresh request can make them all re-read sooner.
+export function registerSupabaseTick(tick) {
+  if (supabaseConfig()) supabaseTicks.push(tick);
+}
+
 // mm2.html is shared by every game page; the config fills in the game-specific parts.
 export async function sendGamePage(res, config) {
   const html = (await readFile(join(HERE, "mm2.html"), "utf8"))
@@ -409,6 +444,12 @@ export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/mm2" || url.pathname === "/mm2/") {
     await sendGamePage(res, { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons",
       sourceName: "mm2values.com", sourceUrl: "https://www.mm2values.com/?p=godly", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" });
+    return true;
+  }
+  if (url.pathname === "/api/refresh-values") {
+    if (!supabaseConfig()) { sendJson(res, 200, { requestedAt: null, already: false, local: true }); return true; }
+    try { sendJson(res, 200, await requestRefresh()); }
+    catch (e) { sendJson(res, 502, { error: "Could not request a refresh right now." }); }
     return true;
   }
   if (url.pathname === "/api/mm2") {

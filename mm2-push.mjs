@@ -7,7 +7,7 @@
 //        node mm2-push.mjs --once   (push once and exit)
 //        add --prices to refresh Eldorado prices now instead of waiting for the hourly refresh
 import {
-  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
+  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows, rowUpdatedAt,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
@@ -97,6 +97,19 @@ async function refreshEldorado(items, previous) {
 
 const stamp = () => new Date().toLocaleTimeString();
 
+// Eldorado price refreshes (hourly, a few minutes each) run in the background so a value update -
+// and the site's "Refresh now" button - never waits for them. One per game at a time.
+const pricesRunning = {};
+const pendingPrices = [];
+function refreshPricesInBackground(game, lastUpdatedAt, job) {
+  if (pricesRunning[game]) return;
+  if (!process.argv.includes("--prices") && Date.now() - (Date.parse(lastUpdatedAt) || 0) <= ELDORADO_EVERY_MS) return;
+  pricesRunning[game] = true;
+  pendingPrices.push(eldoradoExclusive(job)
+    .then((msg) => console.log(`[${stamp()}] ${msg}`), (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
+    .finally(() => { pricesRunning[game] = false; }));
+}
+
 async function pushBladeBall() {
   try {
     const { items } = await scrapeBbValues();
@@ -109,16 +122,12 @@ async function pushBladeBall() {
     state.latest = { items: items.map(compactBbItem) };
     await writeChangedRows(BB_PREFIX, { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} Blade Ball values.`);
-    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
-      try {
-        const prices = await eldoradoExclusive(() => fetchBbEldoradoPrices(items));
-        state.eldorado = { updatedAt: new Date().toISOString(), prices };
-        await writeChangedRows(BB_PREFIX, { eldorado: state.eldorado });
-        console.log(`[${stamp()}] Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed.`);
-      } catch (e) {
-        console.error(`[${stamp()}] Blade Ball Eldorado price refresh failed: ${e.message}`);
-      }
-    }
+    refreshPricesInBackground("Blade Ball", eldorado?.updatedAt, async () => {
+      const prices = await fetchBbEldoradoPrices(items);
+      state.eldorado = { updatedAt: new Date().toISOString(), prices };
+      await writeChangedRows(BB_PREFIX, { eldorado: state.eldorado });
+      return `Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed.`;
+    });
     return true;
   } catch (e) {
     console.error(`[${stamp()}] Blade Ball push failed: ${e.message}`);
@@ -142,16 +151,12 @@ async function pushAdoptMe() {
     state.latest = { items: items.map(compactAmItem), categories };
     await writeChangedRows(AM_PREFIX, { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} Adopt Me values.`);
-    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
-      try {
-        const prices = await eldoradoExclusive(() => fetchAmEldoradoPrices(items));
-        state.eldorado = { updatedAt: new Date().toISOString(), prices };
-        await writeChangedRows(AM_PREFIX, { eldorado: state.eldorado });
-        console.log(`[${stamp()}] Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed.`);
-      } catch (e) {
-        console.error(`[${stamp()}] Adopt Me Eldorado price refresh failed: ${e.message}`);
-      }
-    }
+    refreshPricesInBackground("Adopt Me", eldorado?.updatedAt, async () => {
+      const prices = await fetchAmEldoradoPrices(items);
+      state.eldorado = { updatedAt: new Date().toISOString(), prices };
+      await writeChangedRows(AM_PREFIX, { eldorado: state.eldorado });
+      return `Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed.`;
+    });
     return true;
   } catch (e) {
     console.error(`[${stamp()}] Adopt Me push failed: ${e.message}`);
@@ -185,14 +190,10 @@ async function pushMm2() {
     state.latest = { items };
     await writeChangedRows("", { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} MM2 values.`);
-    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
-      try {
-        const { matched, priced } = await eldoradoExclusive(() => refreshEldorado(items, eldorado));
-        console.log(`[${stamp()}] Eldorado prices: ${priced} weapons listed (of ${matched} matched).`);
-      } catch (e) {
-        console.error(`[${stamp()}] Eldorado price refresh failed: ${e.message}`);
-      }
-    }
+    refreshPricesInBackground("MM2", eldorado?.updatedAt, async () => {
+      const { matched, priced } = await refreshEldorado(items, eldorado);
+      return `MM2 Eldorado prices: ${priced} weapons listed (of ${matched} matched).`;
+    });
     return true;
   } catch (e) {
     console.error(`[${stamp()}] MM2 push failed: ${e.message}`);
@@ -201,7 +202,30 @@ async function pushMm2() {
 }
 
 if (process.argv.includes("--once")) {
-  process.exit((await pushOnce()) ? 0 : 1);
+  const ok = await pushOnce();
+  await Promise.all(pendingPrices);
+  process.exit(ok ? 0 : 1);
 }
-await pushOnce();
-setInterval(pushOnce, PUSH_EVERY_MS);
+
+// One update at a time, whether from the 15-minute timer or a "Refresh now" click on the site.
+let running = null;
+function runUpdate() {
+  running ||= pushOnce().finally(() => { running = null; });
+  return running;
+}
+
+// "Refresh now" on the site leaves a refresh_request row in Supabase; check for a new one every 15s.
+const REFRESH_CHECK_MS = 15 * 1000;
+let handledRefresh = await rowUpdatedAt("refresh_request").catch(() => null);
+setInterval(async () => {
+  try {
+    const at = await rowUpdatedAt("refresh_request");
+    if (!at || at === handledRefresh) return;
+    handledRefresh = at;
+    console.log(`[${stamp()}] "Refresh now" clicked on the site - updating.`);
+    await runUpdate();
+  } catch { /* Supabase busy - try again next check */ }
+}, REFRESH_CHECK_MS);
+
+await runUpdate();
+setInterval(runUpdate, PUSH_EVERY_MS);

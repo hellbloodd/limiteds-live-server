@@ -3,7 +3,7 @@
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
 import {
-  curlGet, supabaseConfig, createStateReader, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
@@ -208,6 +208,7 @@ async function scrapeLocally() {
 
 export function startBbTracker() {
   const [tick, every] = supabaseConfig() ? [loadFromSupabase, BB_SUPABASE_POLL_MS] : [scrapeLocally, 15 * 60 * 1000];
+  registerSupabaseTick(tick);
   tick();
   setInterval(tick, every).unref();
 }

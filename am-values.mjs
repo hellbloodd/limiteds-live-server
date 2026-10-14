@@ -5,7 +5,7 @@
 // unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
 import {
-  curlGet, supabaseConfig, createStateReader, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
@@ -221,6 +221,7 @@ async function scrapeLocally() {
 
 export function startAmTracker() {
   const [tick, every] = supabaseConfig() ? [loadFromSupabase, AM_SUPABASE_POLL_MS] : [scrapeLocally, 15 * 60 * 1000];
+  registerSupabaseTick(tick);
   tick();
   setInterval(tick, every).unref();
 }

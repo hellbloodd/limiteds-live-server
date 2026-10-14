@@ -39,6 +39,12 @@
   input:focus, select:focus { outline:none; border-color:var(--accent); }
   .stats { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; padding-bottom:10px; }
   .stats b { color:var(--text); }
+  .stats-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding-bottom:10px; }
+  .stats-row .stats { padding-bottom:0; }
+  .refresh { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:999px; padding:5px 12px; font:700 12px "Manrope", sans-serif; cursor:pointer; }
+  .refresh:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  .refresh:disabled { opacity:.6; cursor:default; }
+  #refresh-status { font-size:12px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:10px; padding-bottom:40px; }
   .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px; cursor:pointer; display:flex; gap:12px; }
   .card:hover { border-color:var(--accent); }
@@ -106,7 +112,11 @@
     <span class="dim">Change:</span>
     <button data-p="24h">24h</button><button data-p="7d" class="on">7d</button><button data-p="30d">30d</button><button data-p="1y">1y</button><button data-p="all">All</button>
   </div>
-  <div class="stats" id="stats"></div>
+  <div class="stats-row">
+    <div class="stats" id="stats"></div>
+    <button id="refresh" class="refresh" type="button">↻ Refresh now</button>
+    <span id="refresh-status" class="dim"></span>
+  </div>
   <div class="grid" id="grid"><div class="empty">Loading values… (the server may be waking up, give it ~30s)</div></div>
 </div>
 
@@ -142,9 +152,11 @@ const fmt = (n) => n == null ? "N/A" : n.toLocaleString();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
 
+let lastUpdatedAt = null;
 async function load() {
   try {
     const data = await fetch(GAME.api).then((r) => r.json());
+    lastUpdatedAt = data.updatedAt;
     items = data.items || [];
     if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No values yet.")}</div>`; return; }
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
@@ -283,6 +295,35 @@ $("periods").addEventListener("click", (e) => {
 });
 load();
 setInterval(load, 5 * 60 * 1000);
+
+// "Refresh now": ask for a fresh update, then check every 5s until new values arrive (~30s usually).
+$("refresh").addEventListener("click", async () => {
+  const btn = $("refresh"), status = $("refresh-status");
+  const before = lastUpdatedAt;
+  btn.disabled = true;
+  status.textContent = "Refreshing… usually takes about 30 seconds";
+  try {
+    const r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json());
+    if (r.error) throw new Error(r.error);
+  } catch {
+    status.textContent = "Couldn't request a refresh — try again in a minute.";
+    btn.disabled = false;
+    return;
+  }
+  for (let i = 0; i < 30; i++) {
+    await new Promise((res) => setTimeout(res, 5000));
+    const data = await fetch(GAME.api).then((x) => x.json()).catch(() => null);
+    if (data?.updatedAt && data.updatedAt !== before) {
+      await load();
+      status.textContent = "Updated just now ✓";
+      setTimeout(() => { status.textContent = ""; }, 8000);
+      btn.disabled = false;
+      return;
+    }
+  }
+  status.textContent = "No new values yet — the updater on the PC may be off. They'll appear once it runs.";
+  btn.disabled = false;
+});
 </script>
 </body>
 </html>
