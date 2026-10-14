@@ -16,7 +16,7 @@ export const MM2_CATEGORIES = ["ancients", "godlies", "chromas", "uniques", "vin
 const MM2_SCRAPE_MS = 15 * 60 * 1000;
 const MM2_SUPABASE_POLL_MS = 5 * 60 * 1000;
 const MM2_HISTORY_MAX_POINTS = 500;
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+export const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 let mm2Items = [];
@@ -27,7 +27,7 @@ let mm2Eldorado = { updatedAt: null, prices: {} }; // prices: { itemKey: { usd, 
 
 // ---------- Supabase ----------
 
-function supabaseConfig() {
+export function supabaseConfig() {
   const url = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
   const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
   return url && key ? { url, key } : null;
@@ -44,30 +44,35 @@ async function supabaseFetch(path, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-export async function readMm2State() {
-  const rows = await supabaseFetch("mm2_state?select=id,data");
-  const byId = Object.fromEntries(rows.map((r) => [r.id, r.data]));
+// The mm2_state table holds one row per piece of state. MM2 uses unprefixed ids
+// (latest, history, ...); other games use a prefix, e.g. "bb_latest" for Blade Ball.
+const STATE_IDS = ["latest", "history", "history_fetched", "eldorado"];
+
+export async function readMm2State(prefix = "") {
+  const ids = STATE_IDS.map((id) => prefix + id).join(",");
+  const rows = await supabaseFetch(`mm2_state?select=id,data&id=in.(${ids})`);
+  const byId = Object.fromEntries(rows.map((r) => [r.id.slice(prefix.length), r.data]));
   return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null };
 }
 
-export async function writeMm2Row(id, data) {
+export async function writeMm2Row(id, data, prefix = "") {
   await supabaseFetch("mm2_state?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify([{ id, data, updated_at: new Date().toISOString() }]),
+    body: JSON.stringify([{ id: prefix + id, data, updated_at: new Date().toISOString() }]),
   });
 }
 
-// historyFetched: { itemKey: ms } — when each item's history was last pulled from Supreme Values.
-export async function writeMm2State(latest, history, historyFetched = {}) {
+// historyFetched: { itemKey: ms } — when each item's history was last pulled from the values site.
+export async function writeMm2State(latest, history, historyFetched = {}, prefix = "") {
   const now = new Date().toISOString();
   await supabaseFetch("mm2_state?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify([
-      { id: "latest", data: latest, updated_at: now },
-      { id: "history", data: history, updated_at: now },
-      { id: "history_fetched", data: historyFetched, updated_at: now },
+      { id: prefix + "latest", data: latest, updated_at: now },
+      { id: prefix + "history", data: history, updated_at: now },
+      { id: prefix + "history_fetched", data: historyFetched, updated_at: now },
     ]),
   });
 }
@@ -121,10 +126,10 @@ export function parseCategoryPage(html, category) {
 }
 
 // curl rather than fetch(): Cloudflare blocks Node's own HTTP clients even from home IPs.
-function curlGet(url) {
+export function curlGet(url, headers = ["Accept: text/html,application/xhtml+xml"]) {
   return new Promise((resolve, reject) => {
     execFile("curl", ["-sSL", "--fail", "--max-time", "30", "-A", UA,
-      "-H", "Accept: text/html,application/xhtml+xml", "-H", "Accept-Language: en-US,en;q=0.9", url],
+      ...headers.flatMap((h) => ["-H", h]), "-H", "Accept-Language: en-US,en;q=0.9", url],
     { maxBuffer: 20 * 1024 * 1024, windowsHide: true },
     (error, stdout, stderr) => (error ? reject(new Error(String(stderr).trim() || error.message)) : resolve(stdout)));
   });
@@ -193,10 +198,14 @@ const ELDORADO = "https://www.eldorado.gg";
 const ELDORADO_SHOP = `${ELDORADO}/mm2-shop/i/204-2-0`;
 const ELDORADO_RARITIES = { godlies: ["Godly"], ancients: ["Ancient"], uniques: ["Unique"], vintages: ["Vintage"], evos: ["Godly", "Ancient", "Unique"], legendaries: ["Legendary"], rares: ["Rare"], uncommons: ["Uncommon"], commons: ["Common"] };
 
-async function eldoradoJson(path) {
-  const res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } });
-  if (!res.ok) throw new Error(`Eldorado ${res.status}`);
-  return res.json();
+// Retries "429 Too Many Requests" after a short pause (MM2 and Blade Ball refresh at the same time).
+export async function eldoradoJson(path) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    if (res.ok) return res.json();
+    if (res.status !== 429 || attempt >= 5) throw new Error(`Eldorado ${res.status}`);
+    await new Promise((r) => setTimeout(r, attempt * 2000));
+  }
 }
 
 // All knife/gun items on Eldorado as [type, rarity, name].
@@ -309,7 +318,7 @@ const MM2_PERIODS = { "24h": 1, "7d": 7, "30d": 30, "1y": 365, all: 0 };
 
 // Value change over each period, from history: compares the current value with the value
 // that was in effect at the start of the period (or the first recorded value if the item is newer).
-function periodChanges(points, current) {
+export function periodChanges(points, current) {
   const out = {};
   if (!points?.length || current == null) return out;
   const now = Date.now();
@@ -322,7 +331,7 @@ function periodChanges(points, current) {
 }
 
 // Last ~90 days of values, sampled to at most 30 points, for the mini chart on each card.
-function sparkline(points) {
+export function sparkline(points) {
   if (!points?.length) return [];
   const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
   const recent = points.filter(([t]) => t >= cutoff);
@@ -336,11 +345,19 @@ function sparkline(points) {
   return out;
 }
 
+// mm2.html is shared by every game page; the config fills in the game-specific parts.
+export async function sendGamePage(res, config) {
+  const html = (await readFile(join(HERE, "mm2.html"), "utf8"))
+    .replace("/*GAME_CONFIG*/", `window.GAME = ${JSON.stringify(config).replace(/</g, "\\u003c")};`);
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
 // Returns true if the request was handled.
 export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/mm2" || url.pathname === "/mm2/") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(await readFile(join(HERE, "mm2.html"), "utf8"));
+    await sendGamePage(res, { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons",
+      sourceName: "supremevalues.com", sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" });
     return true;
   }
   if (url.pathname === "/api/mm2") {

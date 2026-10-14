@@ -87,10 +87,11 @@
 <div class="wrap">
   <nav class="tabs">
     <a class="tab" href="/">Tracker</a>
-    <a class="tab active" href="/mm2">MM2 Values</a>
+    <a class="tab" data-tab="mm2" href="/mm2">MM2 Values</a>
+    <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
   </nav>
   <div class="controls">
-    <input id="q" type="search" placeholder="Search MM2 weapons…" autocomplete="off">
+    <input id="q" type="search" placeholder="Search…" autocomplete="off">
     <select id="cat"><option value="">All categories</option></select>
     <select id="sort">
       <option value="value">Highest value</option>
@@ -104,13 +105,13 @@
     </select>
   </div>
   <div class="periods" id="periods">
-    <button id="deals" class="deals" type="button" title="Only weapons giving more value per $ than the typical weapon, best first">🔥 Best deals</button>
+    <button id="deals" class="deals" type="button" title="Only items giving more value per $ than the typical item, best first">🔥 Best deals</button>
     <span class="sep"></span>
     <span class="dim">Change:</span>
     <button data-p="24h">24h</button><button data-p="7d" class="on">7d</button><button data-p="30d">30d</button><button data-p="1y">1y</button><button data-p="all">All</button>
   </div>
   <div class="stats" id="stats"></div>
-  <div class="grid" id="grid"><div class="empty">Loading MM2 values… (the server may be waking up, give it ~30s)</div></div>
+  <div class="grid" id="grid"><div class="empty">Loading values… (the server may be waking up, give it ~30s)</div></div>
 </div>
 
 <dialog id="dlg">
@@ -119,6 +120,12 @@
 </dialog>
 
 <script>
+/*GAME_CONFIG*/
+const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "supremevalues.com",
+  sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
+document.title = `${GAME.title} · Limiteds Live`;
+document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === GAME.tab));
+document.getElementById("q").placeholder = `Search ${GAME.noun}…`;
 let items = [];
 let period = "7d";
 let medianVpd = 0;
@@ -140,14 +147,14 @@ const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
 
 async function load() {
   try {
-    const data = await fetch("/api/mm2").then((r) => r.json());
+    const data = await fetch(GAME.api).then((r) => r.json());
     items = data.items || [];
-    if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No MM2 values yet.")}</div>`; return; }
+    if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No values yet.")}</div>`; return; }
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
     if (cat.options.length === 1) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
-    $("stats").innerHTML = `<span><b>${items.length}</b> weapons</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="https://supremevalues.com/mm2" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="https://www.eldorado.gg/mm2-shop/i/204-2-0" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
+    $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
     render();
   } catch (e) {
     $("grid").innerHTML = `<div class="empty">Couldn't load values: ${esc(e.message)}</div>`;
@@ -168,7 +175,7 @@ function render() {
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
     <div class="card" data-key="${esc(i.key)}">
-      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='https://supremevalues.com/media/N_A.webp'">
+      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
       <div>
         <div class="name">${esc(i.name)}</div>
         <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>
@@ -177,7 +184,7 @@ function render() {
         ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
       </div>
       ${spark(i.spark)}
-    </div>`).join("") : `<div class="empty">No weapons match.</div>`;
+    </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
 }
 
 // Mini 90-day trend line on each card, coloured by direction.
@@ -258,12 +265,12 @@ $("grid").addEventListener("click", async (e) => {
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}<dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
     </dl>
-    ${i.valueText ? `<p class="dim">Low-tier weapons are valued as trade ratios, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
+    ${i.valueText ? `<p class="dim">This item is valued as a trade ratio, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="hist" class="dim">Loading history…</div>
     <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on Supreme Values</a></p>`;
   $("dlg").showModal();
   if (i.valueText) { $("hist").innerHTML = ""; return; }
-  const h = await fetch("/api/mm2/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
+  const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
   mountChart(h.points);
 });
 

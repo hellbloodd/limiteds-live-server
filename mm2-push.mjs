@@ -1,6 +1,6 @@
-// Run on a home PC (not Render): scrapes MM2 values from Supreme Values every 15 minutes
-// and saves them to Supabase for the live site to read. Cloudflare blocks Render's IPs,
-// but lets home connections through.
+// Run on a home PC (not Render): scrapes MM2 values (Supreme Values) and Blade Ball values
+// (bbvalues.uk) every 15 minutes and saves them to Supabase for the live site to read.
+// Both sites are behind Cloudflare, which blocks Render's IPs but lets home connections through.
 //
 // Needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY set (see start-mm2-push.bat).
 // Usage: node mm2-push.mjs          (keeps running, pushes every 15 minutes)
@@ -10,6 +10,7 @@ import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeMm2State, writeMm2Row, fetchSvHistory,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice,
 } from "./mm2-values.mjs";
+import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices } from "./bb-values.mjs";
 
 const PUSH_EVERY_MS = 15 * 60 * 1000;
 // Each item's full history is re-pulled from its Supreme Values page when its value changes,
@@ -18,7 +19,7 @@ const HISTORY_STALE_MS = 24 * 60 * 60 * 1000;
 const HISTORY_BATCH = 80;
 const HISTORY_CONCURRENCY = 2;
 const ELDORADO_EVERY_MS = 60 * 60 * 1000;
-const ELDORADO_DELAY_MS = 300; // one request at a time, ~2 minutes for every weapon
+const ELDORADO_WORKERS = 4; // parallel price lookups, ~40s for every weapon
 const HISTORY_DELAY_MS = 400; // per request, per worker - stays well under Supreme Values' rate limit
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -26,26 +27,32 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
-async function refreshHistories(allItems, history, historyFetched, now) {
+const MM2_HISTORY = { fetch: fetchSvHistory, staleMs: HISTORY_STALE_MS, batch: HISTORY_BATCH, concurrency: HISTORY_CONCURRENCY, delayMs: HISTORY_DELAY_MS };
+
+async function refreshHistories(allItems, history, historyFetched, now, opts = MM2_HISTORY) {
   const items = allItems.filter((it) => !it.valueText); // ratio-valued items have no numeric history
   const changed = items.filter((it) => {
     const points = history[it.key];
     return !points?.length || points[points.length - 1][1] !== it.value;
   });
   const stale = items
-    .filter((it) => !changed.includes(it) && now - (historyFetched[it.key] || 0) > HISTORY_STALE_MS)
+    .filter((it) => !changed.includes(it) && now - (historyFetched[it.key] || 0) > opts.staleMs)
     .sort((a, b) => (historyFetched[a.key] || 0) - (historyFetched[b.key] || 0));
-  // Changed items always; never-fetched/stale ones in batches.
-  const queue = [...changed.filter((it) => historyFetched[it.key]), ...[...changed.filter((it) => !historyFetched[it.key]), ...stale].slice(0, HISTORY_BATCH)];
+  const neverFetched = changed.filter((it) => !historyFetched[it.key]);
+  if (opts.byValue) neverFetched.sort((a, b) => b.value - a.value);
+  // Changed items always; never-fetched/stale ones in batches. Items we track changes for ourselves
+  // (opts.byValue) don't need a re-pull just because the value moved.
+  const changedKnown = opts.byValue ? [] : changed.filter((it) => historyFetched[it.key]);
+  const queue = [...changedKnown, ...[...neverFetched, ...stale].slice(0, opts.batch)];
   let ok = 0;
-  await Promise.all(Array.from({ length: HISTORY_CONCURRENCY }, async () => {
+  await Promise.all(Array.from({ length: opts.concurrency }, async () => {
     for (let it; (it = queue.shift());) {
       try {
-        const points = await fetchSvHistory(it);
+        const points = await opts.fetch(it);
         if (points.length) { history[it.key] = points; ok++; }
         historyFetched[it.key] = now;
       } catch { /* keep what we have; retried next run */ }
-      await new Promise((r) => setTimeout(r, HISTORY_DELAY_MS));
+      await new Promise((r) => setTimeout(r, opts.delayMs));
     }
   }));
   return ok;
@@ -55,25 +62,57 @@ async function refreshHistories(allItems, history, historyFetched, now) {
 async function refreshEldorado(items, previous) {
   const leaves = await fetchEldoradoItems();
   const prices = {};
-  let matched = 0;
-  for (const it of items.filter((i) => !i.valueText)) {
-    const m = matchEldorado(it, leaves);
-    if (!m) continue;
-    matched++;
-    try {
-      const p = await fetchEldoradoPrice(m);
-      if (p) prices[it.key] = p;
-    } catch {
-      if (previous?.prices?.[it.key]) prices[it.key] = previous.prices[it.key]; // keep the last known price
+  const queue = items.filter((i) => !i.valueText).map((it) => [it, matchEldorado(it, leaves)]).filter(([, m]) => m);
+  const matched = queue.length;
+  await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
+    for (let job; (job = queue.shift());) {
+      const [it, m] = job;
+      try {
+        const p = await fetchEldoradoPrice(m);
+        if (p) prices[it.key] = p;
+      } catch {
+        if (previous?.prices?.[it.key]) prices[it.key] = previous.prices[it.key]; // keep the last known price
+      }
     }
-    await new Promise((r) => setTimeout(r, ELDORADO_DELAY_MS));
-  }
+  }));
   await writeMm2Row("eldorado", { updatedAt: new Date().toISOString(), prices });
   return { matched, priced: Object.keys(prices).length };
 }
 
+const stamp = () => new Date().toLocaleTimeString();
+
+async function pushBladeBall() {
+  try {
+    const { items } = await scrapeBbValues();
+    const { history, historyFetched, eldorado } = await readMm2State(BB_PREFIX);
+    const now = Date.now();
+    // bbvalues.uk's API is too unreliable for per-item history downloads, so Blade Ball history
+    // is built from our own updates: every value change we see is recorded.
+    mergeMm2History(history, items, now);
+    await writeMm2State({ updatedAt: new Date(now).toISOString(), items }, history, historyFetched, BB_PREFIX);
+    console.log(`[${stamp()}] Pushed ${items.length} Blade Ball values.`);
+    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
+      try {
+        const prices = await fetchBbEldoradoPrices(items);
+        await writeMm2Row("eldorado", { updatedAt: new Date().toISOString(), prices }, BB_PREFIX);
+        console.log(`[${stamp()}] Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed.`);
+      } catch (e) {
+        console.error(`[${stamp()}] Blade Ball Eldorado price refresh failed: ${e.message}`);
+      }
+    }
+    return true;
+  } catch (e) {
+    console.error(`[${stamp()}] Blade Ball push failed: ${e.message}`);
+    return false;
+  }
+}
+
 async function pushOnce() {
-  const stamp = () => new Date().toLocaleTimeString();
+  const [mm2, bb] = await Promise.all([pushMm2(), pushBladeBall()]);
+  return mm2 && bb;
+}
+
+async function pushMm2() {
   try {
     const scraped = await scrapeMm2Values();
     const { latest, history, historyFetched, eldorado } = await readMm2State();

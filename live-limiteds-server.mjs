@@ -1,6 +1,7 @@
 import http from "http";
 import { URL } from "url";
 import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
+import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 
 // ============================================================================
 // ARCHITECTURE
@@ -597,6 +598,7 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
   <button class="view-tab" id="view-tab-tracker">Tracker</button>
   <button class="view-tab" id="view-tab-marketplace">Marketplaces</button>
   <a class="view-tab" href="/mm2" style="text-decoration:none">MM2 Values</a>
+  <a class="view-tab" href="/bladeball" style="text-decoration:none">Blade Ball Values</a>
   <div class="prices-freshness" id="prices-freshness" hidden>
     <span id="prices-freshness-text"></span>
     <button id="refresh-prices-btn" type="button">Refresh now</button>
@@ -3639,6 +3641,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
+    if (await handleBbRequest(parsedUrl, res, sendJson)) return;
 
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
@@ -3655,6 +3658,7 @@ async function startServer() {
 
 startServer();
 startMm2Tracker();
+startBbTracker();
 if (snapshotStorageEnabled()) {
   setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
   setInterval(() => runSnapshot().catch(e => console.error(e.message)), SNAPSHOT_INTERVAL_MS);

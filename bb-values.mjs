@@ -1,0 +1,219 @@
+// Blade Ball values tracker — same idea as mm2-values.mjs, with values from bbvalues.uk.
+//
+// bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
+// and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
+import {
+  curlGet, supabaseConfig, readMm2State, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+} from "./mm2-values.mjs";
+
+const BB_ORIGIN = "https://bbvalues.uk";
+const BB_API_HEADERS = ["x-bbv-handshake: v1-secure-request", "Accept: application/json", `Referer: ${BB_ORIGIN}/values/`];
+const BB_IMAGES = "https://images.bbvalues.uk/item%20images";
+export const BB_PREFIX = "bb_";
+export const BB_CATEGORIES = ["swords", "explosions", "emotes"];
+const BB_SUPABASE_POLL_MS = 5 * 60 * 1000;
+
+let bbItems = [];
+let bbUpdatedAt = 0;
+let bbHistory = {};
+let bbLastError = "";
+let bbEldorado = { updatedAt: null, prices: {} };
+
+// ---------- bbvalues.uk ----------
+
+// bbvalues.uk runs on a Cloudflare Worker that often fails with an instant 503 "error code: 1102"
+// (worker over its resource limit) - from every other request to most of them at busy times.
+// We only need one success per update, so keep trying for up to ~2 minutes.
+async function bbJson(path) {
+  let text;
+  for (let attempt = 1; ; attempt++) {
+    try { text = await curlGet(BB_ORIGIN + path, BB_API_HEADERS); break; } catch (e) {
+      if (attempt >= 40) throw new Error(`bbvalues.uk unavailable (${e.message})`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  const json = JSON.parse(text);
+  if (json && !Array.isArray(json) && json.e) throw new Error(`bbvalues.uk: ${json.e}`);
+  return json;
+}
+
+// All valued items. Finisher / accessory versions of a sword are separate items ("Chroma Blade (Finisher)");
+// exact repeats (same name, category and version) keep the highest-valued one.
+export async function scrapeBbValues() {
+  const raw = await bbJson("/api/items");
+  const byName = new Map();
+  for (const r of raw) {
+    if (!(r.p > 0)) continue;
+    const category = `${String(r.c).toLowerCase()}s`;
+    const variant = r.s && r.s !== "None" ? r.s.replace("SwordAccessory", "Accessory") : "";
+    const item = {
+      key: r.id,
+      name: variant ? `${r.n} (${variant})` : r.n,
+      baseName: r.n,
+      variant,
+      category,
+      value: r.p,
+      stability: r.st ? r.st[0].toUpperCase() + r.st.slice(1) : "",
+      rarity: r.r === "LimitedU" ? "Limited (Unique)" : r.r,
+      origin: r.tg || "",
+      change24h: Number(r.ch) || 0, // bbvalues.uk's own 24h change, used until we have history
+      demand: null,
+      image: `${BB_IMAGES}/${encodeURIComponent(`${r.id}.webp`)}`,
+      sourceUrl: `${BB_ORIGIN}/values/`,
+    };
+    const dedupeKey = `${category}:${item.name.toLowerCase()}`;
+    const kept = byName.get(dedupeKey);
+    if (!kept || item.value > kept.value) byName.set(dedupeKey, item);
+  }
+  const items = [...byName.values()];
+  if (!items.length) throw new Error("No Blade Ball values returned");
+  return { items, errors: [] };
+}
+
+// ---------- Eldorado prices ----------
+// Blade Ball listings on Eldorado have no item tree, just free-text titles. We page through every
+// listing (cheapest first) and match a title to an item only when its leading name is exactly
+// the item's name: "Dragon Slayer ♨️Limited♨️" counts, "Dual Dragon Slayer" or bundles don't.
+
+const BB_SHOP = "https://www.eldorado.gg/blade-ball-swords/i/203-2-0";
+const ELDORADO_PAGE_SIZE = 50;
+const ELDORADO_MAX_PAGES = 150;
+const ELDORADO_WORKERS = 2;
+
+const normName = (s) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+
+function titleName(title) {
+  const lead = String(title)
+    .replace(/^[^\p{L}\p{N}]+/u, "") // leading emoji / symbols
+    .split(/\s[-–—|:]\s|[|【\[(♨⚡✅🔥⭐🌟🔴🟢]|\s{2,}/u)[0];
+  return normName(lead.replace(/\b(sword|limited|unique|secret|bb|blade ball)\b\s*$/gi, ""));
+}
+
+export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
+  const byName = new Map(); // base name -> items (all versions)
+  for (const it of items) {
+    const n = normName(it.baseName || it.name);
+    byName.set(n, [...(byName.get(n) || []), it]);
+  }
+  const found = {}; // key -> [usd, ...]
+  const fetchPage = (page) => eldoradoJson(`/api/v1/item-management/offers?gameId=203&category=CustomItem&pageIndex=${page}`
+    + `&pageSize=${ELDORADO_PAGE_SIZE}&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false`
+    + "&offerSortingCriterion=Price&isAscending=true");
+  const first = await fetchPage(1);
+  const totalPages = Math.min(first.totalPages || 1, ELDORADO_MAX_PAGES);
+  const pages = [first];
+  const queue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+  await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
+    for (let page; (page = queue.shift());) pages.push(await fetchPage(page));
+  }));
+  onProgress(totalPages, totalPages);
+  for (const j of pages) {
+    for (const r of j.results || []) {
+      const usd = r.offer?.pricePerUnitInUSD?.amount;
+      const title = r.offer?.offerTitle || "";
+      const all = byName.get(titleName(title));
+      if (!(usd > 0) || !all) continue;
+      // Finisher versions only when the title says so; otherwise the plain version.
+      const finisher = /finisher/i.test(title);
+      const matches = all.filter((m) => (finisher ? m.variant === "Finisher" : !m.variant));
+      // A name shared by a sword and an emote/explosion: prefer the sword (what nearly all listings are).
+      const it = matches.length === 1 ? matches[0] : matches.find((m) => m.category === "swords");
+      if (it) (found[it.key] ||= []).push(usd);
+    }
+  }
+  const prices = {};
+  for (const [key, list] of Object.entries(found)) {
+    list.sort((a, b) => a - b);
+    // Skip listings far below the rest (mislabelled items), same rule as MM2.
+    const median = list[Math.floor(Math.min(list.length, 5) / 2)];
+    const item = items.find((i) => i.key === key);
+    prices[key] = {
+      usd: list.find((v) => v >= median * 0.5),
+      listings: list.length,
+      url: `${BB_SHOP}?searchQuery=${encodeURIComponent(item.name)}`,
+    };
+  }
+  return prices;
+}
+
+// ---------- Server ----------
+
+async function loadFromSupabase() {
+  try {
+    const { latest, history, eldorado } = await readMm2State(BB_PREFIX);
+    if (eldorado?.prices) bbEldorado = eldorado;
+    if (latest?.items?.length) {
+      bbItems = latest.items;
+      bbUpdatedAt = Date.parse(latest.updatedAt) || 0;
+    }
+    bbHistory = history;
+    bbLastError = latest ? "" : "No Blade Ball values in Supabase yet — run mm2-push.mjs on a home PC.";
+  } catch (e) {
+    bbLastError = e.message;
+    console.warn(`Blade Ball Supabase read failed: ${e.message}`);
+  }
+}
+
+async function scrapeLocally() {
+  try {
+    const { items } = await scrapeBbValues();
+    bbUpdatedAt = Date.now();
+    mergeMm2History(bbHistory, items, bbUpdatedAt);
+    bbItems = items;
+    bbLastError = "";
+    console.log(`Blade Ball values scraped: ${items.length} items.`);
+  } catch (e) {
+    bbLastError = e.message;
+    console.warn(`Blade Ball scrape failed: ${e.message}`);
+  }
+}
+
+export function startBbTracker() {
+  const [tick, every] = supabaseConfig() ? [loadFromSupabase, BB_SUPABASE_POLL_MS] : [scrapeLocally, 15 * 60 * 1000];
+  tick();
+  setInterval(tick, every).unref();
+}
+
+function eldoradoFields(it) {
+  const p = bbEldorado.prices[it.key];
+  if (!p) return {};
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10 };
+}
+
+// Returns true if the request was handled.
+export async function handleBbRequest(url, res, sendJson) {
+  if (url.pathname === "/bladeball" || url.pathname === "/bladeball/") {
+    await sendGamePage(res, { api: "/api/bladeball", title: "Blade Ball Values", tab: "bladeball", noun: "Blade Ball items",
+      sourceName: "bbvalues.uk", sourceUrl: `${BB_ORIGIN}/values/`, shopUrl: BB_SHOP });
+    return true;
+  }
+  if (url.pathname === "/api/bladeball") {
+    const q = (url.searchParams.get("q") || "").toLowerCase();
+    const category = url.searchParams.get("category") || "";
+    const items = bbItems
+      .filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category))
+      .map((it) => {
+        const h = bbHistory[it.key];
+        const changes = periodChanges(h, it.value);
+        if (it.change24h && !changes["24h"]?.abs) {
+          const base = it.value - it.change24h;
+          changes["24h"] = { abs: it.change24h, pct: base ? Math.round(it.change24h / base * 1000) / 10 : 0 };
+        }
+        return { ...it, spark: sparkline(h), changes, ...eldoradoFields(it) };
+      });
+    sendJson(res, 200, {
+      updatedAt: bbUpdatedAt ? new Date(bbUpdatedAt).toISOString() : null,
+      pricesUpdatedAt: bbEldorado.updatedAt,
+      source: "bbvalues.uk", count: items.length, categories: BB_CATEGORIES, items,
+      ...(bbItems.length ? {} : { error: bbLastError || "Blade Ball values are still loading." }),
+    });
+    return true;
+  }
+  if (url.pathname === "/api/bladeball/history") {
+    const key = url.searchParams.get("key") || "";
+    sendJson(res, 200, { key, points: bbHistory[key] || [] });
+    return true;
+  }
+  return false;
+}
+
