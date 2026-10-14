@@ -305,6 +305,13 @@ $("refresh").addEventListener("click", async () => {
   try {
     const r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json());
     if (r.error) throw new Error(r.error);
+    if (r.recent) { // an update finished less than a minute ago
+      await load();
+      status.textContent = "Already up to date ✓";
+      setTimeout(() => { status.textContent = ""; }, 8000);
+      btn.disabled = false;
+      return;
+    }
   } catch {
     status.textContent = "Couldn't request a refresh — try again in a minute.";
     btn.disabled = false;
@@ -321,7 +328,7 @@ $("refresh").addEventListener("click", async () => {
       return;
     }
   }
-  status.textContent = "No new values yet — the updater on the PC may be off. They'll appear once it runs.";
+  status.textContent = "The values sites are slow right now — new values will appear in a moment.";
   btn.disabled = false;
 });
 </script>
