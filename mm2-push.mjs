@@ -7,7 +7,7 @@
 //        node mm2-push.mjs --once   (push once and exit)
 //        add --prices to refresh Eldorado prices now instead of waiting for the hourly refresh
 import {
-  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows, fetchSvHistory,
+  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
@@ -42,9 +42,7 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
-const MM2_HISTORY = { fetch: fetchSvHistory, staleMs: HISTORY_STALE_MS, batch: HISTORY_BATCH, concurrency: HISTORY_CONCURRENCY, delayMs: HISTORY_DELAY_MS };
-
-async function refreshHistories(allItems, history, historyFetched, now, opts = MM2_HISTORY) {
+async function refreshHistories(allItems, history, historyFetched, now, opts) {
   const items = allItems.filter((it) => !it.valueText); // ratio-valued items have no numeric history
   const changed = items.filter((it) => {
     const points = history[it.key];
@@ -181,13 +179,12 @@ async function pushMm2() {
       console.warn(`[${stamp()}] ${failed.size} categories failed (kept their last values): ${scraped.errors.join("; ")}`);
     }
     const now = Date.now();
-    const pulled = await refreshHistories(items, history, historyFetched, now);
-    mergeMm2History(history, items, now); // ensures the current value is the latest point
+    // mm2values.com has no history pages, so MM2 history is recorded from our own updates
+    // (on top of the older history carried over from Supreme Values - see mm2-migrate-mv.mjs).
+    mergeMm2History(history, items, now);
     state.latest = { items };
-    await writeChangedRows("", { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
-    const numeric = items.filter((it) => !it.valueText);
-    const withHistory = numeric.filter((it) => historyFetched[it.key]).length;
-    console.log(`[${stamp()}] Pushed ${items.length} MM2 values (${pulled} histories updated, ${withHistory}/${numeric.length} numeric weapons have full history).`);
+    await writeChangedRows("", { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
+    console.log(`[${stamp()}] Pushed ${items.length} MM2 values.`);
     if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
       try {
         const { matched, priced } = await eldoradoExclusive(() => refreshEldorado(items, eldorado));

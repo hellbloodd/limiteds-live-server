@@ -1,7 +1,7 @@
 // MM2 weapon values tracker.
 //
-// Supreme Values sits behind Cloudflare, which blocks datacenter IPs like Render's.
-// So the values are scraped from a home PC by mm2-push.mjs and stored in Supabase
+// Values come from mm2values.com (one page per rarity). Values sites block datacenter IPs like
+// Render's, so they are scraped from a home PC by mm2-push.mjs and stored in Supabase
 // (table mm2_state, see mm2-tables.sql); the live server only reads them from there.
 // Without Supabase configured (local dev) the server scrapes directly instead.
 import { readFile } from "node:fs/promises";
@@ -9,10 +9,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 
-const SV_ORIGIN = "https://supremevalues.com";
-const SV_BASE = `${SV_ORIGIN}/mm2`;
-// Weapon categories only (pets, sets and misc are skipped).
-export const MM2_CATEGORIES = ["ancients", "godlies", "chromas", "uniques", "vintages", "evos", "legendaries", "rares", "uncommons", "commons"];
+const MV_ORIGIN = "https://www.mm2values.com";
+// Our category -> mm2values.com page (?p=...). Weapon categories only (pets and misc are skipped).
+const MV_PAGES = { ancients: "ancient", godlies: "godly", chromas: "chroma", uniques: "unique", vintages: "vintage",
+  legendaries: "legend", rares: "rare", uncommons: "uncommon", commons: "common" };
+export const MM2_CATEGORIES = Object.keys(MV_PAGES);
 const MM2_SCRAPE_MS = 15 * 60 * 1000;
 const MM2_SUPABASE_POLL_MS = 5 * 60 * 1000;
 const MM2_HISTORY_MAX_POINTS = 500;
@@ -134,33 +135,33 @@ function pick(block, re) {
   return m ? decodeHtml(m[1].replace(/<[^>]+>/g, "")) : "";
 }
 
+const slug = (name) => name.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+// One mm2values.com page: each item is a <div class=stackable> block like
+//   <img src='img/Evergun.png'><b>Evergun</b><br> Value: 3,425<br>Range: N/A <br>
+//   Demand: 5 - Rarity: 3.5<br>Stability: Stable<hr>
 export function parseCategoryPage(html, category) {
   const items = [];
-  // Each item is an itemcolumn (carrying the numeric data-value) wrapping an itemcell.
-  for (const chunk of html.split('<div class="itemcolumn"').slice(1)) {
-    if (!chunk.includes('class="itemcell"')) continue;
-    const id = pick(chunk, /class="itemcell"\s+id="([^"]*)"/);
-    // Low tiers show a trade ratio ("x4 T1 Legendaries") instead of a number; data-value has the number.
-    const valueText = pick(chunk, /class="itemvalue[^"]*">([^<]*)</);
-    const dataValue = Number(pick(chunk, /^[^>]*data-value="([^"]*)"/));
-    const name = pick(chunk, /class="itemhead">([\s\S]*?)<\/div>/);
-    if (!name) continue;
-    const image = pick(chunk, /<img class="itemimage" src="([^"]+)"/);
+  for (const chunk of html.split("<div class=stackable>").slice(1)) {
+    const block = chunk.split("<input")[0];
+    const name = pick(block, /<b>([\s\S]*?)<\/b>/);
+    const value = parseNumber(pick(block, /Value:\s*([\d,.]+)/));
+    if (!name || !(value > 0)) continue;
+    const range = pick(block, /Range:\s*([^<]*)/);
+    const image = pick(block, /<img src='([^']+)'/);
     items.push({
-      key: `${category}:${id || name}`,
+      key: `${category}:${slug(name)}`,
       name,
       category,
-      value: Number.isFinite(dataValue) && pick(chunk, /^[^>]*data-value="([^"]*)"/) !== "" ? dataValue : parseNumber(valueText),
-      valueText: /^[\d,.\s]*$/.test(valueText) ? "" : valueText,
-      range: pick(chunk, /class="itemrange">([^<]*)</),
-      stability: pick(chunk, /class="itemstability[^"]*">([^<]*)</),
-      demand: parseNumber(pick(chunk, /Demand - <b>([^<]*)</)),
-      rarity: parseNumber(pick(chunk, /Rarity - <b>([^<]*)</)),
-      origin: pick(chunk, /class="itemorigin">([^<]*)</),
-      change: parseNumber(pick(chunk, /Change in Value - \(<b[^>]*>([^<]*)<\/b>/)),
-      changePct: pick(chunk, /class="sv-pctchange[^"]*">([^<]*)</),
-      image: image ? new URL(image, `${SV_ORIGIN}/`).href : "",
-      sourceUrl: `${SV_BASE}/${category}?item=${encodeURIComponent(id || name)}`,
+      value,
+      valueText: "",
+      range: range && !/^n\/a$/i.test(range) ? range : "",
+      stability: pick(block, /Stability:\s*([^<]*)/),
+      demand: parseNumber(pick(block, /Demand:\s*([\d.]+)/)),
+      rarity: parseNumber(pick(block, /Rarity:\s*([\d.]+)/)),
+      origin: "",
+      image: image ? new URL(image, `${MV_ORIGIN}/`).href : "",
+      sourceUrl: `${MV_ORIGIN}/?p=${MV_PAGES[category]}`,
     });
   }
   return items;
@@ -178,10 +179,10 @@ export function curlGet(url, headers = ["Accept: text/html,application/xhtml+xml
 
 // Scrapes every category. Throws if nothing at all could be fetched.
 export async function scrapeMm2Values() {
-  // One category at a time: firing all ten at once trips Supreme Values' rate limit (HTTP 429).
+  // One page at a time, to go easy on the site.
   const results = [];
   for (const c of MM2_CATEGORIES) {
-    results.push(await curlGet(`${SV_BASE}/${c}`).then((html) => ({ status: "fulfilled", value: parseCategoryPage(html, c) }), (reason) => ({ status: "rejected", reason })));
+    results.push(await curlGet(`${MV_ORIGIN}/?p=${MV_PAGES[c]}`).then((html) => ({ status: "fulfilled", value: parseCategoryPage(html, c) }), (reason) => ({ status: "rejected", reason })));
   }
   const items = [];
   const errors = [];
@@ -190,29 +191,19 @@ export async function scrapeMm2Values() {
   return { items: cleanMm2Items(items), errors };
 }
 
-// Drops items with no value (one-off leaderboard prizes like the Gold/Silver/Bronze uniques)
-// and keeps one entry per name — the highest-valued one when several categories share it.
+// Drops items with no value and the Gold/Silver/Bronze/Blue/Red/Purple prize "sets" (removed on
+// request), and keeps one entry per name — the highest-valued one when several categories share it.
+const PRIZE_SET = /^(gold|silver|bronze|blue|red|purple)\s/i;
 function cleanMm2Items(items) {
   const byName = new Map();
   for (const item of items) {
     if (item.value == null) continue;
+    if (item.category === "uniques" && PRIZE_SET.test(item.name)) continue;
     const name = item.name.toLowerCase();
     const kept = byName.get(name);
     if (!kept || item.value > kept.value) byName.set(name, item);
   }
   return [...byName.values()];
-}
-
-// Full value history from the item's Supreme Values page, as [[ms, value], ...].
-// The page embeds it as "history":[{"v":2000,"t":"2023-12-22 22:55:02"}, ...].
-export async function fetchSvHistory(item) {
-  const html = await curlGet(item.sourceUrl);
-  const m = html.match(/"history":(\[[^\]]*\])/);
-  if (!m) return [];
-  return JSON.parse(m[1])
-    .map((p) => [Date.parse(`${String(p.t).replace(" ", "T")}Z`), Number(p.v)])
-    .filter(([t, v]) => Number.isFinite(t) && v >= 1) // below 1 = the fractional sort order used before an item had a real value
-    .slice(-MM2_HISTORY_MAX_POINTS);
 }
 
 // Appends changed values to history in place. Returns true if anything changed.
@@ -271,16 +262,24 @@ export async function fetchEldoradoItems() {
   return leaves;
 }
 
-const normName = (s) => s.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+// Compared without spaces: "Swirlygun" / "Swirly Gun", "Log Chopper" / "Logchopper".
+const normName = (s) => s.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
 
-// Finds the Eldorado item for a Supreme Values item, or null if there's no single clear match.
+// Finds the Eldorado item for an MM2 item, or null if there's no single clear match.
 export function matchEldorado(item, leaves) {
   let name = item.name, type = null, chroma = item.category === "chromas";
   if (/^(chroma|c\.)\s+/i.test(name)) { chroma = true; name = name.replace(/^(chroma|c\.)\s+/i, ""); }
   const t = name.match(/\((gun|knife)\)\s*$/i);
   if (t) { type = t[1][0].toUpperCase() + t[1].slice(1).toLowerCase(); name = name.replace(/\((gun|knife)\)\s*$/i, ""); }
-  const n = normName(name);
-  let cands = leaves.filter((l) => normName(l[2]) === n && (!type || l[0] === type));
+  let cands = leaves.filter((l) => normName(l[2]) === normName(name) && (!type || l[0] === type));
+  // mm2values.com writes the type as a plain suffix ("Cane Knife", "Bones Gun") where Eldorado has
+  // "Cane (2015)" under Knife - retry without it.
+  const suffix = !cands.length && name.match(/\s(gun|knife)\s*$/i);
+  if (suffix) {
+    type = suffix[1][0].toUpperCase() + suffix[1].slice(1).toLowerCase();
+    const base = normName(name.replace(/\s(gun|knife)\s*$/i, ""));
+    cands = leaves.filter((l) => normName(l[2]) === base && l[0] === type);
+  }
   const narrow = (f) => { const c = cands.filter(f); if (c.length) cands = c; };
   const rarities = chroma ? ["Godly", "Ancient"] : ELDORADO_RARITIES[item.category] || [];
   // High tiers must match rarity exactly - e.g. the Godly "Batwing" is not Eldorado's Ancient Batwing.
@@ -409,7 +408,7 @@ export async function sendGamePage(res, config) {
 export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/mm2" || url.pathname === "/mm2/") {
     await sendGamePage(res, { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons",
-      sourceName: "supremevalues.com", sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" });
+      sourceName: "mm2values.com", sourceUrl: "https://www.mm2values.com/?p=godly", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" });
     return true;
   }
   if (url.pathname === "/api/mm2") {
@@ -423,7 +422,7 @@ export async function handleMm2Request(url, res, sendJson) {
     sendJson(res, 200, {
       updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
       pricesUpdatedAt: mm2Eldorado.updatedAt,
-      source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items,
+      source: "mm2values.com", count: items.length, categories: MM2_CATEGORIES, items,
       ...(mm2Items.length ? {} : { error: mm2LastError || "MM2 values are still loading." }),
     });
     return true;
