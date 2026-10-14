@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MM2 Values · Limiteds Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+  :root {
+    --bg:#0b0e14; --surface:#12161f; --surface-2:#1a2029; --border:#262d3a;
+    --text:#e9edf4; --muted:#8a93a6; --muted-2:#5d6577;
+    --accent:#d9a441; --accent-soft:#d9a44122;
+    --green:#34c17a; --red:#e0576a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:#f6f4ee; --surface:#ffffff; --surface-2:#f0ede4; --border:#ded8c8;
+      --text:#221d12; --muted:#6b6455; --muted-2:#98917f;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 "Manrope", -apple-system, "Segoe UI", sans-serif; }
+  .tabular { font-family:"JetBrains Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums; }
+  .wrap { max-width:1200px; margin:auto; padding:0 16px; }
+  header { border-bottom:1px solid var(--border); background:var(--surface); }
+  .top { display:flex; align-items:center; gap:14px; padding:14px 0; flex-wrap:wrap; }
+  .brand { display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--text); }
+  .brand-mark { width:30px; height:30px; border-radius:8px; background:var(--accent); color:#1a1405; display:grid; place-items:center; font:700 15px "Unbounded", sans-serif; }
+  .brand-text { font:600 16px "Unbounded", sans-serif; }
+  .dim { color:var(--muted); }
+  .tabs { display:flex; gap:8px; padding:14px 0 4px; flex-wrap:wrap; }
+  .tab { padding:7px 14px; border-radius:999px; border:1px solid var(--border); color:var(--muted); text-decoration:none; font-weight:700; font-size:13px; }
+  .tab:hover { color:var(--text); border-color:var(--muted-2); }
+  .tab.active { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; padding:12px 0; }
+  input, select { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:9px 12px; font:inherit; }
+  input { flex:1 1 220px; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
+  .stats { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; padding-bottom:10px; }
+  .stats b { color:var(--text); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:10px; padding-bottom:40px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px; cursor:pointer; display:flex; gap:12px; }
+  .card:hover { border-color:var(--accent); }
+  .card img { width:64px; height:64px; object-fit:contain; flex:none; background:var(--surface-2); border-radius:10px; }
+  .name { font-weight:800; }
+  .cat { color:var(--muted); font-size:12px; text-transform:capitalize; }
+  .val { font-size:17px; font-weight:700; margin-top:4px; color:var(--accent); }
+  .chg { font-size:12px; }
+  .up { color:var(--green); } .down { color:var(--red); } .flat { color:var(--muted-2); }
+  dialog { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:16px; width:min(640px, calc(100% - 32px)); padding:20px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { font:600 18px "Unbounded", sans-serif; margin:0; }
+  .dl { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin:14px 0; }
+  .dl dt { color:var(--muted); } .dl dd { margin:0; }
+  svg.chart { width:100%; height:180px; display:block; background:var(--surface-2); border-radius:10px; }
+  .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
+  a { color:var(--accent); }
+  .empty { color:var(--muted); padding:40px 16px; text-align:center; grid-column:1/-1; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap top">
+    <a class="brand" href="/"><div class="brand-mark">L</div><div class="brand-text">Limiteds <span class="dim">Live</span></div></a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">Tracker</a>
+    <a class="tab active" href="/mm2">MM2 Values</a>
+  </nav>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search MM2 weapons…" autocomplete="off">
+    <select id="cat"><option value="">All categories</option></select>
+    <select id="sort">
+      <option value="value">Highest value</option>
+      <option value="valueAsc">Lowest value</option>
+      <option value="change">Biggest gain</option>
+      <option value="changeAsc">Biggest drop</option>
+      <option value="demand">Demand</option>
+      <option value="name">Name</option>
+    </select>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="grid" id="grid"><div class="empty">Loading MM2 values… (the server may be waking up, give it ~30s)</div></div>
+</div>
+
+<dialog id="dlg">
+  <button class="close" onclick="dlg.close()" aria-label="Close">×</button>
+  <div id="detail"></div>
+</dialog>
+
+<script>
+let items = [];
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => n == null ? "N/A" : n.toLocaleString();
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
+
+async function load() {
+  try {
+    const data = await fetch("/api/mm2").then((r) => r.json());
+    items = data.items || [];
+    const cat = $("cat");
+    if (cat.options.length === 1) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
+    $("stats").innerHTML = `<span><b>${items.length}</b> weapons</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="https://supremevalues.com/mm2" target="_blank" rel="noopener">${esc(data.source)}</a></span>`;
+    render();
+  } catch (e) {
+    $("grid").innerHTML = `<div class="empty">Couldn't load values: ${esc(e.message)}</div>`;
+  }
+}
+
+function render() {
+  const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
+  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && (!c || i.category === c));
+  const v = (x) => x ?? -Infinity;
+  const sorters = {
+    value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
+    change: (a, b) => v(b.change) - v(a.change), changeAsc: (a, b) => (a.change ?? 0) - (b.change ?? 0),
+    demand: (a, b) => v(b.demand) - v(a.demand), name: (a, b) => a.name.localeCompare(b.name),
+  };
+  list.sort(sorters[s]);
+  $("grid").innerHTML = list.length ? list.map((i) => `
+    <div class="card" data-key="${esc(i.key)}">
+      <img src="${esc(i.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+      <div>
+        <div class="name">${esc(i.name)}</div>
+        <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>
+        <div class="val tabular">${fmt(i.value)}</div>
+        <div class="chg tabular ${cls(i.change)}">${i.change ? (i.change > 0 ? "+" : "") + fmt(i.change) + " (" + esc(i.changePct) + ")" : "No change"}</div>
+      </div>
+    </div>`).join("") : `<div class="empty">No weapons match.</div>`;
+}
+
+function chart(points) {
+  if (points.length < 2) return `<p class="dim">Not enough history yet — the chart fills in as the server sees value changes.</p>`;
+  const W = 600, H = 180, P = 10;
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = (x) => P + (x - x0) / (x1 - x0 || 1) * (W - 2 * P);
+  const sy = (y) => H - P - (y - y0) / (y1 - y0 || 1) * (H - 2 * P);
+  // step line: value holds until the next change
+  let d = `M${sx(xs[0])},${sy(ys[0])}`;
+  for (let k = 1; k < points.length; k++) d += `H${sx(xs[k])}V${sy(ys[k])}`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+    <div class="dim tabular" style="font-size:12px;margin-top:6px">${fmt(y0)} – ${fmt(y1)} · since ${new Date(x0).toLocaleDateString()}</div>`;
+}
+
+$("grid").addEventListener("click", async (e) => {
+  const card = e.target.closest(".card"); if (!card) return;
+  const i = items.find((x) => x.key === card.dataset.key);
+  $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(i.category)}</div>
+    <dl class="dl"><dt>Value</dt><dd class="tabular">${fmt(i.value)}</dd><dt>Range</dt><dd>${esc(i.range || "N/A")}</dd>
+    <dt>Stability</dt><dd>${esc(i.stability || "N/A")}</dd><dt>Demand</dt><dd>${fmt(i.demand)}</dd>
+    <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd><dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
+    <dt>Last change</dt><dd class="tabular ${cls(i.change)}">${i.change ? fmt(i.change) + " (" + esc(i.changePct) + ")" : "None"}</dd></dl>
+    <div id="hist" class="dim">Loading history…</div>
+    <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on Supreme Values</a></p>`;
+  $("dlg").showModal();
+  const h = await fetch("/api/mm2/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
+  $("hist").innerHTML = chart(h.points);
+});
+
+["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
