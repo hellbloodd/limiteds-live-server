@@ -5,7 +5,11 @@
 // Needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY set (see start-mm2-push.bat).
 // Usage: node mm2-push.mjs          (keeps running, pushes every 15 minutes)
 //        node mm2-push.mjs --once   (push once and exit)
-import { scrapeMm2Values, mergeMm2History, readMm2State, writeMm2State, fetchSvHistory } from "./mm2-values.mjs";
+//        add --prices to refresh Eldorado prices now instead of waiting for the hourly refresh
+import {
+  scrapeMm2Values, mergeMm2History, readMm2State, writeMm2State, writeMm2Row, fetchSvHistory,
+  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice,
+} from "./mm2-values.mjs";
 
 const PUSH_EVERY_MS = 15 * 60 * 1000;
 // Each item's full history is re-pulled from its Supreme Values page when its value changes,
@@ -13,6 +17,8 @@ const PUSH_EVERY_MS = 15 * 60 * 1000;
 const HISTORY_STALE_MS = 24 * 60 * 60 * 1000;
 const HISTORY_BATCH = 80;
 const HISTORY_CONCURRENCY = 2;
+const ELDORADO_EVERY_MS = 60 * 60 * 1000;
+const ELDORADO_DELAY_MS = 300; // one request at a time, ~2 minutes for every weapon
 const HISTORY_DELAY_MS = 400; // per request, per worker - stays well under Supreme Values' rate limit
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -45,11 +51,32 @@ async function refreshHistories(allItems, history, historyFetched, now) {
   return ok;
 }
 
+// Cheapest Eldorado.gg listing for every weapon that has a numeric value.
+async function refreshEldorado(items, previous) {
+  const leaves = await fetchEldoradoItems();
+  const prices = {};
+  let matched = 0;
+  for (const it of items.filter((i) => !i.valueText)) {
+    const m = matchEldorado(it, leaves);
+    if (!m) continue;
+    matched++;
+    try {
+      const p = await fetchEldoradoPrice(m);
+      if (p) prices[it.key] = p;
+    } catch {
+      if (previous?.prices?.[it.key]) prices[it.key] = previous.prices[it.key]; // keep the last known price
+    }
+    await new Promise((r) => setTimeout(r, ELDORADO_DELAY_MS));
+  }
+  await writeMm2Row("eldorado", { updatedAt: new Date().toISOString(), prices });
+  return { matched, priced: Object.keys(prices).length };
+}
+
 async function pushOnce() {
   const stamp = () => new Date().toLocaleTimeString();
   try {
     const scraped = await scrapeMm2Values();
-    const { latest, history, historyFetched } = await readMm2State();
+    const { latest, history, historyFetched, eldorado } = await readMm2State();
     let items = scraped.items;
     if (scraped.errors.length) {
       // Keep the last good values for categories that failed this time, instead of dropping them.
@@ -66,6 +93,14 @@ async function pushOnce() {
     const numeric = items.filter((it) => !it.valueText);
     const withHistory = numeric.filter((it) => historyFetched[it.key]).length;
     console.log(`[${stamp()}] Pushed ${items.length} MM2 values (${pulled} histories updated, ${withHistory}/${numeric.length} numeric weapons have full history).`);
+    if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
+      try {
+        const { matched, priced } = await refreshEldorado(items, eldorado);
+        console.log(`[${stamp()}] Eldorado prices: ${priced} weapons listed (of ${matched} matched).`);
+      } catch (e) {
+        console.error(`[${stamp()}] Eldorado price refresh failed: ${e.message}`);
+      }
+    }
     return true;
   } catch (e) {
     console.error(`[${stamp()}] MM2 push failed: ${e.message}`);

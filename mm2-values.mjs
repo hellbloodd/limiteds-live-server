@@ -23,6 +23,7 @@ let mm2Items = [];
 let mm2UpdatedAt = 0;
 let mm2History = {}; // { itemKey: [[timestamp, value], ...] }
 let mm2LastError = "";
+let mm2Eldorado = { updatedAt: null, prices: {} }; // prices: { itemKey: { usd, listings, url } }
 
 // ---------- Supabase ----------
 
@@ -46,7 +47,15 @@ async function supabaseFetch(path, options = {}) {
 export async function readMm2State() {
   const rows = await supabaseFetch("mm2_state?select=id,data");
   const byId = Object.fromEntries(rows.map((r) => [r.id, r.data]));
-  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {} };
+  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null };
+}
+
+export async function writeMm2Row(id, data) {
+  await supabaseFetch("mm2_state?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([{ id, data, updated_at: new Date().toISOString() }]),
+  });
 }
 
 // historyFetched: { itemKey: ms } — when each item's history was last pulled from Supreme Values.
@@ -176,11 +185,82 @@ export function mergeMm2History(history, items, now) {
   return changed;
 }
 
+// ---------- Eldorado prices ----------
+// Uses the public endpoints Eldorado's own MM2 shop page calls. Items there are a tree of
+// type > rarity > name (names carry a year, e.g. "Evergun (2023)"); Chroma is a property filter.
+
+const ELDORADO = "https://www.eldorado.gg";
+const ELDORADO_SHOP = `${ELDORADO}/mm2-shop/i/204-2-0`;
+const ELDORADO_RARITIES = { godlies: ["Godly"], ancients: ["Ancient"], uniques: ["Unique"], vintages: ["Vintage"], evos: ["Godly", "Ancient", "Unique"], legendaries: ["Legendary"], rares: ["Rare"], uncommons: ["Uncommon"], commons: ["Common"] };
+
+async function eldoradoJson(path) {
+  const res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } });
+  if (!res.ok) throw new Error(`Eldorado ${res.status}`);
+  return res.json();
+}
+
+// All knife/gun items on Eldorado as [type, rarity, name].
+export async function fetchEldoradoItems() {
+  const tree = await eldoradoJson("/api/library/204/CustomItem?locale=en-US");
+  const leaves = [];
+  const walk = (n, path) => {
+    const p = path.concat(n.value);
+    if (n.childTradeEnvironments?.length) n.childTradeEnvironments.forEach((k) => walk(k, p));
+    else if (p.length === 3 && (p[0] === "Knife" || p[0] === "Gun")) leaves.push(p);
+  };
+  tree.tradeEnvironments.forEach((n) => walk(n, []));
+  return leaves;
+}
+
+const normName = (s) => s.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+// Finds the Eldorado item for a Supreme Values item, or null if there's no single clear match.
+export function matchEldorado(item, leaves) {
+  let name = item.name, type = null, chroma = item.category === "chromas";
+  if (/^(chroma|c\.)\s+/i.test(name)) { chroma = true; name = name.replace(/^(chroma|c\.)\s+/i, ""); }
+  const t = name.match(/\((gun|knife)\)\s*$/i);
+  if (t) { type = t[1][0].toUpperCase() + t[1].slice(1).toLowerCase(); name = name.replace(/\((gun|knife)\)\s*$/i, ""); }
+  const n = normName(name);
+  let cands = leaves.filter((l) => normName(l[2]) === n && (!type || l[0] === type));
+  const narrow = (f) => { const c = cands.filter(f); if (c.length) cands = c; };
+  const rarities = chroma ? ["Godly", "Ancient"] : ELDORADO_RARITIES[item.category] || [];
+  // High tiers must match rarity exactly - e.g. the Godly "Batwing" is not Eldorado's Ancient Batwing.
+  if (["godlies", "ancients", "uniques", "vintages"].includes(item.category)) cands = cands.filter((l) => rarities.includes(l[1]));
+  else if (cands.length > 1) narrow((l) => rarities.includes(l[1]));
+  if (cands.length > 1) { // same name released in several years: use the year in the item's origin
+    const year = (item.origin.match(/\b(20\d\d)\b/) || [])[1];
+    if (year) narrow((l) => l[2].includes(`(${year})`));
+  }
+  return cands.length === 1 ? { type: cands[0][0], rarity: cands[0][1], name: cands[0][2], chroma } : null;
+}
+
+function eldoradoFilter(m) {
+  return `tradeEnvironmentValue0=${encodeURIComponent(m.type)}&tradeEnvironmentValue1=${encodeURIComponent(m.rarity)}`
+    + `&tradeEnvironmentValue2=${encodeURIComponent(m.name)}&mm2-properties=${m.chroma ? "chroma" : "common"}`;
+}
+
+// Cheapest listing (USD) and number of listings for one matched item.
+export async function fetchEldoradoPrice(m) {
+  const j = await eldoradoJson("/api/v1/item-management/offers?gameId=204&category=CustomItem&pageIndex=1&pageSize=5"
+    + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&"
+    + eldoradoFilter(m));
+  const prices = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  // Skip listings far below the rest - usually a mis-tagged item (a normal Traveler's Gun listed as Chroma).
+  const median = prices[Math.floor(prices.length / 2)];
+  const usd = prices.find((v) => v >= median * 0.5);
+  return {
+    usd, listings: j.recordCount || prices.length,
+    url: `${ELDORADO_SHOP}?te_v0=${encodeURIComponent(m.type)}&te_v1=${encodeURIComponent(m.rarity)}&te_v2=${encodeURIComponent(m.name)}${m.chroma ? "&mm2-properties=chroma" : ""}`,
+  };
+}
+
 // ---------- Server ----------
 
 async function loadFromSupabase() {
   try {
-    const { latest, history } = await readMm2State();
+    const { latest, history, eldorado } = await readMm2State();
+    if (eldorado?.prices) mm2Eldorado = eldorado;
     if (latest?.items?.length) {
       mm2Items = latest.items;
       mm2UpdatedAt = Date.parse(latest.updatedAt) || 0;
@@ -212,6 +292,12 @@ export function startMm2Tracker() {
   const [tick, every] = supabaseConfig() ? [loadFromSupabase, MM2_SUPABASE_POLL_MS] : [scrapeLocally, MM2_SCRAPE_MS];
   tick();
   setInterval(tick, every).unref();
+}
+
+function eldoradoFields(it) {
+  const p = mm2Eldorado.prices[it.key];
+  if (!p) return {};
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10 };
 }
 
 // History without points from before the item had a real value (fractional sort-order numbers below 1).
@@ -264,9 +350,10 @@ export async function handleMm2Request(url, res, sendJson) {
       .filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category))
       // Ratio-valued items ("x2 T1 Commons") have no real number to chart or compare.
       .map((it) => (it.valueText ? { ...it, spark: [], changes: {} }
-        : { ...it, spark: sparkline(numericHistory(it.key)), changes: periodChanges(numericHistory(it.key), it.value) }));
+        : { ...it, spark: sparkline(numericHistory(it.key)), changes: periodChanges(numericHistory(it.key), it.value), ...eldoradoFields(it) }));
     sendJson(res, 200, {
       updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
+      pricesUpdatedAt: mm2Eldorado.updatedAt,
       source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items,
       ...(mm2Items.length ? {} : { error: mm2LastError || "MM2 values are still loading." }),
     });

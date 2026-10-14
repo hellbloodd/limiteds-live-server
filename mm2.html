@@ -61,6 +61,8 @@
   .range.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .card { position:relative; }
   .val.ratio { font-size:14px; }
+  .price { font-size:12px; margin-top:2px; color:var(--text); }
+  .vpd { font-weight:700; }
   .periods { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-bottom:10px; font-size:13px; }
   .periods button { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:4px 12px; font:700 12px "Manrope", sans-serif; cursor:pointer; }
   .periods button.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
@@ -92,6 +94,8 @@
       <option value="valueAsc">Lowest value</option>
       <option value="change">Biggest gain %</option>
       <option value="changeAsc">Biggest drop %</option>
+      <option value="vpd">Best value per $</option>
+      <option value="usdAsc">Cheapest on Eldorado</option>
       <option value="demand">Demand</option>
       <option value="name">Name</option>
     </select>
@@ -112,6 +116,11 @@
 <script>
 let items = [];
 let period = "7d";
+let medianVpd = 0;
+const usd = (n) => "$" + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
+const fmtVpd = (n) => n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(1);
+// Green = more value per dollar than the typical weapon, red = less.
+const vpdClass = (n) => !medianVpd ? "" : n >= medianVpd * 1.25 ? "up" : n <= medianVpd * 0.75 ? "down" : "flat";
 const PERIOD_LABEL = { "24h": "24h", "7d": "7 days", "30d": "30 days", "1y": "1 year", all: "all time" };
 const chg = (i) => i.changes?.[period];
 function changeText(c) {
@@ -128,9 +137,11 @@ async function load() {
     const data = await fetch("/api/mm2").then((r) => r.json());
     items = data.items || [];
     if (!items.length) { $("grid").innerHTML = `<div class="empty">${esc(data.error || "No MM2 values yet.")}</div>`; return; }
+    const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
+    medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
     if (cat.options.length === 1) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
-    $("stats").innerHTML = `<span><b>${items.length}</b> weapons</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="https://supremevalues.com/mm2" target="_blank" rel="noopener">${esc(data.source)}</a></span>`;
+    $("stats").innerHTML = `<span><b>${items.length}</b> weapons</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="https://supremevalues.com/mm2" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="https://www.eldorado.gg/mm2-shop/i/204-2-0" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
     render();
   } catch (e) {
     $("grid").innerHTML = `<div class="empty">Couldn't load values: ${esc(e.message)}</div>`;
@@ -144,7 +155,8 @@ function render() {
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
     change: (a, b) => v(chg(b)?.pct) - v(chg(a)?.pct), changeAsc: (a, b) => (chg(a)?.pct ?? 0) - (chg(b)?.pct ?? 0),
-    demand: (a, b) => v(b.demand) - v(a.demand), name: (a, b) => a.name.localeCompare(b.name),
+    demand: (a, b) => v(b.demand) - v(a.demand),
+    vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
@@ -155,6 +167,7 @@ function render() {
         <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
+        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
       </div>
       ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">No weapons match.</div>`;
@@ -234,7 +247,9 @@ $("grid").addEventListener("click", async (e) => {
   $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(i.category)}</div>
     <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}</dd><dt>Range</dt><dd>${esc(i.range || "N/A")}</dd>
     <dt>Stability</dt><dd>${esc(i.stability || "N/A")}</dd><dt>Demand</dt><dd>${fmt(i.demand)}</dd>
-    <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd><dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
+    <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
+    ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
+    <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}<dt>Origin</dt><dd>${esc(i.origin || "N/A")}</dd>
     </dl>
     ${i.valueText ? `<p class="dim">Low-tier weapons are valued as trade ratios, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="hist" class="dim">Loading history…</div>
