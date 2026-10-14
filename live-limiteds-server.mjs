@@ -33,7 +33,7 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "rolimons-source-v3";
 
-const DASHBOARD_HTML = `<title>Limiteds Live</title>
+const DASHBOARD_HTML = `<title>Agony Values</title>
 <style>
   :root {
     --bg: #0b0e14;
@@ -580,8 +580,8 @@ const DASHBOARD_HTML = `<title>Limiteds Live</title>
 <header class="top">
   <div class="top-inner">
     <div class="brand">
-      <div class="brand-mark">L</div>
-      <div class="brand-text">Limiteds <span class="dim">Live</span></div>
+      <div class="brand-mark">A</div>
+      <div class="brand-text">Agony <span class="dim">Values</span></div>
     </div>
     <div class="search-wrap">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -3653,7 +3653,7 @@ const server = http.createServer(async (req, res) => {
 async function startServer() {
   console.log("Waiting for Render network to be ready...");
   await new Promise(resolve => setTimeout(resolve, 5000));
-  server.listen(PORT, () => console.log(`Limiteds Live server ${SERVER_VERSION} running on http://localhost:${PORT}`));
+  server.listen(PORT, () => console.log(`Agony Values server ${SERVER_VERSION} running on http://localhost:${PORT}`));
 }
 
 startServer();
