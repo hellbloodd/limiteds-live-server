@@ -65,9 +65,6 @@
   .vpd { font-weight:700; }
   .periods { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-bottom:10px; font-size:13px; }
   .periods button { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:4px 12px; font:700 12px "Manrope", sans-serif; cursor:pointer; }
-  .periods .deals { border-color:var(--green); color:var(--green); }
-  .periods .deals.on { background:var(--green); color:#06140c; }
-  .periods .sep { width:1px; height:18px; background:var(--border); margin:0 4px; }
   .periods button.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .ptable { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:0 0 14px; }
   .ptable div { background:var(--surface-2); border-radius:10px; padding:8px; text-align:center; display:flex; flex-direction:column; gap:2px; font-size:12px; }
@@ -98,15 +95,12 @@
       <option value="valueAsc">Lowest value</option>
       <option value="change">Biggest gain %</option>
       <option value="changeAsc">Biggest drop %</option>
-      <option value="vpd">Best value per $</option>
       <option value="usdAsc">Cheapest on Eldorado</option>
       <option value="demand">Demand</option>
       <option value="name">Name</option>
     </select>
   </div>
   <div class="periods" id="periods">
-    <button id="deals" class="deals" type="button" title="Only items giving more value per $ than the typical item, best first">🔥 Best deals</button>
-    <span class="sep"></span>
     <span class="dim">Change:</span>
     <button data-p="24h">24h</button><button data-p="7d" class="on">7d</button><button data-p="30d">30d</button><button data-p="1y">1y</button><button data-p="all">All</button>
   </div>
@@ -129,7 +123,6 @@ document.getElementById("q").placeholder = `Search ${GAME.noun}…`;
 let items = [];
 let period = "7d";
 let medianVpd = 0;
-let dealsOnly = false;
 const usd = (n) => "$" + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
 const fmtVpd = (n) => n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(1);
 // Green = more value per dollar than the typical weapon, red = less.
@@ -163,14 +156,13 @@ async function load() {
 
 function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
-  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && (!c || i.category === c)
-    && (!dealsOnly || (i.valuePerUsd && i.valuePerUsd >= medianVpd * 1.25)));
+  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && (!c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
     change: (a, b) => v(chg(b)?.pct) - v(chg(a)?.pct), changeAsc: (a, b) => (chg(a)?.pct ?? 0) - (chg(b)?.pct ?? 0),
     demand: (a, b) => v(b.demand) - v(a.demand),
-    vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
+    usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
@@ -275,12 +267,6 @@ $("grid").addEventListener("click", async (e) => {
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
-$("deals").addEventListener("click", () => {
-  dealsOnly = !dealsOnly;
-  $("deals").classList.toggle("on", dealsOnly);
-  if (dealsOnly) $("sort").value = "vpd";
-  render();
-});
 $("periods").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]"); if (!b) return;
   period = b.dataset.p;
