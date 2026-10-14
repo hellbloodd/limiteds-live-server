@@ -89,7 +89,7 @@
   </nav>
   <div class="controls">
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
-    <select id="cat"><option value="">All categories</option></select>
+    <select id="cat"><option value="">All categories</option><option value="deals">🔥 Best deals</option></select>
     <select id="sort">
       <option value="value">Highest value</option>
       <option value="valueAsc">Lowest value</option>
@@ -147,7 +147,7 @@ async function load() {
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
-    if (cat.options.length === 1) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
+    if (cat.options.length === 2) for (const c of data.categories) cat.add(new Option(c[0].toUpperCase() + c.slice(1), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
     render();
   } catch (e) {
@@ -157,7 +157,10 @@ async function load() {
 
 function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
-  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && (!c || i.category === c));
+  // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
+  const deals = c === "deals";
+  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q))
+    && (deals ? i.valuePerUsd >= medianVpd * 1.25 : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
@@ -165,7 +168,7 @@ function render() {
     demand: (a, b) => v(b.demand) - v(a.demand),
     vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
-  list.sort(sorters[s]);
+  list.sort(deals && s === "value" ? sorters.vpd : sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
     <div class="card" data-key="${esc(i.key)}">
       <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
