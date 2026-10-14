@@ -3,7 +3,7 @@
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
 import {
-  curlGet, supabaseConfig, readMm2State, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
@@ -96,7 +96,10 @@ function titleName(title) {
   const lead = String(title)
     .replace(/^[^\p{L}\p{N}]+/u, "") // leading emoji / symbols
     .split(/\s[-–—|:]\s|[|【\[(♨⚡✅🔥⭐🌟🔴🟢]|\s{2,}/u)[0];
-  return normName(lead.replace(/\b(sword|limited|unique|secret|bb|blade ball)\b\s*$/gi, ""));
+  return normName(lead
+    // "+ Finisher", "w/ Finisher", "No Finisher", "without finisher" ... and anything after it
+    .replace(/\s*(\+|&|w\/o?|with(out)?|no|non)?[\s-]*finisher\b.*$/i, "")
+    .replace(/\b(sword|limited|unique|secret|bb|blade ball)\b\s*$/gi, ""));
 }
 
 export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
@@ -121,14 +124,25 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
     for (const r of j.results || []) {
       const usd = r.offer?.pricePerUnitInUSD?.amount;
       const title = r.offer?.offerTitle || "";
-      const all = byName.get(titleName(title));
-      if (!(usd > 0) || !all) continue;
-      // "Finisher" in the title -> the Finisher version; "no finisher" or nothing -> the plain version.
-      const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o)\s*finisher/i.test(title);
-      const matches = all.filter((m) => (finisher ? m.variant === "Finisher" : m.variant === "No Finisher" || !m.variant));
-      // A name shared by a sword and an emote/explosion: prefer the sword (what nearly all listings are).
-      const it = matches.length === 1 ? matches[0] : matches.find((m) => m.category === "swords");
-      if (it) (found[it.key] ||= []).push(usd);
+      if (!(usd > 0)) continue;
+      // Sellers write "Blue Bunny Scythe Emote" or "Blue Bunny Scythe | Emote" for the emote, so
+      // "emote"/"explosion" anywhere in the title decides the category; otherwise it's the sword.
+      const kind = /\bemotes?\b/i.test(title) ? "emotes" : /\bexplosions?\b/i.test(title) ? "explosions" : "swords";
+      const lead = titleName(title);
+      // Some names contain the word themselves ("Chroma Blade Explosion"), so try the full lead first.
+      let cands = (byName.get(lead) || []).filter((m) => m.category === kind);
+      if (!cands.length && kind !== "swords") {
+        // "Aurora Burst Emote" -> "Aurora Burst"; "Chroma Blade - Explosion" -> "Chroma Blade Explosion"
+        const base = normName(lead.replace(/\b(emote|explosion)s?\b/g, ""));
+        const word = kind === "emotes" ? "emote" : "explosion";
+        cands = [...(byName.get(base) || []), ...(byName.get(`${base} ${word}`) || [])].filter((m) => m.category === kind);
+      }
+      if (kind === "swords" && cands.length > 1) {
+        // "finisher" -> the Finisher version; "no finisher" / "without finisher" / nothing -> the plain one.
+        const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o|non)[\s-]*finisher/i.test(title);
+        cands = cands.filter((m) => (finisher ? m.variant === "Finisher" : m.variant !== "Finisher"));
+      }
+      if (cands.length === 1) (found[cands[0].key] ||= []).push(usd);
     }
   }
   const prices = {};
@@ -148,13 +162,27 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
 
 // ---------- Server ----------
 
+// Items are stored as small arrays (5000 objects with repeated field names make a row too big to
+// write when Supabase is busy); picture and link are rebuilt from the key.
+export function compactBbItem(it) {
+  return [it.key, it.name, it.category, it.value, it.stability, it.rarity, it.origin, it.change24h];
+}
+const expandBbItem = (it) => {
+  if (!Array.isArray(it)) return { ...it, image: bbImage(it.key), sourceUrl: `${BB_ORIGIN}/values/` };
+  const [key, name, category, value, stability, rarity, origin, change24h] = it;
+  return { key, name, category, value, stability, rarity, origin, change24h, demand: null, image: bbImage(key), sourceUrl: `${BB_ORIGIN}/values/` };
+};
+const bbImage = (key) => `${BB_IMAGES}/${encodeURIComponent(`${key}.webp`)}`;
+
+let readBbRows;
 async function loadFromSupabase() {
   try {
-    const { latest, history, eldorado } = await readMm2State(BB_PREFIX);
+    readBbRows ||= createStateReader(BB_PREFIX);
+    const { latest, history, eldorado, heartbeat } = await readBbRows();
     if (eldorado?.prices) bbEldorado = eldorado;
     if (latest?.items?.length) {
-      bbItems = latest.items;
-      bbUpdatedAt = Date.parse(latest.updatedAt) || 0;
+      bbItems = latest.items.map(expandBbItem);
+      bbUpdatedAt = Date.parse(heartbeat?.updatedAt || latest.updatedAt) || 0;
     }
     bbHistory = history;
     bbLastError = latest ? "" : "No Blade Ball values in Supabase yet — run mm2-push.mjs on a home PC.";

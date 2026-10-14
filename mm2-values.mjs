@@ -46,13 +46,54 @@ async function supabaseFetch(path, options = {}) {
 
 // The mm2_state table holds one row per piece of state. MM2 uses unprefixed ids
 // (latest, history, ...); other games use a prefix, e.g. "bb_latest" for Blade Ball.
-const STATE_IDS = ["latest", "history", "history_fetched", "eldorado"];
+const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "heartbeat"];
 
-export async function readMm2State(prefix = "") {
-  const ids = STATE_IDS.map((id) => prefix + id).join(",");
-  const rows = await supabaseFetch(`mm2_state?select=id,data&id=in.(${ids})`);
+export async function readMm2State(prefix = "", only = STATE_IDS) {
+  const rows = [];
+  for (const id of only) rows.push(...await supabaseFetch(`mm2_state?select=id,data&id=eq.${prefix + id}`));
   const byId = Object.fromEntries(rows.map((r) => [r.id.slice(prefix.length), r.data]));
-  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null };
+  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null, heartbeat: byId.heartbeat || null };
+}
+
+// Server side: each poll asks only for the rows' updated_at (tiny) and re-downloads just the rows
+// that changed since last time - Supabase's free tier slows to a crawl if we pull megabytes every poll.
+export function createStateReader(prefix = "") {
+  const seen = {};
+  const data = {};
+  return async () => {
+    const ids = STATE_IDS.map((id) => prefix + id).join(",");
+    const meta = await supabaseFetch(`mm2_state?select=id,updated_at&id=in.(${ids})`);
+    const changed = meta.filter((m) => seen[m.id] !== m.updated_at).map((m) => m.id);
+    if (changed.length) {
+      const rows = await supabaseFetch(`mm2_state?select=id,data,updated_at&id=in.(${changed.join(",")})`);
+      for (const r of rows) { data[r.id.slice(prefix.length)] = r.data; seen[r.id] = r.updated_at; }
+    }
+    return { latest: data.latest || null, history: data.history || {}, eldorado: data.eldorado || null, heartbeat: data.heartbeat || null };
+  };
+}
+
+// Pusher side: upsert only the rows whose content differs from what was last read or written.
+const lastWritten = {}; // full row id -> JSON
+export function rememberRows(prefix, rows) {
+  for (const [id, d] of Object.entries(rows)) if (d != null) lastWritten[prefix + id] = JSON.stringify(d);
+}
+export async function writeChangedRows(prefix, rows) {
+  const now = new Date().toISOString();
+  const out = [];
+  for (const [id, d] of Object.entries(rows)) {
+    const json = JSON.stringify(d);
+    if (lastWritten[prefix + id] === json) continue;
+    out.push({ id: prefix + id, data: d, updated_at: now });
+    lastWritten[prefix + id] = json;
+  }
+  if (out.length) {
+    await supabaseFetch("mm2_state?on_conflict=id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(out),
+    });
+  }
+  return out.map((r) => r.id);
 }
 
 export async function writeMm2Row(id, data, prefix = "") {
@@ -198,6 +239,15 @@ const ELDORADO = "https://www.eldorado.gg";
 const ELDORADO_SHOP = `${ELDORADO}/mm2-shop/i/204-2-0`;
 const ELDORADO_RARITIES = { godlies: ["Godly"], ancients: ["Ancient"], uniques: ["Unique"], vintages: ["Vintage"], evos: ["Godly", "Ancient", "Unique"], legendaries: ["Legendary"], rares: ["Rare"], uncommons: ["Uncommon"], commons: ["Common"] };
 
+// Runs Eldorado price refreshes one after another (MM2 and Blade Ball update in parallel,
+// and together they trip Eldorado's rate limit).
+let eldoradoChain = Promise.resolve();
+export function eldoradoExclusive(fn) {
+  const run = eldoradoChain.then(fn, fn);
+  eldoradoChain = run.catch(() => {});
+  return run;
+}
+
 // Retries "429 Too Many Requests" after a short pause (MM2 and Blade Ball refresh at the same time).
 export async function eldoradoJson(path) {
   for (let attempt = 1; ; attempt++) {
@@ -266,13 +316,15 @@ export async function fetchEldoradoPrice(m) {
 
 // ---------- Server ----------
 
+let readMm2Rows;
 async function loadFromSupabase() {
   try {
-    const { latest, history, eldorado } = await readMm2State();
+    readMm2Rows ||= createStateReader();
+    const { latest, history, eldorado, heartbeat } = await readMm2Rows();
     if (eldorado?.prices) mm2Eldorado = eldorado;
     if (latest?.items?.length) {
       mm2Items = latest.items;
-      mm2UpdatedAt = Date.parse(latest.updatedAt) || 0;
+      mm2UpdatedAt = Date.parse(heartbeat?.updatedAt || latest.updatedAt) || 0;
     }
     mm2History = history;
     mm2LastError = latest ? "" : "No MM2 values in Supabase yet — run mm2-push.mjs on a home PC.";

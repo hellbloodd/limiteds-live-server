@@ -7,10 +7,24 @@
 //        node mm2-push.mjs --once   (push once and exit)
 //        add --prices to refresh Eldorado prices now instead of waiting for the hourly refresh
 import {
-  scrapeMm2Values, mergeMm2History, readMm2State, writeMm2State, writeMm2Row, fetchSvHistory,
-  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice,
+  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows, fetchSvHistory,
+  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive,
 } from "./mm2-values.mjs";
-import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices } from "./bb-values.mjs";
+import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
+
+// The pusher is the only writer, so it reads each game's state from Supabase once and keeps it in
+// memory; each run then writes only the rows that changed (plus a tiny "heartbeat" with the time).
+const stateCache = {};
+async function getState(prefix) {
+  if (!stateCache[prefix]) {
+    // Row by row, skipping Blade Ball's item list (rebuilt every run): one big read times out
+    // when Supabase's free tier is busy.
+    const s = await readMm2State(prefix, prefix === BB_PREFIX ? ["history", "history_fetched", "eldorado"] : undefined);
+    rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado });
+    stateCache[prefix] = s;
+  }
+  return stateCache[prefix];
+}
 
 const PUSH_EVERY_MS = 15 * 60 * 1000;
 // Each item's full history is re-pulled from its Supreme Values page when its value changes,
@@ -75,7 +89,9 @@ async function refreshEldorado(items, previous) {
       }
     }
   }));
-  await writeMm2Row("eldorado", { updatedAt: new Date().toISOString(), prices });
+  const state = await getState("");
+  state.eldorado = { updatedAt: new Date().toISOString(), prices };
+  await writeChangedRows("", { eldorado: state.eldorado });
   return { matched, priced: Object.keys(prices).length };
 }
 
@@ -84,17 +100,20 @@ const stamp = () => new Date().toLocaleTimeString();
 async function pushBladeBall() {
   try {
     const { items } = await scrapeBbValues();
-    const { history, historyFetched, eldorado } = await readMm2State(BB_PREFIX);
+    const state = await getState(BB_PREFIX);
+    const { history, historyFetched, eldorado } = state;
     const now = Date.now();
     // bbvalues.uk's API is too unreliable for per-item history downloads, so Blade Ball history
     // is built from our own updates: every value change we see is recorded.
     mergeMm2History(history, items, now);
-    await writeMm2State({ updatedAt: new Date(now).toISOString(), items }, history, historyFetched, BB_PREFIX);
+    state.latest = { items: items.map(compactBbItem) };
+    await writeChangedRows(BB_PREFIX, { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} Blade Ball values.`);
     if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
       try {
-        const prices = await fetchBbEldoradoPrices(items);
-        await writeMm2Row("eldorado", { updatedAt: new Date().toISOString(), prices }, BB_PREFIX);
+        const prices = await eldoradoExclusive(() => fetchBbEldoradoPrices(items));
+        state.eldorado = { updatedAt: new Date().toISOString(), prices };
+        await writeChangedRows(BB_PREFIX, { eldorado: state.eldorado });
         console.log(`[${stamp()}] Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed.`);
       } catch (e) {
         console.error(`[${stamp()}] Blade Ball Eldorado price refresh failed: ${e.message}`);
@@ -115,7 +134,8 @@ async function pushOnce() {
 async function pushMm2() {
   try {
     const scraped = await scrapeMm2Values();
-    const { latest, history, historyFetched, eldorado } = await readMm2State();
+    const state = await getState("");
+    const { latest, history, historyFetched, eldorado } = state;
     let items = scraped.items;
     if (scraped.errors.length) {
       // Keep the last good values for categories that failed this time, instead of dropping them.
@@ -128,13 +148,14 @@ async function pushMm2() {
     const now = Date.now();
     const pulled = await refreshHistories(items, history, historyFetched, now);
     mergeMm2History(history, items, now); // ensures the current value is the latest point
-    await writeMm2State({ updatedAt: new Date(now).toISOString(), items }, history, historyFetched);
+    state.latest = { items };
+    await writeChangedRows("", { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
     const numeric = items.filter((it) => !it.valueText);
     const withHistory = numeric.filter((it) => historyFetched[it.key]).length;
     console.log(`[${stamp()}] Pushed ${items.length} MM2 values (${pulled} histories updated, ${withHistory}/${numeric.length} numeric weapons have full history).`);
     if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
       try {
-        const { matched, priced } = await refreshEldorado(items, eldorado);
+        const { matched, priced } = await eldoradoExclusive(() => refreshEldorado(items, eldorado));
         console.log(`[${stamp()}] Eldorado prices: ${priced} weapons listed (of ${matched} matched).`);
       } catch (e) {
         console.error(`[${stamp()}] Eldorado price refresh failed: ${e.message}`);
