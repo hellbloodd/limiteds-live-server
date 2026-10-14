@@ -46,15 +46,20 @@ async function supabaseFetch(path, options = {}) {
 export async function readMm2State() {
   const rows = await supabaseFetch("mm2_state?select=id,data");
   const byId = Object.fromEntries(rows.map((r) => [r.id, r.data]));
-  return { latest: byId.latest || null, history: byId.history || {} };
+  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {} };
 }
 
-export async function writeMm2State(latest, history) {
+// historyFetched: { itemKey: ms } — when each item's history was last pulled from Supreme Values.
+export async function writeMm2State(latest, history, historyFetched = {}) {
   const now = new Date().toISOString();
   await supabaseFetch("mm2_state?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify([{ id: "latest", data: latest, updated_at: now }, { id: "history", data: history, updated_at: now }]),
+    body: JSON.stringify([
+      { id: "latest", data: latest, updated_at: now },
+      { id: "history", data: history, updated_at: now },
+      { id: "history_fetched", data: historyFetched, updated_at: now },
+    ]),
   });
 }
 
@@ -112,7 +117,11 @@ function curlGet(url) {
 
 // Scrapes every category. Throws if nothing at all could be fetched.
 export async function scrapeMm2Values() {
-  const results = await Promise.allSettled(MM2_CATEGORIES.map(async (c) => parseCategoryPage(await curlGet(`${SV_BASE}/${c}`), c)));
+  // One category at a time: firing all ten at once trips Supreme Values' rate limit (HTTP 429).
+  const results = [];
+  for (const c of MM2_CATEGORIES) {
+    results.push(await curlGet(`${SV_BASE}/${c}`).then((html) => ({ status: "fulfilled", value: parseCategoryPage(html, c) }), (reason) => ({ status: "rejected", reason })));
+  }
   const items = [];
   const errors = [];
   results.forEach((r, i) => (r.status === "fulfilled" ? items.push(...r.value) : errors.push(`${MM2_CATEGORIES[i]}: ${r.reason.message}`)));
@@ -131,6 +140,18 @@ function cleanMm2Items(items) {
     if (!kept || item.value > kept.value) byName.set(name, item);
   }
   return [...byName.values()];
+}
+
+// Full value history from the item's Supreme Values page, as [[ms, value], ...].
+// The page embeds it as "history":[{"v":2000,"t":"2023-12-22 22:55:02"}, ...].
+export async function fetchSvHistory(item) {
+  const html = await curlGet(item.sourceUrl);
+  const m = html.match(/"history":(\[[^\]]*\])/);
+  if (!m) return [];
+  return JSON.parse(m[1])
+    .map((p) => [Date.parse(`${String(p.t).replace(" ", "T")}Z`), Number(p.v)])
+    .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v))
+    .slice(-MM2_HISTORY_MAX_POINTS);
 }
 
 // Appends changed values to history in place. Returns true if anything changed.
@@ -187,6 +208,21 @@ export function startMm2Tracker() {
   setInterval(tick, every).unref();
 }
 
+// Last ~90 days of values, sampled to at most 30 points, for the mini chart on each card.
+function sparkline(points) {
+  if (!points?.length) return [];
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const recent = points.filter(([t]) => t >= cutoff);
+  // Start from the value that was current at the cutoff so flat items still draw a line.
+  const before = points.filter(([t]) => t < cutoff).pop();
+  const values = [...(before ? [before[1]] : []), ...recent.map(([, v]) => v)];
+  if (values.length < 2) return values.length ? [values[0], values[0]] : [];
+  const step = Math.max(1, Math.ceil(values.length / 30));
+  const out = values.filter((_, i) => i % step === 0);
+  if (out[out.length - 1] !== values[values.length - 1]) out.push(values[values.length - 1]);
+  return out;
+}
+
 // Returns true if the request was handled.
 export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/mm2" || url.pathname === "/mm2/") {
@@ -197,7 +233,9 @@ export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/api/mm2") {
     const q = (url.searchParams.get("q") || "").toLowerCase();
     const category = url.searchParams.get("category") || "";
-    const items = mm2Items.filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category));
+    const items = mm2Items
+      .filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category))
+      .map((it) => ({ ...it, spark: sparkline(mm2History[it.key]) }));
     sendJson(res, 200, {
       updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
       source: "supremevalues.com", count: items.length, categories: MM2_CATEGORIES, items,

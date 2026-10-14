@@ -53,7 +53,14 @@
   dialog h2 { font:600 18px "Unbounded", sans-serif; margin:0; }
   .dl { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin:14px 0; }
   .dl dt { color:var(--muted); } .dl dd { margin:0; }
-  svg.chart { width:100%; height:180px; display:block; background:var(--surface-2); border-radius:10px; }
+  svg.chart { width:100%; height:auto; display:block; background:var(--surface-2); border-radius:10px; touch-action:none; }
+  svg.chart text { fill:var(--muted); font:11px "JetBrains Mono", monospace; }
+  .chart-foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
+  .range-row { display:flex; gap:6px; margin-bottom:8px; }
+  .range { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:3px 10px; font:700 12px inherit; cursor:pointer; }
+  .range.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+  .card { position:relative; }
+  svg.spark { position:absolute; right:12px; bottom:12px; width:70px; height:30px; }
   .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
   a { color:var(--accent); }
   .empty { color:var(--muted); padding:40px 16px; text-align:center; grid-column:1/-1; }
@@ -131,21 +138,76 @@ function render() {
         <div class="val tabular">${fmt(i.value)}</div>
         <div class="chg tabular ${cls(i.change)}">${i.change ? (i.change > 0 ? "+" : "") + fmt(i.change) + " (" + esc(i.changePct) + ")" : "No change"}</div>
       </div>
+      ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">No weapons match.</div>`;
 }
 
-function chart(points) {
-  if (points.length < 2) return `<p class="dim">Not enough history yet — the chart fills in as the server sees value changes.</p>`;
-  const W = 600, H = 180, P = 10;
+// Mini 90-day trend line on each card, coloured by direction.
+function spark(vals) {
+  if (!vals || vals.length < 2) return "";
+  const W = 70, H = 30, lo = Math.min(...vals), hi = Math.max(...vals);
+  const pts = vals.map((v, k) => `${(k / (vals.length - 1) * W).toFixed(1)},${(H - 2 - (v - lo) / (hi - lo || 1) * (H - 4)).toFixed(1)}`).join(" ");
+  const dir = vals[vals.length - 1] - vals[0];
+  const color = dir > 0 ? "var(--green)" : dir < 0 ? "var(--red)" : "var(--muted-2)";
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+const RANGES = [["1M", 30], ["3M", 90], ["1Y", 365], ["All", 0]];
+const shortNum = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : n.toLocaleString();
+
+function chartView(allPoints, days) {
+  if (allPoints.length < 2) return `<p class="dim">No value history for this weapon yet.</p>`;
+  let points = allPoints;
+  if (days) {
+    const cutoff = Date.now() - days * 864e5;
+    const before = allPoints.filter((p) => p[0] < cutoff).pop();
+    points = [...(before ? [[cutoff, before[1]]] : []), ...allPoints.filter((p) => p[0] >= cutoff)];
+  }
+  points = [...points, [Date.now(), points[points.length - 1][1]]]; // hold the current value up to today
+  const W = 600, H = 220, L = 52, R = 10, T = 10, B = 26;
   const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const sx = (x) => P + (x - x0) / (x1 - x0 || 1) * (W - 2 * P);
-  const sy = (y) => H - P - (y - y0) / (y1 - y0 || 1) * (H - 2 * P);
-  // step line: value holds until the next change
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (y0 === y1) { y0 = Math.max(0, y0 * 0.9); y1 = y1 * 1.1 || 1; }
+  const sx = (x) => L + (x - x0) / (x1 - x0 || 1) * (W - L - R);
+  const sy = (y) => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
   let d = `M${sx(xs[0])},${sy(ys[0])}`;
-  for (let k = 1; k < points.length; k++) d += `H${sx(xs[k])}V${sy(ys[k])}`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
-    <div class="dim tabular" style="font-size:12px;margin-top:6px">${fmt(y0)} – ${fmt(y1)} · since ${new Date(x0).toLocaleDateString()}</div>`;
+  for (let k = 1; k < points.length; k++) d += `H${sx(xs[k])}V${sy(ys[k])}`; // step: value holds until it changes
+  const area = `${d}V${H - B}H${sx(xs[0])}Z`;
+  const grid = [0, 0.5, 1].map((f) => {
+    const v = y0 + (y1 - y0) * f, y = sy(v);
+    return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end">${shortNum(Math.round(v))}</text>`;
+  }).join("");
+  const dfmt = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: days && days <= 90 ? undefined : "2-digit" });
+  const first = ys[0], last = ys[ys.length - 1], pct = first ? (last - first) / first * 100 : 0;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" data-x0="${x0}" data-x1="${x1}">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".25"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+      ${grid}
+      <path d="${area}" fill="url(#g)"/>
+      <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+      <text x="${L}" y="${H - 6}">${dfmt(x0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">Today</text>
+      <line id="cursor" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
+    </svg>
+    <div class="chart-foot tabular"><span id="hover-read">${shortNum(first)} → ${shortNum(last)}</span><span class="${cls(pct)}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</span></div>`;
+}
+
+function mountChart(points) {
+  let days = 365;
+  const draw = () => {
+    $("hist").innerHTML = `<div class="range-row">${RANGES.map(([l, n]) => `<button class="range${n === days ? " on" : ""}" data-days="${n}">${l}</button>`).join("")}</div>${chartView(points, days)}`;
+    const svg = $("hist").querySelector("svg.chart"); if (!svg) return;
+    const x0 = +svg.dataset.x0, x1 = +svg.dataset.x1, read = $("hover-read"), base = read.textContent, cursor = svg.querySelector("#cursor");
+    svg.addEventListener("pointermove", (e) => {
+      const r = svg.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width * 600;
+      const t = x0 + Math.min(1, Math.max(0, (fx - 52) / (600 - 62))) * (x1 - x0);
+      const p = points.filter((q) => q[0] <= t).pop() || points[0];
+      cursor.setAttribute("x1", Math.max(52, fx)); cursor.setAttribute("x2", Math.max(52, fx)); cursor.setAttribute("visibility", "visible");
+      read.textContent = `${new Date(t).toLocaleDateString()} · ${p[1].toLocaleString()}`;
+    });
+    svg.addEventListener("pointerleave", () => { cursor.setAttribute("visibility", "hidden"); read.textContent = base; });
+  };
+  $("hist").onclick = (e) => { const b = e.target.closest(".range"); if (b) { days = +b.dataset.days; draw(); } };
+  draw();
 }
 
 $("grid").addEventListener("click", async (e) => {
@@ -160,7 +222,7 @@ $("grid").addEventListener("click", async (e) => {
     <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on Supreme Values</a></p>`;
   $("dlg").showModal();
   const h = await fetch("/api/mm2/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
-  $("hist").innerHTML = chart(h.points);
+  mountChart(h.points);
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
