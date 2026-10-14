@@ -124,7 +124,7 @@ function render() {
   list.sort(sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i) => `
     <div class="card" data-key="${esc(i.key)}">
-      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='https://supremevalues.com/media/N_A.webp'">
       <div>
         <div class="name">${esc(i.name)}</div>
         <div class="cat">${esc(i.category)} · ${esc(i.stability || "—")}</div>

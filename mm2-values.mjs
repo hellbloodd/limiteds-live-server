@@ -117,7 +117,20 @@ export async function scrapeMm2Values() {
   const errors = [];
   results.forEach((r, i) => (r.status === "fulfilled" ? items.push(...r.value) : errors.push(`${MM2_CATEGORIES[i]}: ${r.reason.message}`)));
   if (!items.length) throw new Error(`No MM2 values scraped (${errors[0] || "empty pages"})`);
-  return { items, errors };
+  return { items: cleanMm2Items(items), errors };
+}
+
+// Drops items with no value (one-off leaderboard prizes like the Gold/Silver/Bronze uniques)
+// and keeps one entry per name — the highest-valued one when several categories share it.
+function cleanMm2Items(items) {
+  const byName = new Map();
+  for (const item of items) {
+    if (item.value == null) continue;
+    const name = item.name.toLowerCase();
+    const kept = byName.get(name);
+    if (!kept || item.value > kept.value) byName.set(name, item);
+  }
+  return [...byName.values()];
 }
 
 // Appends changed values to history in place. Returns true if anything changed.
