@@ -22,19 +22,50 @@ let amCategories = [];
 
 // ---------- adoptmevalues.app ----------
 
-// The page streams its data as Next.js "self.__next_f.push([1, "..."])" chunks.
-function extractPacked(html) {
-  const payload = [...html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g)]
-    .map((m) => JSON.parse(`"${m[1]}"`)).join("");
-  const start = payload.indexOf('{"imageBase"');
-  if (start < 0) throw new Error("adoptmevalues.app: item list not found on the values page");
+// Pages stream their data as Next.js "self.__next_f.push([1, "..."])" chunks.
+function nextPayload(html) {
+  return [...html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g)].map((m) => JSON.parse(`"${m[1]}"`)).join("");
+}
+
+// The JSON object starting at `marker` inside the payload.
+function extractObject(payload, marker) {
+  const start = payload.indexOf(marker);
+  if (start < 0) return null;
   let depth = 0;
   for (let i = start; i < payload.length; i++) {
     const ch = payload[i];
     if (ch === "{" || ch === "[") depth++;
     else if (ch === "}" || ch === "]") { if (--depth === 0) return JSON.parse(payload.slice(start, i + 1)); }
   }
-  throw new Error("adoptmevalues.app: item list is cut off");
+  return null;
+}
+
+function extractPacked(html) {
+  const packed = extractObject(nextPayload(html), '{"imageBase"');
+  if (!packed) throw new Error("adoptmevalues.app: item list not found on the values page");
+  return packed;
+}
+
+// URL slug the site uses for item pages, e.g. "Frost Dragon" -> /values/frost-dragon
+const amSlug = (name) => name.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// Value history from the item's own page: series D (default / no potion), FR (fly ride), N (neon) and
+// M (mega neon) as dated points. We use whichever series matches the value we display, as change points.
+export async function fetchAmHistory(item) {
+  const html = await curlGet(`${AM_ORIGIN}/values/${amSlug(item.name)}`);
+  const h = extractObject(nextPayload(html), '{"history":')?.history;
+  const series = Object.values(h?.series || {}).filter((s) => Array.isArray(s) && s.length);
+  if (!series.length) return [];
+  const last = (s) => s[s.length - 1].value;
+  const best = series.reduce((a, b) => (Math.abs(last(b) - item.value) < Math.abs(last(a) - item.value) ? b : a));
+  const points = [];
+  for (const p of best) {
+    const t = Date.parse(`${p.date}T00:00:00Z`);
+    if (!Number.isFinite(t) || !(p.value > 0)) continue;
+    if (points.length && points[points.length - 1][1] === p.value) continue;
+    points.push([t, p.value]);
+  }
+  return points;
 }
 
 const round = (n) => (n == null ? null : Math.round(n * 100) / 100);

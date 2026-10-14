@@ -11,7 +11,7 @@ import {
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
-import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem } from "./am-values.mjs";
+import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
 
 // The pusher is the only writer, so it reads each game's state from Supabase once and keeps it in
 // memory; each run then writes only the rows that changed (plus a tiny "heartbeat" with the time).
@@ -58,7 +58,8 @@ async function refreshHistories(allItems, history, historyFetched, now, opts = M
   // Changed items always; never-fetched/stale ones in batches. Items we track changes for ourselves
   // (opts.byValue) don't need a re-pull just because the value moved.
   const changedKnown = opts.byValue ? [] : changed.filter((it) => historyFetched[it.key]);
-  const queue = [...changedKnown, ...[...neverFetched, ...stale].slice(0, opts.batch)];
+  const batch = opts.firstBatch && !Object.keys(historyFetched).length ? opts.firstBatch : opts.batch;
+  const queue = [...changedKnown, ...[...neverFetched, ...stale].slice(0, batch)];
   let ok = 0;
   await Promise.all(Array.from({ length: opts.concurrency }, async () => {
     for (let it; (it = queue.shift());) {
@@ -128,16 +129,20 @@ async function pushBladeBall() {
 }
 
 // Adopt Me values come from adoptmevalues.app's public values page (its /api/ is off-limits in
-// robots.txt). History is recorded from our own updates, like Blade Ball.
+// robots.txt). History comes from each item's own page (dated daily values back to 2024): all of
+// them on the first run, then each item again once a day, a batch per run.
+const AM_HISTORY = { fetch: fetchAmHistory, staleMs: HISTORY_STALE_MS, batch: 400, firstBatch: 4000, concurrency: 4, delayMs: 100, byValue: true };
 async function pushAdoptMe() {
   try {
     const { items, categories } = await scrapeAmValues();
     const state = await getState(AM_PREFIX);
-    const { history, eldorado } = state;
+    const { history, historyFetched, eldorado } = state;
     const now = Date.now();
+    const pulled = await refreshHistories(items, history, historyFetched, now, AM_HISTORY);
+    if (pulled) console.log(`[${stamp()}] Adopt Me history: ${pulled} items updated (${items.filter((i) => historyFetched[i.key]).length}/${items.length} done).`);
     mergeMm2History(history, items, now);
     state.latest = { items: items.map(compactAmItem), categories };
-    await writeChangedRows(AM_PREFIX, { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
+    await writeChangedRows(AM_PREFIX, { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} Adopt Me values.`);
     if (process.argv.includes("--prices") || now - (Date.parse(eldorado?.updatedAt) || 0) > ELDORADO_EVERY_MS) {
       try {
