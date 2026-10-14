@@ -3642,6 +3642,24 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    if (parsedUrl.pathname === "/api/diag-sources") { // TEMPORARY: can Render reach the values sites?
+      const { execFile } = await import("node:child_process");
+      const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+      const targets = [
+        ["mm2values", "https://www.mm2values.com/?p=godly", []],
+        ["bbvalues", "https://bbvalues.uk/api/items", ["x-bbv-handshake: v1-secure-request", "Accept: application/json", "Referer: https://bbvalues.uk/values/"]],
+        ["adoptmevalues", "https://www.adoptmevalues.app/values", []],
+        ["adoptme-item", "https://www.adoptmevalues.app/values/frost-dragon", []],
+      ];
+      const curl = (url, headers) => new Promise((ok) => execFile("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code} %{size_download} %{time_total}", "--max-time", "25", "-A", UA, ...headers.flatMap((h) => ["-H", h]), url], (e, out) => ok(e && !out ? `curl error: ${e.message.slice(0, 80)}` : out)));
+      const out = {};
+      for (const [name, url, headers] of targets) {
+        let f;
+        try { const r = await fetch(url, { headers: { "User-Agent": UA, ...Object.fromEntries(headers.map((h) => h.split(": "))) } }); f = `${r.status} ${(await r.text()).length}`; } catch (e) { f = `fetch error: ${e.message}`; }
+        out[name] = { curl: await curl(url, headers), fetch: f };
+      }
+      return sendJson(res, 200, out);
+    }
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;
