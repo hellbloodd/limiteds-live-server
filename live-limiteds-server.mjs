@@ -4,7 +4,7 @@ import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
 import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
-import { requestRefresh, startAutoUpdates } from "./updater.mjs";
+import { requestRefresh, requestSelectedRefresh, startAutoUpdates } from "./updater.mjs";
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
@@ -3652,6 +3652,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (parsedUrl.pathname === "/api/refresh-values") return sendJson(res, 200, requestRefresh(parsedUrl.searchParams.get("game")));
+    if (parsedUrl.pathname === "/api/refresh-flips" && req.method === "POST") {
+      let body = ""; for await (const c of req) { body += c; if (body.length > 50000) break; }
+      let sel = []; try { sel = JSON.parse(body).items || []; } catch { /* bad body */ }
+      return sendJson(res, 200, requestSelectedRefresh(sel));
+    }
     if (parsedUrl.pathname === "/api/test-deal-alert") return sendJson(res, 200, await sendTestAlert(PORT).catch((e) => ({ ok: false, error: e.message })));
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;

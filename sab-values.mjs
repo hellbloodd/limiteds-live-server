@@ -89,7 +89,7 @@ export async function scrapeSabValues(scanned = {}) {
 // we price the plain version (mutation "none").
 
 const SB_SHOP = "https://www.eldorado.gg/steal-a-brainrot-brainrots/i/259-2-0";
-const ELDORADO_WORKERS = 4;
+const ELDORADO_WORKERS = 8; // the shared limit in mm2-values.mjs caps total requests to Eldorado
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 export async function fetchSabEldoradoPrices(items) {
@@ -183,7 +183,7 @@ function eldoradoFields(it) {
   const p = sbEldorado.prices[it.key];
   if (!p?.usd) return {};
   // Values are in Dragons, often far below 1, so keep 3 significant digits.
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd), ...salesStats(sbSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd), ...salesStats(sbSales[it.key]) };
 }
 
 // Returns true if the request was handled.

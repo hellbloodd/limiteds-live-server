@@ -90,7 +90,7 @@ export async function scrapeBbValues() {
 const BB_SHOP = "https://www.eldorado.gg/blade-ball-swords/i/203-2-0";
 const ELDORADO_PAGE_SIZE = 50;
 const ELDORADO_MAX_PAGES = 150;
-const ELDORADO_WORKERS = 2;
+const ELDORADO_WORKERS = 8; // the shared limit in mm2-values.mjs caps total requests to Eldorado
 
 const normName = (s) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 
@@ -114,12 +114,14 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
   const fetchPage = (page) => eldoradoJson(`/api/v1/item-management/offers?gameId=203&category=CustomItem&pageIndex=${page}`
     + `&pageSize=${ELDORADO_PAGE_SIZE}&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false`
     + "&offerSortingCriterion=Price&isAscending=true");
+  let failedPages = 0;
   const first = await fetchPage(1);
   const totalPages = Math.min(first.totalPages || 1, ELDORADO_MAX_PAGES);
   const pages = [first];
   const queue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
   await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
-    for (let page; (page = queue.shift());) pages.push(await fetchPage(page));
+    // a page Eldorado refuses (429) is skipped rather than failing the whole scan
+    for (let page; (page = queue.shift());) pages.push(await fetchPage(page).catch(() => { failedPages++; return { results: [] }; }));
   }));
   onProgress(totalPages, totalPages);
   for (const j of pages) {
@@ -159,6 +161,9 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
       url: `${BB_SHOP}?searchQuery=${encodeURIComponent(item.name)}`,
     };
   }
+  // With pages missing, an item's listings may look like they vanished - don't feed this round
+  // into sales tracking (prices are still fine to show).
+  if (failedPages) for (const p of Object.values(prices)) { delete p.offers; delete p.windowMax; }
   return prices;
 }
 
@@ -220,7 +225,7 @@ export function startBbTracker() {
 function eldoradoFields(it) {
   const p = bbEldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
 }
 
 // Returns true if the request was handled.

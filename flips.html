@@ -102,6 +102,35 @@
   .skel { height:64px; border-radius:14px; border:1px solid var(--border);
     background:linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size:300% 100%; animation:shimmer 1.4s ease-in-out infinite; }
   @keyframes shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+  .row { cursor:pointer; }
+  /* item card */
+  dialog { width:min(560px, calc(100% - 28px)); padding:20px; border-radius:18px; color:var(--text); border:1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    background:linear-gradient(170deg, color-mix(in srgb, var(--surface) 88%, var(--accent) 12%), var(--surface) 45%); box-shadow:0 30px 80px -30px #000, 0 0 60px -30px var(--glow); }
+  dialog[open] { animation:zoom .35s var(--ease); }
+  dialog::backdrop { background:rgba(4,6,10,.55); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+  @keyframes zoom { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
+  .close { float:right; background:none; border:0; color:var(--muted); font-size:24px; cursor:pointer; transition:transform .2s; } .close:hover { transform:rotate(90deg); color:var(--text); }
+  .c-head { display:flex; gap:14px; align-items:center; }
+  .c-head img { width:78px; height:78px; object-fit:contain; border-radius:16px; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); }
+  .c-head h2 { margin:0; font:700 18px "Unbounded", sans-serif; }
+  .verdict { margin:14px 0; padding:10px 12px; border-radius:12px; font-weight:700; font-size:13px; border:1px solid var(--border); }
+  .verdict.good { background:#34c17a1a; border-color:#34c17a66; } .verdict.warn { background:#e0a3351a; border-color:#e0a33566; } .verdict.bad { background:#e0576a1a; border-color:#e0576a66; }
+  .verdict small { display:block; font-weight:500; color:var(--muted); margin-top:3px; }
+  .c-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin:10px 0 14px; }
+  .c-stats div { background:var(--surface-2); border-radius:12px; padding:8px 10px; display:flex; flex-direction:column; gap:2px; }
+  .c-stats span { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .c-stats b { font:700 15px "JetBrains Mono", monospace; }
+  .ladder { display:flex; flex-direction:column; gap:6px; margin:6px 0 14px; }
+  .ladder .rung { display:grid; grid-template-columns:70px 1fr 120px; gap:8px; align-items:center; font-size:12px; }
+  .ladder .bar { height:10px; border-radius:6px; background:var(--surface-2); overflow:hidden; }
+  .ladder .bar i { display:block; height:100%; border-radius:6px; background:linear-gradient(90deg, var(--accent), var(--accent-2)); width:0; animation:grow .7s var(--ease) forwards; }
+  .ladder .rung.buy .bar i { background:linear-gradient(90deg, #34c17a, #22d3ee); }
+  .ladder .rung.sold .bar i { background:repeating-linear-gradient(45deg, #e0a335, #e0a335 6px, #e0a33599 6px, #e0a33599 12px); }
+  .ladder .tag { font-size:11px; color:var(--muted); }
+  .c-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .c-actions a { flex:1; text-align:center; }
+  .ghost-link { text-decoration:none; font-weight:800; font-size:12px; padding:7px 10px; border-radius:999px; border:1px solid var(--border); color:var(--text); }
+  .ghost-link:hover { border-color:var(--accent); }
   @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
   @keyframes grow { to { width:var(--w); } }
 
@@ -179,6 +208,7 @@
   </div>
 </div>
 
+<dialog id="card"><button class="close" type="button" onclick="card.close()" aria-label="Close">×</button><div id="card-body"></div></dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -192,6 +222,7 @@ for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
+let shown = [];
 let lastData = null;
 let sortKey = "profit", sortDir = -1;
 
@@ -212,8 +243,9 @@ function render() {
   list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
   document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
   const maxRoi = Math.max(...list.map((r) => r.roi), 1);
-  $("rows").innerHTML = list.length ? list.slice(0, 300).map((r, n) => `
-    <div class="row" style="--d:${Math.min(n, 20) * 25}ms">
+  shown = list.slice(0, 300);
+  $("rows").innerHTML = list.length ? shown.map((r, n) => `
+    <div class="row" data-n="${n}" style="--d:${Math.min(n, 20) * 25}ms" title="Click to check this flip">
       <div class="item">
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
@@ -263,6 +295,51 @@ document.querySelector(".head").addEventListener("click", (e) => {
   if (sortKey === b.dataset.sort) sortDir *= -1; else { sortKey = b.dataset.sort; sortDir = -1; }
   render();
 });
+// ---------- item card: is this flip real, or is the 2nd listing just too high? ----------
+function verdict(r) {
+  const L = r.ladder || [];
+  const third = L[2];
+  if (r.soldPrice) {
+    const over = (r.relist - r.soldPrice) / r.soldPrice * 100;
+    if (over <= 0) return ["good", "✅ Relist price is at or below what it actually sells for", `Typical sale ${money(r.soldPrice)} · you'd relist at ${money(r.relist)}`];
+    if (over <= 20) return ["warn", `⚠️ Relist is ${over.toFixed(0)}% above the typical sale price`, `Typical sale ${money(r.soldPrice)} — it may take longer to sell, or relist a bit lower`];
+    return ["bad", `⛔ Relist is ${over.toFixed(0)}% above the typical sale price — the 2nd listing is probably too high`, `Typical sale ${money(r.soldPrice)}. Profit at that price: ${money(r.soldPrice * (1 - settings.fee / 100) - r.usd)}`];
+  }
+  if (third && r.second > third * 0.95) return ["warn", "⚠️ No sales seen yet — the 2nd and 3rd listings are close, so the price looks real", "Sales tracking needs a few days of data before it can confirm"];
+  if (L.length >= 2 && r.second > r.usd * 2) return ["bad", "⛔ The 2nd listing is more than double the cheapest and nothing sold yet — likely overpriced", "Check the listings before buying"];
+  return ["warn", "⚠️ No sales seen yet for this item", "Sales tracking needs a few days of data — check the listings on Eldorado"];
+}
+function openCard(r) {
+  const L = (r.ladder?.length ? r.ladder : [r.usd, r.second]).slice(0, 5);
+  const top = Math.max(...L, r.soldPrice || 0);
+  const [cls, title, sub] = verdict(r);
+  const relistIdx = L.findIndex((v) => Math.abs(v - r.second) < 0.005);
+  const rungs = L.map((v, n) => `<div class="rung ${n === 0 ? "buy" : ""}"><span class="tabular">${money(v)}</span><div class="bar"><i style="--w:${(v / top * 100).toFixed(0)}%"></i></div>
+    <span class="tag">${n === 0 ? "← you buy this one" : n === relistIdx ? "← you relist 1¢ under this" : `#${n + 1} listing`}</span></div>`).join("")
+    + (r.soldPrice ? `<div class="rung sold"><span class="tabular">${money(r.soldPrice)}</span><div class="bar"><i style="--w:${(r.soldPrice / top * 100).toFixed(0)}%"></i></div><span class="tag">typical sale (7d)</span></div>` : "");
+  $("card-body").innerHTML = `
+    <div class="c-head"><img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <div><h2>${esc(r.name)}</h2><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:12px">${esc(r.variant)}</span>` : ""}</div></div>
+    <div class="verdict ${cls}">${title}<small>${sub}</small></div>
+    <div class="c-stats">
+      <div><span>Profit</span><b class="${r.profit >= 0 ? "up" : "down"}">${r.profit >= 0 ? "+" : ""}${money(r.profit)}</b></div>
+      <div><span>ROI</span><b>${r.roi.toFixed(0)}%</b></div>
+      <div><span>Sold 24h / 7d</span><b>${r.sold24h} / ${r.sold7d}</b></div>
+      <div><span>Value</span><b>${Number(r.value).toLocaleString()}</b></div>
+      <div><span>Listings</span><b>${r.listings ?? "?"}</b></div>
+      <div><span>Fee (${settings.fee}%)</span><b>−${money(r.feeAmt)}</b></div>
+    </div>
+    <div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cheapest listings on Eldorado</div>
+    <div class="ladder">${rungs}</div>
+    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Check listings on Eldorado</a><a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
+  $("card").showModal();
+}
+$("rows").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return; // the Buy button opens Eldorado directly
+  const row = e.target.closest(".row[data-n]"); if (!row) return;
+  openCard(compute(shown[row.dataset.n]));
+});
+
 load();
 setInterval(() => load(), 5 * 60 * 1000);
 
@@ -274,24 +351,26 @@ $("refresh").addEventListener("click", async () => {
   const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 12000); };
   const clickedAt = new Date().toISOString();
   btn.disabled = true;
-  status.textContent = "Refreshing Eldorado prices for all games…";
+  const selection = shown.slice(0, 150).map((x) => ({ game: x.game, key: x.key }));
+  if (!selection.length) return done("No flips on screen to refresh — loosen the filters first.");
+  status.textContent = `Re-checking the ${selection.length} flips on screen on Eldorado…`;
   let r;
-  try { r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json()); }
+  try { r = await fetch("/api/refresh-flips", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: selection }) }).then((x) => x.json()); }
   catch { return done("Couldn't request a refresh — try again in a minute."); }
-  if (!r.prices) {
+  if (!r.started) {
     await load(true);
-    return done(r.running ? "An update is already running — prices will update shortly." : "Prices were refreshed less than 5 minutes ago — showing the latest ✓");
+    return done(r.running ? "A refresh is already running — prices will update shortly." : "Refreshed less than a minute ago — showing the latest ✓");
   }
-  const games = ["Blade Ball", "Steal a Brainrot", "Adopt Me", "MM2"];
+  const games = r.games;
   const fresh = new Set();
-  for (let i = 0; i < 80 && fresh.size < games.length; i++) { // up to ~10 min
-    await new Promise((res) => setTimeout(res, 8000));
+  for (let i = 0; i < 80 && fresh.size < games.length; i++) { // up to ~5 min
+    await new Promise((res) => setTimeout(res, 4000));
     const before = fresh.size;
     await load(true);
     for (const g of games) if ((lastData?.pricesByGame?.[g] || "") > clickedAt) fresh.add(g);
     if (fresh.size !== before) status.textContent = `Updated ${[...fresh].join(", ")} ✓${fresh.size < games.length ? ` — still updating ${games.filter((g) => !fresh.has(g)).join(", ")}…` : ""}`;
   }
-  done(fresh.size === games.length ? "All Eldorado prices updated ✓" : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
+  done(fresh.size === games.length ? `Prices re-checked ✓ (${selection.length} flips)` : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
 });
 </script>
 </body>

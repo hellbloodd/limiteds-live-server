@@ -34,7 +34,7 @@ const HISTORY_STALE_MS = 24 * 60 * 60 * 1000;
 // Prices (and deal alerts) on every 15-minute update: the threshold is a bit under 15 min because a
 // price refresh finishes a few minutes after the update that started it.
 const ELDORADO_EVERY_MS = 12 * 60 * 1000;
-const ELDORADO_WORKERS = 4; // parallel price lookups, ~40s for every weapon
+const ELDORADO_WORKERS = 8; // the shared limit in mm2-values.mjs caps total requests to Eldorado
 
 async function refreshHistories(allItems, history, historyFetched, now, opts) {
   const items = allItems.filter((it) => !it.valueText); // ratio-valued items have no numeric history
@@ -67,7 +67,7 @@ async function refreshHistories(allItems, history, historyFetched, now, opts) {
 }
 
 // Cheapest Eldorado.gg listing for every weapon that has a numeric value.
-async function refreshEldorado(items, previous) {
+async function refreshEldorado(items, previous, { save = true } = {}) {
   const leaves = await fetchEldoradoItems();
   const prices = {};
   const queue = items.filter((i) => !i.valueText).map((it) => [it, matchEldorado(it, leaves)]).filter(([, m]) => m);
@@ -83,8 +83,8 @@ async function refreshEldorado(items, previous) {
       }
     }
   }));
-  await savePrices("", await getState(""), prices);
-  return { matched, priced: Object.keys(prices).length };
+  if (save) await savePrices("", await getState(""), prices);
+  return { matched, priced: Object.keys(prices).length, prices };
 }
 
 const stamp = () => new Date().toLocaleTimeString();
@@ -93,23 +93,32 @@ const stamp = () => new Date().toLocaleTimeString();
 // time, so it's written at most every 3 hours (or when the day changes) - prices themselves every time.
 const PRICE_HISTORY_SAVE_MS = 3 * 60 * 60 * 1000;
 const priceHistorySaved = {}; // prefix -> [ms, day]
+const lastItems = {}; // prefix -> items from the last value update (memory only)
 const lastListings = {}; // prefix -> { itemKey: { offers, windowMax } } from the previous check (memory only)
-async function savePrices(prefix, state, allPrices) {
+// partial: only some items were re-checked (Flip Finder "Refresh now") - merge them into the
+// existing prices and listing snapshots instead of replacing everything.
+async function savePrices(prefix, state, allPrices, { partial = false } = {}) {
   // Sales: compare this check's listings with the previous one, then keep only prices for saving.
   state.sales ||= {};
-  const soldNow = lastListings[prefix] ? detectSales(lastListings[prefix], allPrices) : {};
+  const prev = lastListings[prefix];
+  const prevSubset = prev && partial ? Object.fromEntries(Object.keys(allPrices).filter((k) => prev[k]).map((k) => [k, prev[k]])) : prev;
+  const soldNow = prevSubset ? detectSales(prevSubset, allPrices) : {};
   const salesChanged = mergeSales(state.sales, soldNow);
-  lastListings[prefix] = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
-  const prices = {};
+  const snap = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
+  lastListings[prefix] = partial ? { ...(prev || {}), ...snap } : snap;
+  const prices = partial ? { ...(state.eldorado?.prices || {}) } : {};
+  if (partial) for (const [k, p] of Object.entries(allPrices)) if (!(p.usd > 0)) delete prices[k]; // nothing listed any more
   for (const [k, p] of Object.entries(allPrices)) {
     if (!(p.usd > 0)) continue;
     const { offers, windowMax, ...keep } = p;
+    // the 5 cheapest listing prices, for the Flip Finder's price ladder
+    if (offers?.length) keep.ladder = offers.map((o) => Math.round(o[1] * 100) / 100).filter((v) => v > 0).sort((a, b) => a - b).slice(0, 5);
     prices[k] = keep;
   }
   if (salesChanged) console.log(`[${stamp()}] ${prefix || "mm2_"}: ${Object.values(soldNow).flat().reduce((n, e) => n + e[2], 0)} Eldorado sale(s) detected.`);
   state.eldorado = { updatedAt: new Date().toISOString(), prices };
   state.priceHistory ||= {};
-  recordPriceHistory(state.priceHistory, prices);
+  recordPriceHistory(state.priceHistory, partial ? Object.fromEntries(Object.keys(allPrices).filter((k) => prices[k]).map((k) => [k, prices[k]])) : prices);
   const now = Date.now(), day = Math.floor(now / 864e5);
   const [savedAt = 0, savedDay = -1] = priceHistorySaved[prefix] || [];
   const rows = { eldorado: state.eldorado, sales: state.sales };
@@ -134,9 +143,15 @@ function refreshPricesInBackground(game, lastUpdatedAt, job) {
   wantedPrices.push([game, job]);
 }
 function startWantedPrices() {
-  const jobs = wantedPrices.splice(0).sort(([a], [b]) => (b === priorityGame) - (a === priorityGame));
-  for (const [game, job] of jobs) {
-    pendingPrices.push(eldoradoExclusive(job)
+  const jobs = wantedPrices.splice(0);
+  // The page that clicked "Refresh now" gets its game's prices on its own first (fastest for that
+  // page); the other games then refresh together. Without a priority, all run at once.
+  const first = jobs.find(([g]) => g === priorityGame);
+  const firstDone = first ? new Promise((res) => { first.push(res); }) : Promise.resolve();
+  for (const entry of jobs) {
+    const [game, job, markDone] = entry;
+    const run = entry === first ? job() : firstDone.then(job);
+    pendingPrices.push(run.finally(() => markDone?.())
       .then(async (msg) => {
         console.log(`[${stamp()}] ${msg}`);
         await reloadAllTrackers();
@@ -156,6 +171,7 @@ function startWantedPrices() {
 async function pushBladeBall() {
   try {
     const { items } = await scrapeBbValues();
+    lastItems[BB_PREFIX] = items;
     const state = await getState(BB_PREFIX);
     const { history, historyFetched, eldorado } = state;
     const now = Date.now();
@@ -184,6 +200,7 @@ const AM_HISTORY = { fetch: fetchAmHistory, staleMs: HISTORY_STALE_MS, batch: 15
 async function pushAdoptMe() {
   try {
     const { items, categories } = await scrapeAmValues();
+    lastItems[AM_PREFIX] = items;
     const state = await getState(AM_PREFIX);
     const { history, historyFetched, eldorado } = state;
     const now = Date.now();
@@ -213,6 +230,7 @@ async function pushStealABrainrot() {
     const state = await getState(SB_PREFIX);
     const { history, historyFetched, eldorado } = state;
     const { items } = await scrapeSabValues(historyFetched);
+    lastItems[SB_PREFIX] = items;
     const now = Date.now();
     mergeMm2History(history, items, now);
     state.latest = { items: items.map(compactSabItem) };
@@ -241,6 +259,7 @@ async function pushMm2() {
     const state = await getState("");
     const { latest, history, historyFetched, eldorado } = state;
     let items = scraped.items;
+    lastItems[""] = items;
     if (scraped.errors.length) {
       // Keep the last good values for categories that failed this time, instead of dropping them.
       const failed = new Set(scraped.errors.map((e) => e.split(":")[0]));
@@ -301,4 +320,37 @@ export function startAutoUpdates(port) {
   serverPort = port;
   setTimeout(() => runUpdate().catch(() => {}), 20 * 1000).unref();
   setInterval(() => runUpdate().catch(() => {}), UPDATE_EVERY_MS).unref();
+}
+
+// ---------- Flip Finder "Refresh now": re-check only the items on screen ----------
+// selection: [{ game, key }, ...] (up to 200). Blade Ball listings can only be read game-wide
+// (~90 pages), the other games item by item - far fewer requests than a full refresh.
+const PREFIX_OF = { "MM2": "", "Blade Ball": BB_PREFIX, "Adopt Me": AM_PREFIX, "Steal a Brainrot": SB_PREFIX };
+let selectedRunning = null;
+let lastSelected = 0;
+export function requestSelectedRefresh(selection) {
+  if (selectedRunning) return { started: false, running: true };
+  if (Date.now() - lastSelected < 60 * 1000) return { started: false, recent: true };
+  const byGame = {};
+  for (const { game, key } of (selection || []).slice(0, 200)) if (PREFIX_OF[game] !== undefined && key) (byGame[game] ||= new Set()).add(String(key));
+  const games = Object.keys(byGame);
+  if (!games.length) return { started: false, empty: true };
+  lastSelected = Date.now();
+  selectedRunning = Promise.all(games.map(async (game) => {
+    const prefix = PREFIX_OF[game];
+    if (pricesRunning[game]) return; // the automatic refresh is already fetching this game's prices
+    const items = (lastItems[prefix] || []).filter((i) => byGame[game].has(String(i.key)));
+    if (!items.length) return;
+    const state = await getState(prefix);
+    try {
+      const prices = game === "MM2" ? (await refreshEldorado(items, state.eldorado, { save: false })).prices
+        : game === "Blade Ball" ? await fetchBbEldoradoPrices(lastItems[prefix]) // whole game anyway
+        : game === "Adopt Me" ? await fetchAmEldoradoPrices(items)
+        : await fetchSabEldoradoPrices(items);
+      await savePrices(prefix, state, prices, { partial: game !== "Blade Ball" });
+      await reloadAllTrackers(); // show each game as soon as it's done
+      console.log(`[${stamp()}] ${game}: re-checked ${game === "Blade Ball" ? "all" : items.length} item prices for the Flip Finder.`);
+    } catch (e) { console.error(`[${stamp()}] ${game} selected price refresh failed: ${e.message}`); }
+  })).then(() => reloadAllTrackers()).finally(() => { selectedRunning = null; });
+  return { started: true, games };
 }

@@ -121,7 +121,7 @@ export async function scrapeAmValues() {
 // version - and compared with the Fly Ride value; eggs have no traits.
 
 const AM_SHOP = "https://www.eldorado.gg/adopt-me-pets/i/201-2-0";
-const ELDORADO_WORKERS = 4;
+const ELDORADO_WORKERS = 8; // the shared limit in mm2-values.mjs caps total requests to Eldorado
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const RARITY = { "ultra rare": "Ultra-Rare", legendary: "Legendary", rare: "Rare", common: "Common", uncommon: "Uncommon" };
 
@@ -236,7 +236,7 @@ function eldoradoFields(it) {
   if (!p?.usd) return {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
 }
 
 // Returns true if the request was handled.

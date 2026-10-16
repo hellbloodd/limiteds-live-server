@@ -351,22 +351,33 @@ const ELDORADO = "https://www.eldorado.gg";
 const ELDORADO_SHOP = `${ELDORADO}/mm2-shop/i/204-2-0`;
 const ELDORADO_RARITIES = { godlies: ["Godly"], ancients: ["Ancient"], uniques: ["Unique"], vintages: ["Vintage"], evos: ["Godly", "Ancient", "Unique"], legendaries: ["Legendary"], rares: ["Rare"], uncommons: ["Uncommon"], commons: ["Common"] };
 
-// Runs Eldorado price refreshes one after another (MM2 and Blade Ball update in parallel,
-// and together they trip Eldorado's rate limit).
-let eldoradoChain = Promise.resolve();
-export function eldoradoExclusive(fn) {
-  const run = eldoradoChain.then(fn, fn);
-  eldoradoChain = run.catch(() => {});
-  return run;
+// All four games' price refreshes run at the same time; one shared limit keeps the total number of
+// requests to Eldorado in flight at ELDORADO_CONCURRENCY so we stay under its rate limit.
+// (Kept as a pass-through so callers don't change.)
+export function eldoradoExclusive(fn) { return fn(); }
+
+const ELDORADO_CONCURRENCY = Number(process.env.ELDORADO_CONCURRENCY || 4); // more than ~4 at once gets 429s
+let eldoradoActive = 0;
+const eldoradoWaiting = [];
+async function eldoradoSlot() {
+  if (eldoradoActive < ELDORADO_CONCURRENCY) { eldoradoActive++; return; }
+  await new Promise((res) => eldoradoWaiting.push(res)); // the finishing request hands its slot over
+}
+function eldoradoRelease() {
+  const next = eldoradoWaiting.shift();
+  if (next) next(); else eldoradoActive--;
 }
 
-// Retries "429 Too Many Requests" after a short pause (MM2 and Blade Ball refresh at the same time).
+// Retries "429 Too Many Requests" after a short pause.
 export async function eldoradoJson(path) {
   for (let attempt = 1; ; attempt++) {
-    const res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    await eldoradoSlot();
+    let res;
+    try { res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } }); }
+    finally { eldoradoRelease(); }
     if (res.ok) return res.json();
-    if (res.status !== 429 || attempt >= 5) throw new Error(`Eldorado ${res.status}`);
-    await new Promise((r) => setTimeout(r, attempt * 2000));
+    if (res.status !== 429 || attempt >= 6) throw new Error(`Eldorado ${res.status}`);
+    await new Promise((r) => setTimeout(r, attempt * 2500 + Math.random() * 1000)); // back off, spread out retries
   }
 }
 
@@ -481,7 +492,7 @@ export function startMm2Tracker() {
 function eldoradoFields(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
     priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key]) };
 }
 
