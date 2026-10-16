@@ -18,8 +18,10 @@ let cache = { at: 0, body: null };
 async function collect(port) {
   const rows = [];
   let pricesUpdatedAt = null;
+  const pricesByGame = {};
   for (const [game, api, page] of GAMES) {
     const data = await (await fetch(`http://127.0.0.1:${port}${api}`)).json().catch(() => ({ items: [] }));
+    pricesByGame[game] = data.pricesUpdatedAt || null;
     if (data.pricesUpdatedAt && (!pricesUpdatedAt || data.pricesUpdatedAt > pricesUpdatedAt)) pricesUpdatedAt = data.pricesUpdatedAt;
     for (const i of data.items || []) {
       if (!(i.usd > 0) || !(i.second > 0)) continue;
@@ -30,7 +32,7 @@ async function collect(port) {
       });
     }
   }
-  return { pricesUpdatedAt, count: rows.length, rows };
+  return { pricesUpdatedAt, pricesByGame, count: rows.length, rows };
 }
 
 // Returns true if the request was handled.
@@ -41,7 +43,8 @@ export async function handleFlipsRequest(url, res, sendJson, port) {
     return true;
   }
   if (url.pathname === "/api/flips") {
-    if (!cache.body || Date.now() - cache.at > CACHE_MS) cache = { at: Date.now(), body: await collect(port) };
+    // ?fresh=1 (used while "Refresh now" waits for new prices) skips the 1-minute cache
+    if (!cache.body || url.searchParams.has("fresh") || Date.now() - cache.at > CACHE_MS) cache = { at: Date.now(), body: await collect(port) };
     sendJson(res, 200, cache.body);
     return true;
   }

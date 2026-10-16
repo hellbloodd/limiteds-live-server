@@ -69,6 +69,14 @@
   input[type=number] { width:96px; }
   input:focus, select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft), 0 0 22px -8px var(--glow); }
   .note { font-size:12px; color:var(--muted); flex-basis:100%; }
+  .refresh { display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:var(--text); font:700 13px "Manrope", sans-serif; padding:8px 14px; border-radius:999px;
+    border:1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); background:linear-gradient(135deg, var(--accent-soft), transparent); transition:all .2s var(--ease); }
+  .refresh:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 18px -8px var(--glow); }
+  .refresh:disabled { opacity:.7; cursor:default; }
+  .refresh:disabled .ico { animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #refresh-status:empty { display:none; }
+  #refresh-status { color:var(--text); }
 
   .table { display:flex; flex-direction:column; gap:8px; padding-bottom:40px; }
   .head, .row { display:grid; grid-template-columns:minmax(200px, 2fr) repeat(5, minmax(72px, 1fr)) minmax(64px, .8fr) minmax(70px, .9fr) minmax(80px, 1fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
@@ -136,7 +144,7 @@
     <div class="tiles">
       <div class="tile"><span>Flips found</span><b id="t-count" class="tabular">—</b><small id="t-count-sub">&nbsp;</small></div>
       <div class="tile"><span>Best profit</span><b id="t-best" class="tabular">—</b><small id="t-best-sub">&nbsp;</small></div>
-      <div class="tile"><span>Prices updated</span><b id="t-updated" class="tabular">—</b><small>refreshed every 15 min</small></div>
+      <div class="tile"><span>Prices updated</span><b id="t-updated" class="tabular">—</b><small>every 15 min · or refresh now</small></div>
     </div>
   </section>
 
@@ -149,6 +157,8 @@
     <div class="field"><label for="minRoi">Min ROI %</label><input id="minRoi" type="number" min="0" step="1"></div>
     <div class="field"><label for="minListings">Min listings</label><input id="minListings" type="number" min="2" step="1"></div>
     <div class="field"><label for="minSold">Min sold (7d)</label><input id="minSold" type="number" min="0" step="1"></div>
+    <div class="field"><label>&nbsp;</label><button class="refresh" id="refresh" type="button"><span class="ico">↻</span> Refresh now</button></div>
+    <div class="msg" id="refresh-status" style="flex-basis:100%;font-size:12px"></div>
     <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. "Sold" counts sales the site has seen on Eldorado (stock going down or listings disappearing) — tracking started recently, so it grows over the first days. "Profit / day" = profit × average sales per day: the best guess of what a flip earns. Check the listings before buying.</div>
   </div>
 
@@ -182,6 +192,7 @@ for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
+let lastData = null;
 let sortKey = "profit", sortDir = -1;
 
 function compute(r) {
@@ -227,9 +238,10 @@ function render() {
   $("t-best-sub").textContent = best ? `${best.name} · ${best.roi.toFixed(0)}% ROI` : " ";
 }
 
-async function load() {
+async function load(fresh = false) {
   try {
-    const data = await fetch("/api/flips").then((r) => r.json());
+    const data = await fetch(`/api/flips${fresh ? "?fresh=1" : ""}`).then((r) => r.json());
+    lastData = data;
     rows = data.rows || [];
     $("t-updated").textContent = data.pricesUpdatedAt ? new Date(data.pricesUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
     if (!rows.length) { $("rows").innerHTML = `<div class="empty">No price data with two or more listings yet — it fills in with the next Eldorado price refresh (every 15 minutes).</div>`; return; }
@@ -252,7 +264,35 @@ document.querySelector(".head").addEventListener("click", (e) => {
   render();
 });
 load();
-setInterval(load, 5 * 60 * 1000);
+setInterval(() => load(), 5 * 60 * 1000);
+
+// "Refresh now": fresh Eldorado prices for all four games. Each game's prices land as they finish
+// (Blade Ball / Adopt Me / Steal a Brainrot within ~1-2 min, MM2 a few minutes), and the table
+// updates as each one arrives.
+$("refresh").addEventListener("click", async () => {
+  const btn = $("refresh"), status = $("refresh-status");
+  const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 12000); };
+  const clickedAt = new Date().toISOString();
+  btn.disabled = true;
+  status.textContent = "Refreshing Eldorado prices for all games…";
+  let r;
+  try { r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json()); }
+  catch { return done("Couldn't request a refresh — try again in a minute."); }
+  if (!r.prices) {
+    await load(true);
+    return done(r.running ? "An update is already running — prices will update shortly." : "Prices were refreshed less than 5 minutes ago — showing the latest ✓");
+  }
+  const games = ["Blade Ball", "Steal a Brainrot", "Adopt Me", "MM2"];
+  const fresh = new Set();
+  for (let i = 0; i < 80 && fresh.size < games.length; i++) { // up to ~10 min
+    await new Promise((res) => setTimeout(res, 8000));
+    const before = fresh.size;
+    await load(true);
+    for (const g of games) if ((lastData?.pricesByGame?.[g] || "") > clickedAt) fresh.add(g);
+    if (fresh.size !== before) status.textContent = `Updated ${[...fresh].join(", ")} ✓${fresh.size < games.length ? ` — still updating ${games.filter((g) => !fresh.has(g)).join(", ")}…` : ""}`;
+  }
+  done(fresh.size === games.length ? "All Eldorado prices updated ✓" : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
+});
 </script>
 </body>
 </html>
