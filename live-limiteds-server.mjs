@@ -3687,6 +3687,15 @@ startAmTracker();
 startSabTracker();
 // The server fetches values itself (every 15 min + "Refresh now"); needs Supabase to store them.
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) startAutoUpdates(PORT);
+
+// Keep-awake: Render's free plan sleeps a service after ~15 minutes without visitors, which would
+// pause updates, alerts, sales tracking and the sniper. Visiting our own public /ping through
+// Render's address every 10 minutes counts as a visit. RENDER_EXTERNAL_URL is set by Render itself.
+if (process.env.RENDER_EXTERNAL_URL && process.env.KEEP_AWAKE !== "off") {
+  const pingUrl = `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/ping`;
+  setInterval(() => { fetch(pingUrl).catch(() => {}); }, 10 * 60 * 1000).unref();
+  console.log(`Keep-awake: pinging ${pingUrl} every 10 minutes.`);
+}
 if (snapshotStorageEnabled()) {
   setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
   setInterval(() => runSnapshot().catch(e => console.error(e.message)), SNAPSHOT_INTERVAL_MS);
