@@ -224,10 +224,10 @@ function cleanMm2Items(items) {
 
 // From listing prices sorted low -> high: the cheapest real listing (skipping ones far below the
 // rest - usually mislabelled items) and the next one up (what a flip would undercut).
+// The real cheapest and second-cheapest listings (no outlier skipping: the Flip Finder wants the
+// actual first offer and the gap to the next one).
 export function pickPrices(sorted) {
-  const median = sorted[Math.floor(Math.min(sorted.length, 5) / 2)]; // of the 5 cheapest
-  const i = sorted.findIndex((v) => v >= median * 0.5);
-  return { usd: sorted[i], second: sorted[i + 1] ?? null };
+  return { usd: sorted[0], second: sorted[1] ?? null };
 }
 
 // ---------- Eldorado sales tracking ----------
