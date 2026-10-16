@@ -228,6 +228,40 @@ function eldoradoFields(it) {
   return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
 }
 
+// Token price from Eldorado's Blade Ball Currency page, in its default "Recommended" order. The
+// cheapest-first list is full of scams, so we take the first few real token packs the site
+// recommends (skipping spins/items in the same category) and use their median price per 1k.
+let tokenRate = null; // { per1k, perUsd, offers, at }
+let tokenRateLoading = null;
+function tokensInTitle(title) {
+  if (/spin|limited|sword|explosion|emote|account/i.test(title)) return 0;
+  const m = title.match(/(\d+(?:[.,]\d{3})*(?:\.\d+)?)\s*(k)?\s*(?:x\s*)?tokens?\b/i);
+  if (!m) return 0;
+  const n = Number(/[.,]\d{3}$/.test(m[1]) && !m[2] ? m[1].replace(/[.,]/g, "") : m[1].replace(",", "."));
+  return m[2] ? n * 1000 : n;
+}
+async function loadTokenRate() {
+  const data = await eldoradoJson("/api/v1/item-management/offers?gameId=203&category=Currency&pageIndex=1&pageSize=30&useMinPurchasePrice=false");
+  const offers = [];
+  for (const { offer: o, user } of data?.results || []) {
+    const tokens = tokensInTitle(o.offerTitle || "");
+    const price = o.pricePerUnitInUSD?.amount ?? o.pricePerUnit?.amount;
+    if (!tokens || !(price > 0)) continue;
+    offers.push({ per1k: Math.round(price / tokens * 1000 * 100) / 100, seller: user?.username || "" });
+    if (offers.length === 3) break;
+  }
+  if (!offers.length) return;
+  const per1k = offers.map((x) => x.per1k).sort((a, b) => a - b)[offers.length >> 1];
+  tokenRate = { per1k, perUsd: Math.round(1000 / per1k), offers, at: new Date().toISOString() };
+}
+async function getTokenRate() {
+  if (!tokenRate || Date.now() - Date.parse(tokenRate.at) > 15 * 60 * 1000) {
+    tokenRateLoading ||= loadTokenRate().catch(() => {}).finally(() => { tokenRateLoading = null; });
+    if (!tokenRate) await Promise.race([tokenRateLoading, new Promise((r) => setTimeout(r, 8000))]);
+  }
+  return tokenRate;
+}
+
 // Returns true if the request was handled.
 export async function handleBbRequest(url, res, sendJson) {
   if (url.pathname === "/bladeball" || url.pathname === "/bladeball/") {
@@ -252,7 +286,7 @@ export async function handleBbRequest(url, res, sendJson) {
     sendJson(res, 200, {
       updatedAt: bbUpdatedAt ? new Date(bbUpdatedAt).toISOString() : null,
       pricesUpdatedAt: bbEldorado.updatedAt,
-      source: "bbvalues.uk", count: items.length, categories: BB_CATEGORIES, items,
+      source: "bbvalues.uk", count: items.length, categories: BB_CATEGORIES, items, tokenRate: await getTokenRate(),
       ...(bbItems.length ? {} : { error: bbLastError || "Blade Ball values are still loading." }),
     });
     return true;

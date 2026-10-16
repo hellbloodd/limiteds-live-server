@@ -345,6 +345,9 @@ function computeDeals() {
 const isDeal = (i) => (dealX[i.key] || 0) >= 2.5;
 // "Rising, price lagging": the value went up recently (+10% in 24h or +20% in 7 days) but the item
 // is still cheap on Eldorado compared with similar-value items - sellers haven't repriced yet.
+// Blade Ball: cheaper than buying the same value in tokens (Eldorado's recommended token price).
+let tokenPerUsd = 0;
+const beatsTokens = (i) => tokenPerUsd > 0 && i.valuePerUsd > tokenPerUsd;
 const isRising = (i) => i.usd > 0 && (dealX[i.key] || 0) >= 1.5
   && ((i.changes?.["24h"]?.pct ?? 0) >= 10 || (i.changes?.["7d"]?.pct ?? 0) >= 20);
 
@@ -374,7 +377,9 @@ async function load() {
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
     if (cat.options.length === 3) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
-    $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
+    $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}${data.tokenRate ? `<span title="Median of the first ${data.tokenRate.offers.length} token offers in Eldorado's Recommended order (${data.tokenRate.offers.map((o) => `${o.seller} $${o.per1k}`).join(", ")})">🪙 Tokens: <b>$${data.tokenRate.per1k.toFixed(2)}</b> / 1k · <b>${data.tokenRate.perUsd}</b> per $</span>` : ""}`;
+    tokenPerUsd = data.tokenRate?.perUsd || 0;
+    if (tokenPerUsd && !$("cat").querySelector('option[value="tokens"]')) $("cat").querySelector('option[value="rising"]').insertAdjacentHTML("afterend", '<option value="tokens">🪙 Cheaper than tokens</option>');
     computeDeals();
     fillHero(data);
     render();
@@ -388,7 +393,7 @@ function render() {
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
   const deals = c === "deals";
   const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q))
-    && (deals ? isDeal(i) : c === "rising" ? isRising(i) : !c || i.category === c));
+    && (deals ? isDeal(i) : c === "rising" ? isRising(i) : c === "tokens" ? beatsTokens(i) : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
@@ -407,7 +412,7 @@ function render() {
         <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
-        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${isDeal(i) ? ` <span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>` : ""}</div>` : ""}
+        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${isDeal(i) ? ` <span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>` : ""}${beatsTokens(i) ? ` <span class="badge" title="${(i.valuePerUsd / tokenPerUsd).toFixed(1)}× more value per $ than buying tokens">🪙 ${(i.valuePerUsd / tokenPerUsd).toFixed(1)}× tokens</span>` : ""}</div>` : ""}
       </div>
       ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
