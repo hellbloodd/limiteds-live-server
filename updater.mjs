@@ -6,6 +6,7 @@ import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
   detectSales, mergeSales,
+  readRow,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem, expandBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
@@ -197,13 +198,13 @@ async function pushBladeBall() {
     // bbvalues.uk down: Eldorado prices still refresh, using the last saved values.
     try {
       const state = await getState(BB_PREFIX);
-      const items = lastItems[BB_PREFIX] || (state.latest?.items || []).map(expandBbItem);
+      const items = lastItems[BB_PREFIX] || ((await readRow(`${BB_PREFIX}latest`))?.items || []).map(expandBbItem);
       if (items.length) refreshPricesInBackground("Blade Ball", state.eldorado?.updatedAt, async () => {
         const prices = await fetchBbEldoradoPrices(items);
         await savePrices(BB_PREFIX, state, prices);
         return `Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed (values from the last update).`;
       });
-    } catch { /* nothing saved yet */ }
+    } catch (e2) { console.error(`[${stamp()}] Blade Ball fallback price refresh failed: ${e2.message}`); }
     return false;
   }
 }
