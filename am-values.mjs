@@ -157,7 +157,10 @@ function matchLeaf(item, leaves) {
 // cheapest listings of every version; versions missing from it (popular pets have hundreds of
 // listings) get their own filtered request.
 export const AM_TRAITS = { none: "No Potion", f: "Fly", r: "Ride", fr: "Fly Ride", n: "Neon", nf: "Neon Fly", nr: "Neon Ride", nfr: "Neon Fly Ride", m: "Mega Neon", mf: "Mega Fly", mr: "Mega Ride", mfr: "Mega Fly Ride" };
-const FILTERABLE = ["none", "f", "r", "fr", "n", "nfr", "m", "mfr"]; // the others only show up in the unfiltered list
+// Versions worth an extra request when they're missing from the 50 cheapest listings: the neon and
+// mega ones (they're priced far above the rest, so they rarely make the cheapest 50). The others
+// only come from the unfiltered list.
+const FILTERABLE = ["n", "nfr", "m", "mfr"];
 const traitOf = (r) => (r.offer?.attributes || []).find((a) => a.id === "adopt-me-traits")?.value?.id || "";
 const OFFERS = "/api/v1/item-management/offers?gameId=201&category=CustomItem&pageIndex=1"
   + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&";
@@ -203,9 +206,9 @@ export async function fetchAmEldoradoPrices(items, { frOnly = false } = {}) {
           groups[t].count++;
         }
         // versions that have a value but fewer than 2 listings in the window: ask for them directly
-        // (skipped for cheap pets - Fly Ride under $3 - to keep the request count down)
+        // (skipped for cheap pets - Fly Ride under $5 - to keep the request count down)
         const frCheapest = Math.min(...(groups.fr?.offers || []).map((o) => o[1]));
-        if (!full && !(frCheapest < 3)) for (const t of FILTERABLE) {
+        if (!full && !(frCheapest < 5)) for (const t of FILTERABLE) {
           if (!(it.vals?.[t] > 0) || (groups[t]?.offers.length || 0) >= 2) continue;
           try {
             const f = await eldoradoJson(OFFERS + "pageSize=10&" + filter + `&adopt-me-traits=${t}`);
