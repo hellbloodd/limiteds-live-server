@@ -71,6 +71,7 @@ export function findSnipes(before, offers, item, owner = null) {
 async function checkOne(game, item) {
   const p = await listingsFor(game, item).catch(() => null);
   if (!p?.offers?.length) return;
+  onPrice(game, item.key, p); // fresh price for the site, between full refreshes
   const id = `${game}|${item.key}`;
   const before = seen.get(id);
   seen.set(id, new Set(p.offers.map((o) => o[0])));
@@ -105,7 +106,7 @@ async function checkOne(game, item) {
   }
 }
 
-// busy(): true while a full Eldorado price refresh runs - the sniper then drops to 1 at a time so
+// busy(): true while a full Eldorado price refresh runs - the sniper then drops to 2 at a time so
 // the refresh still gets most of Eldorado's request budget.
 async function loop(port, busy) {
   for (;;) {
@@ -116,7 +117,7 @@ async function loop(port, busy) {
       const queue = [...hot];
       await Promise.all(Array.from({ length: PARALLEL }, async (_, w) => {
         for (let job; (job = queue.shift());) {
-          while (w >= 1 && busy()) await new Promise((r) => setTimeout(r, 5000));
+          while (w >= 2 && busy()) await new Promise((r) => setTimeout(r, 5000));
           await checkOne(job.game, job.item).catch(() => {});
         }
       }));
@@ -129,7 +130,9 @@ async function loop(port, busy) {
 }
 let mm2LeavesAt = Date.now();
 
-export function startSniper(port, busy) {
+let onPrice = () => {};
+export function startSniper(port, busy, priceSink) {
+  if (priceSink) onPrice = priceSink;
   setTimeout(() => loop(port, busy), 60 * 1000).unref();
 }
 

@@ -27,7 +27,7 @@ async function collect(port) {
       // Adopt Me pets: one flip row per version (No Potion, Fly Ride, Neon, Mega Neon...).
       if (i.variants?.length) {
         for (const v of i.variants) {
-          if (!(v.usd > 0) || !(v.second > 0)) continue;
+          if (!(v.usd > 0) || !(v.second > v.usd + 0.01)) continue; // no gap to the next listing: never a flip
           const fr = v.code === "fr"; // sales are tracked for the Fly Ride listings
           rows.push({
             game, page, key: `${i.key}:${v.code}`, name: i.name, image: i.image, value: v.value, usd: v.usd, second: v.second,
@@ -38,7 +38,7 @@ async function collect(port) {
         }
         continue;
       }
-      if (!(i.usd > 0) || !(i.second > 0)) continue;
+      if (!(i.usd > 0) || !(i.second > i.usd + 0.01)) continue; // no gap to the next listing: never a flip
       rows.push({
         game, page, key: i.key, name: i.name, image: i.image, value: i.value, usd: i.usd, second: i.second,
         listings: i.listings, url: i.eldoradoUrl, variant: i.priceVariant || "",

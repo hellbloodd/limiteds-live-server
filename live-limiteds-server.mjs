@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import http from "http";
 import { URL } from "url";
 import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
@@ -1733,6 +1734,12 @@ function makePageCacheKey({ marketType, view, sort, keyword, cursor, limit, minP
 }
 
 function sendJson(res, status, body) {
+  // Big answers (the Flip Finder's is several MB) go out gzipped when the browser accepts it.
+  const text = JSON.stringify(body);
+  if (text.length > 20000 && /gzip/.test(res.req?.headers?.["accept-encoding"] || "")) {
+    res.writeHead(status, { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
+    return res.end(gzipSync(text, { level: 6 }));
+  }
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -1740,7 +1747,7 @@ function sendJson(res, status, body) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
-  res.end(JSON.stringify(body));
+  res.end(text);
 }
 
 function normalizeNumber(value) {
@@ -3707,7 +3714,9 @@ if (process.env.RENDER_EXTERNAL_URL && process.env.KEEP_AWAKE !== "off") {
   setInterval(() => { fetch(pingUrl).catch(() => {}); }, 10 * 60 * 1000).unref();
   console.log(`Keep-awake: pinging ${pingUrl} every 10 minutes.`);
 }
-if (snapshotStorageEnabled()) {
+// The original Roblox limiteds tracker (Rolimons + Roblox catalog every few minutes) is off unless
+// LIMITEDS_TRACKER=on: it isn't part of Agony Values and costs CPU/network on the small instance.
+if (snapshotStorageEnabled() && process.env.LIMITEDS_TRACKER === "on") {
   setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
   setInterval(() => runSnapshot().catch(e => console.error(e.message)), SNAPSHOT_INTERVAL_MS);
   console.log(`Recurring snapshots scheduled every ${Math.round(SNAPSHOT_INTERVAL_MS / 60000)} minute(s).`);
