@@ -29,7 +29,9 @@ async function getState(prefix) {
 
 const UPDATE_EVERY_MS = 15 * 60 * 1000;
 const HISTORY_STALE_MS = 24 * 60 * 60 * 1000;
-const ELDORADO_EVERY_MS = 60 * 60 * 1000;
+// Prices (and deal alerts) on every 15-minute update: the threshold is a bit under 15 min because a
+// price refresh finishes a few minutes after the update that started it.
+const ELDORADO_EVERY_MS = 12 * 60 * 1000;
 const ELDORADO_WORKERS = 4; // parallel price lookups, ~40s for every weapon
 
 async function refreshHistories(allItems, history, historyFetched, now, opts) {
