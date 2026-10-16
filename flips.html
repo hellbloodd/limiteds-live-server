@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flip Finder · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+  :root {
+    --bg:#0b0e14; --surface:#12161f; --surface-2:#1a2029; --border:#262d3a;
+    --text:#e9edf4; --muted:#8a93a6; --muted-2:#5d6577;
+    --accent:#a78bfa; --accent-2:#22d3ee; --accent-soft:#a78bfa22; --glow:#a78bfa55;
+    --green:#34c17a; --red:#e0576a; --glass:rgba(18,22,31,.62); --ease:cubic-bezier(.2,.8,.2,1);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:#f6f4ee; --surface:#ffffff; --surface-2:#f0ede4; --border:#ded8c8;
+      --text:#221d12; --muted:#6b6455; --muted-2:#98917f; --glass:rgba(255,255,255,.7);
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; overflow-x:hidden; background:var(--bg); color:var(--text); font:14px/1.45 "Manrope", -apple-system, "Segoe UI", sans-serif; }
+  body::before, body::after { content:""; position:fixed; z-index:-1; pointer-events:none; border-radius:50%; filter:blur(90px); opacity:.55; }
+  body::before { width:620px; height:620px; top:-220px; left:-160px; background:radial-gradient(circle, var(--glow), transparent 70%); animation:drift1 26s ease-in-out infinite alternate; }
+  body::after { width:560px; height:560px; bottom:-240px; right:-140px; background:radial-gradient(circle, color-mix(in srgb, var(--accent-2) 35%, transparent), transparent 70%); animation:drift2 32s ease-in-out infinite alternate; }
+  .bg-grid { position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.35;
+    background-image:linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size:48px 48px; mask-image:radial-gradient(ellipse at 50% 0%, #000 0%, transparent 70%); }
+  @keyframes drift1 { to { transform:translate(140px, 90px) scale(1.15); } }
+  @keyframes drift2 { to { transform:translate(-120px, -70px) scale(1.1); } }
+  .tabular { font-family:"JetBrains Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums; }
+  .wrap { max-width:1200px; margin:auto; padding:0 16px; }
+  .dim { color:var(--muted); }
+  a { color:var(--accent); }
+
+  header { position:sticky; top:0; z-index:20; background:var(--glass); backdrop-filter:blur(14px) saturate(140%); -webkit-backdrop-filter:blur(14px) saturate(140%); border-bottom:1px solid var(--border); }
+  .top { display:flex; align-items:center; gap:14px; padding:14px 0; }
+  .brand { display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--text); }
+  .brand-mark { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; font:700 15px "Unbounded", sans-serif; color:#120c22; position:relative; overflow:hidden;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow:0 6px 18px -6px var(--glow); }
+  .brand-mark::after { content:""; position:absolute; inset:0; background:linear-gradient(110deg, transparent 30%, #ffffff66 50%, transparent 70%); transform:translateX(-120%); animation:shine 5s var(--ease) infinite; }
+  @keyframes shine { 0%, 70% { transform:translateX(-120%); } 100% { transform:translateX(120%); } }
+  .brand-text { font:600 16px "Unbounded", sans-serif; }
+
+  .tabs { display:flex; gap:8px; padding:14px 0 4px; flex-wrap:wrap; }
+  .tab { padding:7px 14px; border-radius:999px; border:1px solid var(--border); color:var(--muted); text-decoration:none; font-weight:700; font-size:13px;
+    background:color-mix(in srgb, var(--surface) 60%, transparent); transition:all .2s var(--ease); }
+  .tab:hover { color:var(--text); transform:translateY(-1px); }
+  .tab.active { color:var(--accent); border-color:var(--accent); background:linear-gradient(135deg, var(--accent-soft), transparent); box-shadow:0 0 18px -6px var(--glow); }
+
+  .hero { display:flex; justify-content:space-between; align-items:flex-end; gap:18px; flex-wrap:wrap; padding:22px 0 14px; animation:rise .6s var(--ease) both; }
+  .hero h1 { margin:0; font:700 clamp(24px, 4vw, 38px)/1.1 "Unbounded", sans-serif; letter-spacing:-.02em;
+    background:linear-gradient(100deg, var(--text) 10%, var(--accent) 55%, var(--accent-2) 90%); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hero p { margin:6px 0 0; max-width:560px; }
+  .tiles { display:grid; grid-template-columns:repeat(3, minmax(130px, 1fr)); gap:10px; flex:1 1 420px; max-width:560px; }
+  .tile { background:var(--glass); backdrop-filter:blur(10px); border:1px solid var(--border); border-radius:14px; padding:10px 12px; display:flex; flex-direction:column; gap:2px; min-width:0; animation:rise .6s var(--ease) both; }
+  .tile:nth-child(2) { animation-delay:.06s; } .tile:nth-child(3) { animation-delay:.12s; }
+  .tile span { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .tile b { font:700 19px "JetBrains Mono", monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile small { color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  .panel { background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border:1px solid var(--border); border-radius:16px; padding:12px 14px; margin-bottom:14px; animation:rise .6s .1s var(--ease) both;
+    display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .field.grow { flex:1 1 220px; }
+  input, select { background:color-mix(in srgb, var(--surface) 80%, transparent); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px 11px; font:inherit; transition:border-color .2s, box-shadow .2s; }
+  input[type=number] { width:96px; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft), 0 0 22px -8px var(--glow); }
+  .note { font-size:12px; color:var(--muted); flex-basis:100%; }
+
+  .table { display:flex; flex-direction:column; gap:8px; padding-bottom:40px; }
+  .head, .row { display:grid; grid-template-columns:minmax(220px, 2.2fr) repeat(5, minmax(78px, 1fr)) minmax(70px, .8fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
+  .head { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .head button { all:unset; cursor:pointer; } .head button:hover, .head button.on { color:var(--accent); }
+  .row { background:linear-gradient(160deg, color-mix(in srgb, var(--surface) 92%, var(--accent) 8%), var(--surface)); border:1px solid var(--border); border-radius:14px;
+    transition:transform .25s var(--ease), box-shadow .25s, border-color .25s; animation:rise .45s var(--ease) both; animation-delay:var(--d, 0ms); }
+  .row:hover { transform:translateY(-2px); border-color:color-mix(in srgb, var(--accent) 50%, var(--border)); box-shadow:0 14px 34px -22px var(--glow); }
+  .item { display:flex; align-items:center; gap:10px; min-width:0; }
+  .item img { width:42px; height:42px; object-fit:contain; border-radius:10px; flex:none; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); transition:transform .3s var(--ease); }
+  .row:hover .item img { transform:scale(1.08) rotate(-2deg); }
+  .item .name { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); margin-right:4px; }
+  .num { text-align:right; }
+  .profit { font-weight:800; }
+  .up { color:var(--green); } .down { color:var(--red); }
+  .roi-bar { height:4px; border-radius:4px; background:var(--surface-2); margin-top:4px; overflow:hidden; }
+  .roi-bar i { display:block; height:100%; background:linear-gradient(90deg, var(--accent), var(--accent-2)); width:0; animation:grow .8s .2s var(--ease) forwards; }
+  .buy { text-align:center; text-decoration:none; font-weight:800; font-size:12px; padding:7px 10px; border-radius:999px; color:#120c22;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow:0 6px 16px -8px var(--glow); transition:transform .2s var(--ease), box-shadow .2s; }
+  .buy:hover { transform:translateY(-1px); box-shadow:0 10px 22px -8px var(--glow); }
+  .empty { color:var(--muted); padding:40px 16px; text-align:center; }
+  .skel { height:64px; border-radius:14px; border:1px solid var(--border);
+    background:linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size:300% 100%; animation:shimmer 1.4s ease-in-out infinite; }
+  @keyframes shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+  @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+  @keyframes grow { to { width:var(--w); } }
+
+  /* phones: each row becomes a small card */
+  @media (max-width:820px) {
+    .head { display:none; }
+    .row { grid-template-columns:1fr 1fr; }
+    .row .item { grid-column:1 / -1; }
+    .row .num { text-align:left; }
+    .row .num::before { content:attr(data-label); display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+    .row .buy { grid-column:1 / -1; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .roi-bar i { width:var(--w); } }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header>
+  <div class="wrap top">
+    <a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">Tracker</a>
+    <a class="tab" href="/mm2">MM2 Values</a>
+    <a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a>
+    <a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab active" href="/flips">💸 Flip Finder</a>
+  </nav>
+
+  <section class="hero">
+    <div>
+      <h1>Flip Finder</h1>
+      <p class="dim">Items you could buy at the cheapest Eldorado listing and relist just under the next one, after the seller fee.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span>Flips found</span><b id="t-count" class="tabular">—</b><small id="t-count-sub">&nbsp;</small></div>
+      <div class="tile"><span>Best profit</span><b id="t-best" class="tabular">—</b><small id="t-best-sub">&nbsp;</small></div>
+      <div class="tile"><span>Prices updated</span><b id="t-updated" class="tabular">—</b><small>refreshed every 15 min</small></div>
+    </div>
+  </section>
+
+  <div class="panel">
+    <div class="field grow"><label for="q">Search</label><input id="q" type="search" placeholder="Search items…" autocomplete="off"></div>
+    <div class="field"><label for="game">Game</label>
+      <select id="game"><option value="">All games</option><option>MM2</option><option>Blade Ball</option><option>Adopt Me</option><option>Steal a Brainrot</option></select></div>
+    <div class="field"><label for="fee">Seller fee %</label><input id="fee" type="number" min="0" max="60" step="0.5"></div>
+    <div class="field"><label for="minProfit">Min profit $</label><input id="minProfit" type="number" min="0" step="0.5"></div>
+    <div class="field"><label for="minRoi">Min ROI %</label><input id="minRoi" type="number" min="0" step="1"></div>
+    <div class="field"><label for="minListings">Min listings</label><input id="minListings" type="number" min="2" step="1"></div>
+    <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. Check the listings before buying: the cheapest seller may be slow or the next listing may not sell.</div>
+  </div>
+
+  <div class="table" id="table">
+    <div class="head">
+      <button data-sort="name">Item</button>
+      <button data-sort="usd" class="num">Buy at</button>
+      <button data-sort="relist" class="num">Relist at</button>
+      <button data-sort="fee" class="num">Fee</button>
+      <button data-sort="profit" class="num">Profit</button>
+      <button data-sort="roi" class="num">ROI</button>
+      <button data-sort="listings" class="num">Listings</button>
+      <span></span>
+    </div>
+    <div id="rows"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(Math.abs(n) >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+// Settings are remembered in this browser.
+const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, game: "" };
+let settings = DEFAULTS;
+try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem("flipSettings") || "{}") }; } catch { /* private mode */ }
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "game"]) $(k).value = settings[k];
+const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
+
+let rows = [];
+let sortKey = "profit", sortDir = -1;
+
+function compute(r) {
+  const fee = settings.fee / 100;
+  const relist = Math.max(0, r.second - 0.01);
+  const feeAmt = relist * fee;
+  const profit = relist - feeAmt - r.usd;
+  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100 };
+}
+
+function render() {
+  const q = $("q").value.toLowerCase();
+  const list = rows.map(compute).filter((r) => (!settings.game || r.game === settings.game)
+    && (!q || r.name.toLowerCase().includes(q))
+    && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings);
+  list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
+  document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
+  const maxRoi = Math.max(...list.map((r) => r.roi), 1);
+  $("rows").innerHTML = list.length ? list.slice(0, 300).map((r, n) => `
+    <div class="row" style="--d:${Math.min(n, 20) * 25}ms">
+      <div class="item">
+        <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+        <div style="min-width:0">
+          <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}</div>
+        </div>
+      </div>
+      <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
+      <div class="num tabular" data-label="Relist at">${money(r.relist)}</div>
+      <div class="num tabular dim" data-label="Fee">−${money(r.feeAmt)}</div>
+      <div class="num tabular profit ${r.profit >= 0 ? "up" : "down"}" data-label="Profit">${r.profit >= 0 ? "+" : ""}${money(r.profit)}</div>
+      <div class="num tabular" data-label="ROI">${r.roi.toFixed(0)}%<div class="roi-bar"><i style="--w:${Math.max(4, Math.min(100, r.roi / maxRoi * 100)).toFixed(0)}%"></i></div></div>
+      <div class="num tabular dim" data-label="Listings">${r.listings ?? "?"}</div>
+      <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on Eldorado</a>
+    </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
+  $("t-count").textContent = list.length.toLocaleString();
+  $("t-count-sub").textContent = `of ${rows.length.toLocaleString()} items with 2+ listings`;
+  const best = [...list].sort((a, b) => b.profit - a.profit)[0];
+  $("t-best").textContent = best ? `+${money(best.profit)}` : "—";
+  $("t-best-sub").textContent = best ? `${best.name} · ${best.roi.toFixed(0)}% ROI` : " ";
+}
+
+async function load() {
+  try {
+    const data = await fetch("/api/flips").then((r) => r.json());
+    rows = data.rows || [];
+    $("t-updated").textContent = data.pricesUpdatedAt ? new Date(data.pricesUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+    if (!rows.length) { $("rows").innerHTML = `<div class="empty">No price data with two or more listings yet — it fills in with the next Eldorado price refresh (every 15 minutes).</div>`; return; }
+    render();
+  } catch (e) {
+    $("rows").innerHTML = `<div class="empty">Couldn't load flips: ${esc(e.message)}</div>`;
+  }
+}
+
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "game"]) {
+  $(k).addEventListener("input", () => {
+    settings[k] = k === "game" ? $(k).value : Math.max(0, Number($(k).value) || 0);
+    save(); render();
+  });
+}
+$("q").addEventListener("input", render);
+document.querySelector(".head").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-sort]"); if (!b) return;
+  if (sortKey === b.dataset.sort) sortDir *= -1; else { sortKey = b.dataset.sort; sortDir = -1; }
+  render();
+});
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

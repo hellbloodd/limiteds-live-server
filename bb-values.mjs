@@ -3,7 +3,7 @@
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
@@ -150,10 +150,9 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
   for (const [key, list] of Object.entries(found)) {
     list.sort((a, b) => a - b);
     // Skip listings far below the rest (mislabelled items), same rule as MM2.
-    const median = list[Math.floor(Math.min(list.length, 5) / 2)];
-    const item = items.find((i) => i.key === key);
+        const item = items.find((i) => i.key === key);
     prices[key] = {
-      usd: list.find((v) => v >= median * 0.5),
+      ...pickPrices(list), // cheapest real listing + the next one up
       listings: list.length,
       url: `${BB_SHOP}?searchQuery=${encodeURIComponent(item.name)}`,
     };
@@ -218,7 +217,7 @@ export function startBbTracker() {
 function eldoradoFields(it) {
   const p = bbEldorado.prices[it.key];
   if (!p) return {};
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd) };
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd) };
 }
 
 // Returns true if the request was handled.

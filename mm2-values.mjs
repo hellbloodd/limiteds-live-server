@@ -221,6 +221,14 @@ function cleanMm2Items(items) {
   return [...byName.values()];
 }
 
+// From listing prices sorted low -> high: the cheapest real listing (skipping ones far below the
+// rest - usually mislabelled items) and the next one up (what a flip would undercut).
+export function pickPrices(sorted) {
+  const median = sorted[Math.floor(Math.min(sorted.length, 5) / 2)]; // of the 5 cheapest
+  const i = sorted.findIndex((v) => v >= median * 0.5);
+  return { usd: sorted[i], second: sorted[i + 1] ?? null };
+}
+
 // ---------- Eldorado price history ----------
 // { itemKey: [[day, usd], ...] } where day = days since 1970 (UTC). One point per day at most, and a
 // new point only when the price differs from the previous one (so a flat price costs nothing).
@@ -360,10 +368,9 @@ export async function fetchEldoradoPrice(m) {
   const prices = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
   if (!prices.length) return null;
   // Skip listings far below the rest - usually a mis-tagged item (a normal Traveler's Gun listed as Chroma).
-  const median = prices[Math.floor(prices.length / 2)];
-  const usd = prices.find((v) => v >= median * 0.5);
+  const { usd, second } = pickPrices(prices);
   return {
-    usd, listings: j.recordCount || prices.length,
+    usd, second, listings: j.recordCount || prices.length,
     url: `${ELDORADO_SHOP}?te_v0=${encodeURIComponent(m.type)}&te_v1=${encodeURIComponent(m.rarity)}&te_v2=${encodeURIComponent(m.name)}${m.chroma ? "&mm2-properties=chroma" : ""}`,
   };
 }
@@ -414,7 +421,7 @@ export function startMm2Tracker() {
 function eldoradoFields(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p) return {};
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
     priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd) };
 }
 

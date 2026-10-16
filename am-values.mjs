@@ -5,7 +5,7 @@
 // unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
@@ -163,9 +163,8 @@ export async function fetchAmEldoradoPrices(items) {
           + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
         const list = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
         if (!list.length) continue;
-        const median = list[Math.floor(list.length / 2)];
-        prices[it.key] = {
-          usd: list.find((v) => v >= median * 0.5), // skip mislabelled listings far below the rest
+                prices[it.key] = {
+          ...pickPrices(list), // cheapest real listing + the next one up
           listings: j.recordCount || list.length,
           variant: pet ? "Fly Ride" : "",
           url: `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`,
@@ -233,7 +232,7 @@ function eldoradoFields(it) {
   if (!p) return {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd) };
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd) };
 }
 
 // Returns true if the request was handled.

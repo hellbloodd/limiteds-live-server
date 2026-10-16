@@ -6,6 +6,7 @@ import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, startAutoUpdates } from "./updater.mjs";
 import { sendTestAlert } from "./deals.mjs";
+import { handleFlipsRequest } from "./flips.mjs";
 
 // ============================================================================
 // ARCHITECTURE
@@ -605,6 +606,7 @@ const DASHBOARD_HTML = `<title>Agony Values</title>
   <a class="view-tab" href="/bladeball" style="text-decoration:none">Blade Ball Values</a>
   <a class="view-tab" href="/adoptme" style="text-decoration:none">Adopt Me Values</a>
   <a class="view-tab" href="/stealabrainrot" style="text-decoration:none">Steal a Brainrot Values</a>
+  <a class="view-tab" href="/flips" style="text-decoration:none">💸 Flip Finder</a>
   <div class="prices-freshness" id="prices-freshness" hidden>
     <span id="prices-freshness-text"></span>
     <button id="refresh-prices-btn" type="button">Refresh now</button>
@@ -3652,6 +3654,7 @@ const server = http.createServer(async (req, res) => {
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;
     if (await handleSabRequest(parsedUrl, res, sendJson)) return;
+    if (await handleFlipsRequest(parsedUrl, res, sendJson, PORT)) return;
 
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
