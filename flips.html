@@ -385,26 +385,24 @@ $("refresh").addEventListener("click", async () => {
   const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 12000); };
   const clickedAt = new Date().toISOString();
   btn.disabled = true;
-  const selection = shown.slice(0, 150).map((x) => ({ game: x.game, key: x.key }));
-  if (!selection.length) return done("No flips on screen to refresh — loosen the filters first.");
-  status.textContent = `Re-checking the ${selection.length} flips on screen on Eldorado…`;
+  status.textContent = "Re-checking every Eldorado offer for all four games…";
   let r;
-  try { r = await fetch("/api/refresh-flips", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: selection }) }).then((x) => x.json()); }
+  try { r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json()); }
   catch { return done("Couldn't request a refresh — try again in a minute."); }
-  if (!r.started) {
+  if (!r.prices) {
     await load(true);
-    return done(r.running ? "A refresh is already running — prices will update shortly." : "Refreshed less than a minute ago — showing the latest ✓");
+    return done(r.running ? "A full refresh is already running — prices will update shortly." : "Every price was refreshed less than 5 minutes ago — showing the latest ✓");
   }
-  const games = r.games;
+  const games = ["Blade Ball", "Steal a Brainrot", "Adopt Me", "MM2"];
   const fresh = new Set();
-  for (let i = 0; i < 80 && fresh.size < games.length; i++) { // up to ~5 min
-    await new Promise((res) => setTimeout(res, 4000));
+  for (let i = 0; i < 100 && fresh.size < games.length; i++) { // up to ~10 min
+    await new Promise((res) => setTimeout(res, 6000));
     const before = fresh.size;
     await load(true);
     for (const g of games) if ((lastData?.pricesByGame?.[g] || "") > clickedAt) fresh.add(g);
     if (fresh.size !== before) status.textContent = `Updated ${[...fresh].join(", ")} ✓${fresh.size < games.length ? ` — still updating ${games.filter((g) => !fresh.has(g)).join(", ")}…` : ""}`;
   }
-  done(fresh.size === games.length ? `Prices re-checked ✓ (${selection.length} flips)` : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
+  done(fresh.size === games.length ? "Every offer re-checked ✓" : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
 });
 </script>
 </body>
