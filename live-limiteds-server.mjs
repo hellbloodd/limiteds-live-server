@@ -8,6 +8,7 @@ import { requestRefresh, requestSelectedRefresh, startAutoUpdates } from "./upda
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
+import { sniperStatus } from "./sniper.mjs";
 
 // ============================================================================
 // ARCHITECTURE
@@ -3662,6 +3663,7 @@ const server = http.createServer(async (req, res) => {
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;
     if (await handleSabRequest(parsedUrl, res, sendJson)) return;
+    if (parsedUrl.pathname === "/api/snipes") return sendJson(res, 200, sniperStatus());
     if (await handleFlipsRequest(parsedUrl, res, sendJson, PORT)) return;
     if (await handleToolsRequest(parsedUrl, req, res, sendJson, PORT)) return;
 

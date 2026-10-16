@@ -12,6 +12,7 @@ import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchA
 import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
 import { checkDeals, checkFlips } from "./deals.mjs";
 import { checkUndercuts } from "./tools.mjs";
+import { startSniper } from "./sniper.mjs";
 
 let serverPort = null; // set when running inside the live server (deal alerts read its pages' data)
 
@@ -318,6 +319,7 @@ export function requestRefresh(game) {
 // page view after waking triggers an update if the values are stale).
 export function startAutoUpdates(port) {
   serverPort = port;
+  startSniper(port, () => Object.values(pricesRunning).some(Boolean) || Boolean(selectedRunning));
   setTimeout(() => runUpdate().catch(() => {}), 20 * 1000).unref();
   setInterval(() => runUpdate().catch(() => {}), UPDATE_EVERY_MS).unref();
 }

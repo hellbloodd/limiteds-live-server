@@ -368,8 +368,22 @@ function eldoradoRelease() {
   if (next) next(); else eldoradoActive--;
 }
 
+// Eldorado's item lists (/api/library/...) barely change, so they're cached for an hour.
+const libraryCache = new Map(); // path -> { at, data }
+
 // Retries "429 Too Many Requests" after a short pause.
 export async function eldoradoJson(path) {
+  if (path.startsWith("/api/library/")) {
+    const hit = libraryCache.get(path);
+    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.data;
+    const data = await eldoradoJsonUncached(path);
+    libraryCache.set(path, { at: Date.now(), data });
+    return data;
+  }
+  return eldoradoJsonUncached(path);
+}
+
+async function eldoradoJsonUncached(path) {
   for (let attempt = 1; ; attempt++) {
     await eldoradoSlot();
     let res;
