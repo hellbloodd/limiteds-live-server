@@ -5,6 +5,7 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, startAutoUpdates } from "./updater.mjs";
+import { sendTestAlert } from "./deals.mjs";
 
 // ============================================================================
 // ARCHITECTURE
@@ -3646,6 +3647,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (parsedUrl.pathname === "/api/refresh-values") return sendJson(res, 200, requestRefresh(parsedUrl.searchParams.get("game")));
+    if (parsedUrl.pathname === "/api/test-deal-alert") return sendJson(res, 200, await sendTestAlert(PORT).catch((e) => ({ ok: false, error: e.message })));
     if (await handleMm2Request(parsedUrl, res, sendJson)) return;
     if (await handleBbRequest(parsedUrl, res, sendJson)) return;
     if (await handleAmRequest(parsedUrl, res, sendJson)) return;
@@ -3670,7 +3672,7 @@ startBbTracker();
 startAmTracker();
 startSabTracker();
 // The server fetches values itself (every 15 min + "Refresh now"); needs Supabase to store them.
-if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) startAutoUpdates();
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) startAutoUpdates(PORT);
 if (snapshotStorageEnabled()) {
   setTimeout(() => runSnapshot().catch(e => console.error(e.message)), 10000);
   setInterval(() => runSnapshot().catch(e => console.error(e.message)), SNAPSHOT_INTERVAL_MS);

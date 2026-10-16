@@ -103,6 +103,12 @@ export async function reloadAllTrackers() {
   await Promise.all(supabaseTicks.map((tick) => tick()));
 }
 
+// One row's data (or null).
+export async function readRow(id) {
+  const rows = await supabaseFetch(`mm2_state?select=data&id=eq.${id}`);
+  return rows[0]?.data ?? null;
+}
+
 export async function writeMm2Row(id, data, prefix = "") {
   await supabaseFetch("mm2_state?on_conflict=id", {
     method: "POST",

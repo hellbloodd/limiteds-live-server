@@ -9,6 +9,9 @@ import {
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
 import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
+import { checkDeals } from "./deals.mjs";
+
+let serverPort = null; // set when running inside the live server (deal alerts read its pages' data)
 
 // The updater is the only writer, so it reads each game's state from Supabase once and keeps it in
 // memory; each run then writes only the rows that changed (plus a tiny "heartbeat" with the time).
@@ -101,7 +104,14 @@ function startWantedPrices() {
   const jobs = wantedPrices.splice(0).sort(([a], [b]) => (b === priorityGame) - (a === priorityGame));
   for (const [game, job] of jobs) {
     pendingPrices.push(eldoradoExclusive(job)
-      .then(async (msg) => { console.log(`[${stamp()}] ${msg}`); await reloadAllTrackers(); }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
+      .then(async (msg) => {
+        console.log(`[${stamp()}] ${msg}`);
+        await reloadAllTrackers();
+        if (serverPort) {
+          const sent = await checkDeals(game, serverPort).catch((e) => { console.error(`[${stamp()}] ${game} deal alerts failed: ${e.message}`); return 0; });
+          if (sent) console.log(`[${stamp()}] ${game}: sent ${sent} deal alert(s) to Discord.`);
+        }
+      }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
       .finally(() => { pricesRunning[game] = false; }));
   }
 }
@@ -253,7 +263,8 @@ export function requestRefresh(game) {
 
 // Update every 15 minutes while the server is up (Render's free plan sleeps when idle; the first
 // page view after waking triggers an update if the values are stale).
-export function startAutoUpdates() {
+export function startAutoUpdates(port) {
+  serverPort = port;
   setTimeout(() => runUpdate().catch(() => {}), 20 * 1000).unref();
   setInterval(() => runUpdate().catch(() => {}), UPDATE_EVERY_MS).unref();
 }
