@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profits · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#34d399; --accent-2:#60a5fa; --accent-soft:#34d39922; --glow:#34d39955; }
+  .tiles { grid-template-columns:repeat(4, minmax(120px, 1fr)); max-width:720px; }
+  @media (max-width:640px) { .tiles { grid-template-columns:repeat(2, 1fr); } }
+  #log { --cols:96px minmax(180px,2fr) 70px 54px repeat(3, minmax(74px,1fr)) 90px; }
+  #stock { --cols:minmax(180px,2fr) 60px repeat(3, minmax(84px,1fr)); }
+  #games { --cols:minmax(140px,1.4fr) repeat(4, minmax(84px,1fr)); }
+  h2 { font:700 16px "Unbounded", sans-serif; margin:22px 0 8px; }
+  .type-buy { color:var(--accent-2); font-weight:800; } .type-sell { color:var(--green); font-weight:800; }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">Tracker</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab active" href="/profits">📒 Profits</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>Profits</h1>
+      <p class="dim">Log every buy and sale. Profit is worked out per item, first-bought-first-sold, after fees — so you see what really makes money.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span>Realised profit</span><b id="t-profit" class="tabular">—</b><small id="t-profit-sub">&nbsp;</small></div>
+      <div class="tile"><span>Sales</span><b id="t-rev" class="tabular">—</b><small id="t-rev-sub">&nbsp;</small></div>
+      <div class="tile"><span>In stock (cost)</span><b id="t-stock" class="tabular">—</b><small id="t-stock-sub">&nbsp;</small></div>
+      <div class="tile"><span>Fees paid</span><b id="t-fees" class="tabular">—</b><small>&nbsp;</small></div>
+    </div>
+  </section>
+
+  <div id="locked" class="panel lock" hidden>
+    <div style="width:100%">
+      <b>Owner key</b>
+      <p class="dim" style="font-size:12px">Your trades are private. Enter the OWNER_KEY you set in Render (remembered in this browser).</p>
+      <input id="key" type="password" placeholder="Owner key" autocomplete="current-password">
+      <button class="btn" id="unlock" type="button">Unlock</button>
+      <div class="msg err" id="lock-msg"></div>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <div class="panel">
+      <div class="field"><label>Type</label><div class="seg" id="type"><button data-t="buy" class="on" type="button">Bought</button><button data-t="sell" type="button">Sold</button></div></div>
+      <div class="field grow picker"><label for="item">Item</label>
+        <input id="item" type="search" placeholder="Type an item name…" autocomplete="off"><div class="suggest" id="suggest" hidden></div>
+        <span class="picked" id="picked"></span></div>
+      <div class="field"><label for="qty">Qty</label><input id="qty" type="number" min="1" step="1" value="1" style="width:70px"></div>
+      <div class="field"><label for="price">Price each $</label><input id="price" type="number" min="0.01" step="0.01"></div>
+      <div class="field" id="fee-field" hidden><label for="fee">Fee paid $</label><input id="fee" type="number" min="0" step="0.01"></div>
+      <div class="field"><label for="date">Date</label><input id="date" type="date"></div>
+      <button class="btn" id="add" type="button">Add</button>
+      <div class="msg" id="msg" style="flex-basis:100%"></div>
+    </div>
+
+    <h2>By game</h2>
+    <div class="tbl" id="games"><div class="head"><span>Game</span><span class="num">Spent</span><span class="num">Sales</span><span class="num">Profit</span><span class="num">In stock</span></div><div id="game-rows"></div></div>
+
+    <h2>Holding now</h2>
+    <div class="tbl" id="stock"><div class="head"><span>Item</span><span class="num">Qty</span><span class="num">Cost</span><span class="num">Cheapest now</span><span class="num">If sold now</span></div><div id="stock-rows"></div></div>
+
+    <h2>History</h2>
+    <div class="tbl" id="log"><div class="head"><span>Date</span><span>Item</span><span>Type</span><span class="num">Qty</span><span class="num">Price</span><span class="num">Fee</span><span class="num">Profit</span><span></span></div><div id="log-rows"></div></div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const money = (n) => n == null ? "—" : (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const signed = (n) => `<b class="${n >= 0 ? "up" : "down"}">${n >= 0 ? "+" : ""}${money(n)}</b>`;
+let key = ""; try { key = localStorage.getItem("ownerKey") || ""; } catch {}
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "Content-Type": "application/json", "x-owner-key": key, ...(opts.headers || {}) } })
+  .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }); return j; });
+$("date").valueAsDate = new Date();
+
+let type = "buy", picked = null, timer;
+$("type").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-t]"); if (!b) return;
+  type = b.dataset.t;
+  $("type").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  $("fee-field").hidden = type !== "sell";
+});
+$("item").addEventListener("input", () => {
+  picked = null; $("picked").textContent = "";
+  clearTimeout(timer);
+  const q = $("item").value.trim();
+  if (q.length < 2) { $("suggest").hidden = true; return; }
+  timer = setTimeout(async () => {
+    const { items } = await fetch(`/api/item-search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+    $("suggest").innerHTML = items.map((i, n) => `<div data-n="${n}"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(i.name)} <span class="dim">· ${esc(i.game)}${i.usd ? ` · ${money(i.usd)}` : ""}</span></span></div>`).join("") || `<div class="dim">No match</div>`;
+    $("suggest").hidden = false;
+    $("suggest").onclick = (e) => {
+      const d = e.target.closest("[data-n]"); if (!d) return;
+      picked = items[d.dataset.n];
+      $("item").value = picked.name; $("suggest").hidden = true;
+      $("picked").textContent = picked.game;
+    };
+  }, 200);
+});
+
+// First-bought-first-sold matching per item: each sale is matched against the oldest unsold buys.
+function analyse(entries) {
+  const sorted = [...entries].sort((a, b) => a.ts - b.ts);
+  const lots = {}, profitById = {}, games = {};
+  let profit = 0, revenue = 0, fees = 0, sold = 0;
+  const g = (name) => (games[name] ||= { spent: 0, revenue: 0, profit: 0, stock: 0 });
+  for (const e of sorted) {
+    const k = `${e.game}|${e.key || e.name}`;
+    const L = (lots[k] ||= { game: e.game, name: e.name, key: e.key, queue: [] });
+    if (e.type === "buy") {
+      L.queue.push({ qty: e.qty, cost: e.price });
+      g(e.game).spent += e.qty * e.price;
+    } else {
+      let left = e.qty, cost = 0;
+      while (left > 0 && L.queue.length) {
+        const lot = L.queue[0], take = Math.min(left, lot.qty);
+        cost += take * lot.cost; lot.qty -= take; left -= take;
+        if (!lot.qty) L.queue.shift();
+      }
+      // sales with no matching buy count as zero-cost (e.g. items you already owned)
+      const p = e.qty * e.price - e.fee - cost;
+      profitById[e.id] = p;
+      profit += p; revenue += e.qty * e.price; fees += e.fee; sold += e.qty;
+      g(e.game).revenue += e.qty * e.price; g(e.game).profit += p;
+    }
+  }
+  const stock = Object.values(lots).map((L) => ({ ...L, qty: L.queue.reduce((n, l) => n + l.qty, 0), cost: L.queue.reduce((n, l) => n + l.qty * l.cost, 0) })).filter((L) => L.qty > 0);
+  for (const s of stock) g(s.game).stock += s.cost;
+  return { profit, revenue, fees, sold, stock, profitById, games };
+}
+
+async function load() {
+  try {
+    const { entries } = await api("/api/ledger");
+    $("locked").hidden = true; $("app").hidden = false;
+    const a = analyse(entries);
+    const live = Object.fromEntries(entries.map((e) => [`${e.game}|${e.key || e.name}`, e.liveUsd]));
+    $("t-profit").innerHTML = `<span class="${a.profit >= 0 ? "up" : "down"}">${a.profit >= 0 ? "+" : ""}${money(a.profit)}</span>`;
+    $("t-profit-sub").textContent = a.revenue ? `${(a.profit / Math.max(1, a.revenue - a.profit) * 100).toFixed(0)}% return on sold items` : "no sales yet";
+    $("t-rev").textContent = money(a.revenue); $("t-rev-sub").textContent = `${a.sold} item${a.sold === 1 ? "" : "s"} sold`;
+    const stockCost = a.stock.reduce((n, s) => n + s.cost, 0);
+    $("t-stock").textContent = money(stockCost); $("t-stock-sub").textContent = `${a.stock.reduce((n, s) => n + s.qty, 0)} items`;
+    $("t-fees").textContent = money(a.fees);
+
+    const games = Object.entries(a.games);
+    $("game-rows").innerHTML = games.length ? games.map(([name, x]) => `<div class="row"><div class="name">${esc(name)}</div>
+      <div class="num tabular" data-label="Spent">${money(x.spent)}</div><div class="num tabular" data-label="Sales">${money(x.revenue)}</div>
+      <div class="num tabular" data-label="Profit">${signed(x.profit)}</div><div class="num tabular dim" data-label="In stock">${money(x.stock)}</div></div>`).join("")
+      : `<div class="empty">Nothing logged yet.</div>`;
+
+    $("stock-rows").innerHTML = a.stock.length ? a.stock.map((s) => {
+      const now = live[`${s.game}|${s.key || s.name}`];
+      return `<div class="row"><div class="item"><div style="min-width:0"><div class="name">${esc(s.name)}</div><span class="chip">${esc(s.game)}</span></div></div>
+        <div class="num tabular" data-label="Qty">${s.qty}</div><div class="num tabular" data-label="Cost">${money(s.cost)}</div>
+        <div class="num tabular" data-label="Cheapest now">${money(now)}</div>
+        <div class="num tabular" data-label="If sold now">${now ? signed(s.qty * (now - 0.01) - s.cost) + `<div class="dim" style="font-size:10px">before fees</div>` : "—"}</div></div>`;
+    }).join("") : `<div class="empty">Not holding anything.</div>`;
+
+    $("log-rows").innerHTML = entries.length ? [...entries].sort((x, y) => y.ts - x.ts).map((e, n) => `<div class="row" style="--d:${Math.min(n, 20) * 20}ms">
+      <div class="tabular dim" data-label="Date">${new Date(e.ts).toLocaleDateString()}</div>
+      <div class="item"><div style="min-width:0"><div class="name">${esc(e.name)}</div><span class="chip">${esc(e.game)}</span></div></div>
+      <div class="type-${e.type}" data-label="Type">${e.type === "buy" ? "Bought" : "Sold"}</div>
+      <div class="num tabular" data-label="Qty">${e.qty}</div>
+      <div class="num tabular" data-label="Price">${money(e.price)}</div>
+      <div class="num tabular dim" data-label="Fee">${e.fee ? money(e.fee) : "—"}</div>
+      <div class="num tabular" data-label="Profit">${e.type === "sell" ? signed(a.profitById[e.id]) : "—"}</div>
+      <button class="btn ghost" data-del="${esc(e.id)}" type="button">Delete</button></div>`).join("") : `<div class="empty">Log your first buy above.</div>`;
+  } catch (e) {
+    if (e.status === 401 || e.status === 503) { $("locked").hidden = false; $("app").hidden = true; $("lock-msg").textContent = key ? e.message : ""; }
+    else $("msg").textContent = e.message;
+  }
+}
+
+$("unlock").addEventListener("click", () => { key = $("key").value.trim(); try { localStorage.setItem("ownerKey", key); } catch {} load(); });
+$("key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("unlock").click(); });
+$("add").addEventListener("click", async () => {
+  if (!picked) { $("msg").textContent = "Pick an item from the list first."; return; }
+  const ts = $("date").valueAsDate ? $("date").valueAsDate.getTime() + 12 * 3600 * 1000 : Date.now();
+  try {
+    await api("/api/ledger", { method: "POST", body: JSON.stringify({ type, game: picked.game, key: picked.key, name: picked.name,
+      qty: Number($("qty").value) || 1, price: Number($("price").value), fee: type === "sell" ? Number($("fee").value) || 0 : 0, ts }) });
+    $("msg").textContent = `${type === "buy" ? "Bought" : "Sold"} ${picked.name} logged ✓`;
+    $("item").value = ""; $("price").value = ""; $("fee").value = ""; $("qty").value = 1; $("picked").textContent = ""; picked = null;
+    load();
+  } catch (e) { $("msg").textContent = e.message; }
+});
+$("log-rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-del]"); if (!b) return;
+  if (!confirm("Delete this entry?")) return;
+  await api(`/api/ledger?id=${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }).catch((err) => { $("msg").textContent = err.message; });
+  load();
+});
+load();
+</script>
+</body>
+</html>

@@ -165,6 +165,7 @@
   @keyframes pulse { 50% { box-shadow:0 4px 22px -2px #ff6a3dcc; transform:scale(1.05); } }
   .val { background:linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
   .val .unit { -webkit-text-fill-color:initial; }
+  .rise { display:inline-block; font-size:12px; animation:pulse 2.4s ease-in-out infinite; }
   svg.spark polyline { stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1s .2s var(--ease) forwards; }
 
   /* skeleton loading */
@@ -218,6 +219,8 @@
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
     <a class="tab" href="/flips">💸 Flip Finder</a>
+    <a class="tab" href="/watch">🏷️ My Listings</a>
+    <a class="tab" href="/profits">📒 Profits</a>
   </nav>
   <section class="hero">
     <div>
@@ -234,7 +237,7 @@
   <div class="panel">
   <div class="controls">
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
-    <select id="cat"><option value="">All categories</option><option value="deals">🔥 Best deals</option></select>
+    <select id="cat"><option value="">All categories</option><option value="deals">🔥 Best deals</option><option value="rising">📈 Rising, price lagging</option></select>
     <select id="sort">
       <option value="value">Highest value</option>
       <option value="valueAsc">Lowest value</option>
@@ -340,6 +343,10 @@ function computeDeals() {
   }
 }
 const isDeal = (i) => (dealX[i.key] || 0) >= 2.5;
+// "Rising, price lagging": the value went up recently (+10% in 24h or +20% in 7 days) but the item
+// is still cheap on Eldorado compared with similar-value items - sellers haven't repriced yet.
+const isRising = (i) => i.usd > 0 && (dealX[i.key] || 0) >= 1.5
+  && ((i.changes?.["24h"]?.pct ?? 0) >= 10 || (i.changes?.["7d"]?.pct ?? 0) >= 20);
 
 function fillHero(data) {
   countUp($("t-items"), items.length);
@@ -366,7 +373,7 @@ async function load() {
     const vpds = items.map((i) => i.valuePerUsd).filter(Boolean).sort((a, b) => a - b);
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
-    if (cat.options.length === 2) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
+    if (cat.options.length === 3) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
     computeDeals();
     fillHero(data);
@@ -381,7 +388,7 @@ function render() {
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
   const deals = c === "deals";
   const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q))
-    && (deals ? isDeal(i) : !c || i.category === c));
+    && (deals ? isDeal(i) : c === "rising" ? isRising(i) : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
@@ -389,13 +396,14 @@ function render() {
     demand: (a, b) => v(b.demand) - v(a.demand),
     vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
-  list.sort(deals && s === "value" ? (a, b) => dealX[b.key] - dealX[a.key] : sorters[s]);
+  const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
+  list.sort((deals || c === "rising") && s === "value" ? byDeal : sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i, n) => `
     <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
 
       <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
       <div>
-        <div class="name">${esc(i.name)}</div>
+        <div class="name">${esc(i.name)}${isRising(i) ? ` <span class="rise" title="Value up recently, still cheap on Eldorado">📈</span>` : ""}</div>
         <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Listings · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>:root { --accent:#f472b6; --accent-2:#fb923c; --accent-soft:#f472b622; --glow:#f472b655; } .tbl { --cols:minmax(200px,2fr) repeat(4, minmax(80px,1fr)) minmax(140px,1.4fr) 90px; }</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">Tracker</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab active" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>My Listings</h1>
+      <p class="dim">Add what you're selling on Eldorado and your price. After every price check (every 15 min) you get a Discord ping if someone lists cheaper, with the price to relist at.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span>Watching</span><b id="t-count" class="tabular">—</b><small>&nbsp;</small></div>
+      <div class="tile"><span>Undercut now</span><b id="t-under" class="tabular">—</b><small>someone is cheaper</small></div>
+      <div class="tile"><span>Cheapest now</span><b id="t-top" class="tabular">—</b><small>yours is the lowest</small></div>
+    </div>
+  </section>
+
+  <div id="locked" class="panel lock" hidden>
+    <div style="width:100%">
+      <b>Owner key</b>
+      <p class="dim" style="font-size:12px">This page holds your private listings. Enter the OWNER_KEY you set in Render (it's remembered in this browser).</p>
+      <input id="key" type="password" placeholder="Owner key" autocomplete="current-password">
+      <button class="btn" id="unlock" type="button">Unlock</button>
+      <div class="msg err" id="lock-msg"></div>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <div class="panel">
+      <div class="field grow picker"><label for="item">Item you're selling</label>
+        <input id="item" type="search" placeholder="Type an item name…" autocomplete="off"><div class="suggest" id="suggest" hidden></div>
+        <span class="picked" id="picked"></span></div>
+      <div class="field"><label for="price">Your price $</label><input id="price" type="number" min="0.01" step="0.01"></div>
+      <button class="btn" id="add" type="button">Add listing</button>
+      <div class="msg" id="msg" style="flex-basis:100%"></div>
+    </div>
+    <div class="tbl">
+      <div class="head"><span>Item</span><span class="num">Your price</span><span class="num">Cheapest now</span><span class="num">Next</span><span class="num">Status</span><span>Advice</span><span></span></div>
+      <div id="rows"></div>
+    </div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const money = (n) => n == null ? "—" : "$" + Number(n).toFixed(2);
+let key = ""; try { key = localStorage.getItem("ownerKey") || ""; } catch {}
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "Content-Type": "application/json", "x-owner-key": key, ...(opts.headers || {}) } })
+  .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }); return j; });
+
+let picked = null;
+let timer;
+$("item").addEventListener("input", () => {
+  picked = null; $("picked").textContent = "";
+  clearTimeout(timer);
+  const q = $("item").value.trim();
+  if (q.length < 2) { $("suggest").hidden = true; return; }
+  timer = setTimeout(async () => {
+    const { items } = await fetch(`/api/item-search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+    $("suggest").innerHTML = items.map((i, n) => `<div data-n="${n}"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(i.name)} <span class="dim">· ${esc(i.game)}${i.usd ? ` · ${money(i.usd)}` : ""}</span></span></div>`).join("") || `<div class="dim">No match</div>`;
+    $("suggest").hidden = false;
+    $("suggest").onclick = (e) => {
+      const d = e.target.closest("[data-n]"); if (!d) return;
+      picked = items[d.dataset.n];
+      $("item").value = picked.name; $("suggest").hidden = true;
+      $("picked").textContent = `${picked.game}${picked.usd ? ` · cheapest now ${money(picked.usd)}` : ""}`;
+      if (!$("price").value && picked.usd) $("price").value = picked.usd.toFixed(2);
+    };
+  }, 200);
+});
+
+async function load() {
+  try {
+    const { entries } = await api("/api/watchlist");
+    $("locked").hidden = true; $("app").hidden = false;
+    let under = 0, top = 0;
+    $("rows").innerHTML = entries.length ? entries.map((w, n) => {
+      const cheapest = w.live?.usd, next = w.live?.second;
+      const undercut = cheapest != null && cheapest < w.myPrice - 0.004;
+      if (undercut) under++; else if (cheapest != null) top++;
+      const advice = cheapest == null ? `<span class="dim">no price data yet</span>`
+        : undercut ? `Relist at <b>${money(Math.max(0.01, cheapest - 0.01))}</b>`
+        : next ? `You're cheapest — room up to <b>${money(next - 0.01)}</b>` : `You're the only/cheapest listing`;
+      return `<div class="row" style="--d:${Math.min(n, 20) * 25}ms">
+        <div class="item"><div style="min-width:0"><div class="name">${esc(w.name)}</div><span class="chip">${esc(w.game)}</span></div></div>
+        <div class="num tabular" data-label="Your price">${money(w.myPrice)}</div>
+        <div class="num tabular" data-label="Cheapest now">${money(cheapest)}</div>
+        <div class="num tabular dim" data-label="Next">${money(next)}</div>
+        <div class="num" data-label="Status">${cheapest == null ? `<span class="dim">—</span>` : undercut ? `<b class="down">Undercut</b>` : `<b class="up">Cheapest</b>`}</div>
+        <div data-label="Advice">${advice}</div>
+        <button class="btn ghost" data-del="${esc(w.id)}" type="button">Remove</button>
+      </div>`;
+    }).join("") : `<div class="empty">No listings yet — add the items you're selling above.</div>`;
+    $("t-count").textContent = entries.length; $("t-under").textContent = under; $("t-top").textContent = top;
+  } catch (e) {
+    if (e.status === 401 || e.status === 503) { $("locked").hidden = false; $("app").hidden = true; $("lock-msg").textContent = key ? e.message : ""; }
+    else $("msg").textContent = e.message;
+  }
+}
+
+$("unlock").addEventListener("click", () => { key = $("key").value.trim(); try { localStorage.setItem("ownerKey", key); } catch {} load(); });
+$("key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("unlock").click(); });
+$("add").addEventListener("click", async () => {
+  if (!picked) { $("msg").textContent = "Pick an item from the list first."; return; }
+  try {
+    await api("/api/watchlist", { method: "POST", body: JSON.stringify({ game: picked.game, key: picked.key, name: picked.name, myPrice: Number($("price").value) }) });
+    $("msg").textContent = `Watching ${picked.name} ✓`; $("item").value = ""; $("price").value = ""; $("picked").textContent = ""; picked = null;
+    load();
+  } catch (e) { $("msg").textContent = e.message; }
+});
+$("rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-del]"); if (!b) return;
+  await api(`/api/watchlist?id=${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }).catch((err) => { $("msg").textContent = err.message; });
+  load();
+});
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

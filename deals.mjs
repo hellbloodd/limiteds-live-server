@@ -17,10 +17,10 @@ const MIN_PEERS = 6;
 const MAX_ALERTS_PER_CHECK = 10;
 const REALERT_DROP = 0.9;                                    // re-alert if 10% cheaper than last alert
 const REALERT_AFTER_MS = 24 * 60 * 60 * 1000;
-const SITE = process.env.PUBLIC_SITE_URL || "https://agony-values.onrender.com";
+export const SITE = process.env.PUBLIC_SITE_URL || "https://agony-values.onrender.com";
 
 // Our own pages' data, so alerts use exactly the numbers the site shows.
-const GAMES = {
+export const GAMES = {
   "MM2": { api: "/api/mm2", page: "/mm2", color: 0xd9a441 },
   "Blade Ball": { api: "/api/bladeball", page: "/bladeball", color: 0x4f8cff },
   "Adopt Me": { api: "/api/adoptme", page: "/adoptme", color: 0xff7eb6 },
@@ -29,9 +29,9 @@ const GAMES = {
 
 let alerted = null; // { "Game|itemKey": { usd, at } }
 
-const fmt = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? Number(n.toFixed(2)).toString() : Number(n.toPrecision(2)).toString());
+export const fmt = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? Number(n.toFixed(2)).toString() : Number(n.toPrecision(2)).toString());
 
-async function post(body) {
+export async function post(body) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const res = await fetch(WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (res.ok) return;
@@ -56,7 +56,7 @@ export function findDeals(items) {
   return out.sort((a, b) => b.times - a.times);
 }
 
-const gameItems = async (g, port) => (await (await fetch(`http://127.0.0.1:${port}${g.api}`)).json()).items || [];
+export const gameItems = async (g, port) => (await (await fetch(`http://127.0.0.1:${port}${g.api}`)).json()).items || [];
 
 function embed(game, g, { item: i, times, typical }, test = false) {
   return {
@@ -127,3 +127,59 @@ export async function checkDeals(game, port) {
 }
 
 export const dealAlertsEnabled = () => Boolean(WEBHOOK);
+
+// ---------- Flip alerts ----------
+// After each price refresh: items you could buy at the cheapest listing and relist 1c under the next
+// one for a real profit after the seller fee - and that actually sell (sales seen in the last 7 days).
+const FLIP_FEE = Number(process.env.FLIP_FEE_PCT || 10) / 100;
+const FLIP_MIN_PROFIT = Number(process.env.FLIP_MIN_PROFIT || 5);
+const FLIP_MIN_ROI = Number(process.env.FLIP_MIN_ROI || 20);
+const FLIP_MIN_SOLD7D = Number(process.env.FLIP_MIN_SOLD7D || 2);
+let flipAlerted = null; // { "Game|key": { profit, at } }
+
+export function findFlips(items) {
+  return items.filter((i) => i.usd > 0 && i.second > 0 && (i.listings ?? 0) >= 3 && (i.sold7d || 0) >= FLIP_MIN_SOLD7D)
+    .map((i) => {
+      const relist = i.second - 0.01;
+      const profit = relist * (1 - FLIP_FEE) - i.usd;
+      return { item: i, relist, profit, roi: profit / i.usd * 100, perDay: profit * (i.sold7d / 7) };
+    })
+    .filter((f) => f.profit >= FLIP_MIN_PROFIT && f.roi >= FLIP_MIN_ROI)
+    .sort((a, b) => b.perDay - a.perDay);
+}
+
+export async function checkFlips(game, port) {
+  if (!WEBHOOK || !GAMES[game]) return 0;
+  const g = GAMES[game];
+  flipAlerted ||= (await readRow("flip_alerts").catch(() => null)) || {};
+  const now = Date.now();
+  const flips = findFlips(await gameItems(g, port)).filter(({ item: i, profit }) => {
+    const prev = flipAlerted[`${game}|${i.key}`];
+    return !prev || profit >= prev.profit * 1.25 || now - prev.at > REALERT_AFTER_MS;
+  }).slice(0, 5);
+  for (const f of flips) {
+    const i = f.item;
+    await post({
+      username: "Agony Values flips",
+      embeds: [{
+        title: `💸 Flip: ${i.name} — +$${fmt(f.profit)} (${f.roi.toFixed(0)}% ROI)`,
+        url: i.eldoradoUrl, color: 0xa78bfa, thumbnail: i.image ? { url: i.image } : undefined,
+        fields: [
+          { name: "Game", value: game, inline: true },
+          { name: "Buy at", value: `$${fmt(i.usd)}${i.priceVariant ? ` (${i.priceVariant})` : ""}`, inline: true },
+          { name: "Relist at", value: `$${fmt(f.relist)}`, inline: true },
+          { name: `Profit after ${Math.round(FLIP_FEE * 100)}% fee`, value: `+$${fmt(f.profit)}`, inline: true },
+          { name: "Sells", value: `${i.sold7d} in 7d (${i.sold24h} in 24h)${i.soldPrice ? ` · typical $${fmt(i.soldPrice)}` : ""}`, inline: true },
+          { name: "Listings", value: String(i.listings), inline: true },
+          { name: "Links", value: `[Buy on Eldorado](${i.eldoradoUrl}) · [Flip Finder](${SITE}/flips)`, inline: false },
+        ],
+        footer: { text: "Check both listings before buying — the next one may not sell at that price." },
+        timestamp: new Date().toISOString(),
+      }],
+    });
+    flipAlerted[`${game}|${i.key}`] = { profit: f.profit, at: now };
+  }
+  for (const [k, v] of Object.entries(flipAlerted)) if (now - v.at > 7 * REALERT_AFTER_MS) delete flipAlerted[k];
+  if (flips.length) await writeMm2Row("flip_alerts", flipAlerted);
+  return flips.length;
+}

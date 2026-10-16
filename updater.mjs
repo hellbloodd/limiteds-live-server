@@ -10,7 +10,8 @@ import {
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
 import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
-import { checkDeals } from "./deals.mjs";
+import { checkDeals, checkFlips } from "./deals.mjs";
+import { checkUndercuts } from "./tools.mjs";
 
 let serverPort = null; // set when running inside the live server (deal alerts read its pages' data)
 
@@ -142,6 +143,10 @@ function startWantedPrices() {
         if (serverPort) {
           const sent = await checkDeals(game, serverPort).catch((e) => { console.error(`[${stamp()}] ${game} deal alerts failed: ${e.message}`); return 0; });
           if (sent) console.log(`[${stamp()}] ${game}: sent ${sent} deal alert(s) to Discord.`);
+          for (const [label, check] of [["flip", checkFlips], ["undercut", checkUndercuts]]) {
+            const n = await check(game, serverPort).catch((e) => { console.error(`[${stamp()}] ${game} ${label} alerts failed: ${e.message}`); return 0; });
+            if (n) console.log(`[${stamp()}] ${game}: sent ${n} ${label} alert(s) to Discord.`);
+          }
         }
       }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
       .finally(() => { pricesRunning[game] = false; }));
