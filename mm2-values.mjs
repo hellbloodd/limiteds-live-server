@@ -244,6 +244,8 @@ export function listingWindow(offers, full) {
   return { offers, windowMax: full && offers.length ? Math.max(...offers.map((o) => o[1])) : Infinity };
 }
 
+// Listings auto-unlist 21 days after posting (expires). One that vanishes within a day of that date
+// is treated as expired, not sold.
 export function detectSales(prevByKey, prices, now = Date.now()) {
   const events = {};
   for (const [key, prev] of Object.entries(prevByKey)) {
@@ -255,7 +257,7 @@ export function detectSales(prevByKey, prices, now = Date.now()) {
       const c = cur.get(id);
       let sold = 0, price = usd;
       if (c) { if (c[2] < qty) { sold = qty - c[2]; price = c[1]; } }
-      else if (!(expires && expires <= now) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) sold = 1;
+      else if (!(expires && expires <= now + 24 * 3600 * 1000) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) sold = 1;
       if (sold > 0 && usd > 0) (events[key] ||= []).push([Math.round(now / 1000), Math.round(price * 100) / 100, sold]);
     }
   }
