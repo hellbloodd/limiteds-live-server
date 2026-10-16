@@ -80,6 +80,9 @@
   .ptable { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:0 0 14px; }
   .ptable div { background:var(--surface-2); border-radius:10px; padding:8px; text-align:center; display:flex; flex-direction:column; gap:2px; font-size:12px; }
   .ptable b { font-size:14px; }
+  .tags { position:absolute; top:12px; right:12px; display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+  .tags .badge { margin-left:0; }
+  .card.has-tags .name, .card.has-tags .cat { padding-right:78px; }
   svg.spark { position:absolute; right:12px; bottom:12px; width:70px; height:30px; }
   .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
   a { color:var(--accent); }
@@ -162,6 +165,7 @@
   .card:active { transform:translateY(-1px) scale(.99); }
   .badge { display:inline-block; vertical-align:1px; margin-left:4px; font:800 10px "Manrope", sans-serif; letter-spacing:.04em; padding:3px 8px; border-radius:999px;
     color:#1b1305; background:linear-gradient(135deg, #ffb347, #ff6a3d); box-shadow:0 4px 14px -4px #ff6a3d99; animation:pulse 2.4s ease-in-out infinite; }
+  .badge.token { color:#191300; background:linear-gradient(135deg, #ffe27a, #f5b400); box-shadow:0 4px 14px -4px #f5b40099; animation:none; }
   @keyframes pulse { 50% { box-shadow:0 4px 22px -2px #ff6a3dcc; transform:scale(1.05); } }
   .val { background:linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
   .val .unit { -webkit-text-fill-color:initial; }
@@ -404,7 +408,7 @@ function render() {
   const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
   list.sort((deals || c === "rising") && s === "value" ? byDeal : sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i, n) => `
-    <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
+    <div class="card${isDeal(i) || beatsTokens(i) ? " has-tags" : ""}" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
 
       <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
       <div>
@@ -412,13 +416,26 @@ function render() {
         <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
-        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${isDeal(i) ? ` <span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>` : ""}${beatsTokens(i) ? ` <span class="badge" title="${(i.valuePerUsd / tokenPerUsd).toFixed(1)}× more value per $ than buying tokens">🪙 ${(i.valuePerUsd / tokenPerUsd).toFixed(1)}× tokens</span>` : ""}</div>` : ""}
+        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
       </div>
+      ${tags(i)}
       ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
 }
 
 // Mini 90-day trend line on each card, coloured by direction.
+// Badges in the card's top-right corner (the sparkline sits bottom-right).
+// Blade Ball: the item's price per 1k tokens of value, next to what 1k tokens cost on Eldorado.
+function tags(i) {
+  const out = [];
+  if (isDeal(i)) out.push(`<span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>`);
+  if (beatsTokens(i)) {
+    const per1k = i.usd / i.value * 1000, market = 1000 / tokenPerUsd;
+    out.push(`<span class="badge token" title="This item costs $${per1k.toFixed(2)} per 1k tokens of value — buying 1k tokens costs $${market.toFixed(2)} (${(market / per1k).toFixed(1)}× more)">🪙 $${per1k < 1 ? per1k.toFixed(2) : per1k.toFixed(per1k < 10 ? 2 : 1)}/1k</span>`);
+  }
+  return out.length ? `<div class="tags">${out.join("")}</div>` : "";
+}
+
 function spark(vals) {
   if (!vals || vals.length < 2) return "";
   const W = 70, H = 30, lo = Math.min(...vals), hi = Math.max(...vals);
