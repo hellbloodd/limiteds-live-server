@@ -8,8 +8,10 @@ import { fetchAmEldoradoPrices } from "./am-values.mjs";
 import { fetchSabEldoradoPrices } from "./sab-values.mjs";
 import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
 
-const EVERY_MS = Number(process.env.SNIPE_EVERY_S || 90) * 1000;
-const HOT_LIST_SIZE = Number(process.env.SNIPE_HOT_LIST || 80);
+// Runs continuously: SNIPE_PARALLEL items at a time, and the next pass starts as soon as one ends.
+const PARALLEL = Number(process.env.SNIPE_PARALLEL || 5);
+const HOT_LIST_SIZE = Number(process.env.SNIPE_HOT_LIST || 500);
+let lastPassMs = 0;
 const DISCOUNT = Number(process.env.SNIPE_DISCOUNT_PCT || 25) / 100; // at least 25% under the usual price
 const MIN_PROFIT = Number(process.env.SNIPE_MIN_PROFIT || 3);          // after the fee, relisting under the next one
 const FEE = Number(process.env.FLIP_FEE_PCT || 10) / 100;
@@ -42,7 +44,7 @@ async function listingsFor(game, item) {
     const m = matchEldorado(item, mm2Leaves);
     return m ? fetchEldoradoPrice(m) : null;
   }
-  const prices = game === "Adopt Me" ? await fetchAmEldoradoPrices([item]) : await fetchSabEldoradoPrices([item]);
+  const prices = game === "Adopt Me" ? await fetchAmEldoradoPrices([item], { frOnly: true }) : await fetchSabEldoradoPrices([item]);
   return prices[item.key] || null;
 }
 
@@ -98,25 +100,34 @@ async function checkOne(game, item) {
   }
 }
 
-let running = false;
-async function cycle(port, busy) {
-  if (running || busy()) return; // skip while a full price refresh is using Eldorado's request budget
-  running = true;
-  try {
-    if (!hot.length || Date.now() - hotBuiltAt > 15 * 60 * 1000) await buildHotList(port);
-    if (Date.now() % (60 * 60 * 1000) < EVERY_MS) mm2Leaves = null; // refresh MM2's item list hourly
-    for (const { game, item } of hot) await checkOne(game, item);
-  } catch (e) {
-    console.error(`Sniper cycle failed: ${e.message}`);
-  } finally { running = false; }
+// busy(): true while a full Eldorado price refresh runs - the sniper then drops to 2 at a time so
+// the refresh still gets most of Eldorado's request budget.
+async function loop(port, busy) {
+  for (;;) {
+    const t0 = Date.now();
+    try {
+      if (!hot.length || Date.now() - hotBuiltAt > 15 * 60 * 1000) await buildHotList(port);
+      if (Date.now() - mm2LeavesAt > 60 * 60 * 1000) { mm2Leaves = null; mm2LeavesAt = Date.now(); } // refresh MM2's item list hourly
+      const queue = [...hot];
+      await Promise.all(Array.from({ length: PARALLEL }, async (_, w) => {
+        for (let job; (job = queue.shift());) {
+          while (w >= 2 && busy()) await new Promise((r) => setTimeout(r, 5000));
+          await checkOne(job.game, job.item).catch(() => {});
+        }
+      }));
+    } catch (e) {
+      console.error(`Sniper pass failed: ${e.message}`);
+    }
+    lastPassMs = Date.now() - t0;
+    await new Promise((r) => setTimeout(r, Math.max(2000, 10000 - lastPassMs))); // tiny gap between passes
+  }
 }
+let mm2LeavesAt = Date.now();
 
-// busy(): true while a full Eldorado price refresh runs.
 export function startSniper(port, busy) {
-  setTimeout(() => cycle(port, busy), 60 * 1000).unref();
-  setInterval(() => cycle(port, busy), EVERY_MS).unref();
+  setTimeout(() => loop(port, busy), 60 * 1000).unref();
 }
 
 export function sniperStatus() {
-  return { hotItems: hot.length, everySeconds: EVERY_MS / 1000, recent: recentSnipes };
+  return { hotItems: hot.length, parallel: PARALLEL, lastPassSeconds: Math.round(lastPassMs / 1000), recent: recentSnipes };
 }

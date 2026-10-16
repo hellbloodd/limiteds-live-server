@@ -167,7 +167,8 @@ function priceOf(offers, listings, url) {
   return { ...pickPrices(list), listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100) };
 }
 
-export async function fetchAmEldoradoPrices(items) {
+// frOnly: just the Fly Ride listings, one request per pet (the sniper's fast path).
+export async function fetchAmEldoradoPrices(items, { frOnly = false } = {}) {
   const leaves = await fetchEldoradoLeaves();
   const queue = items.map((it) => [it, matchLeaf(it, leaves)]).filter(([, l]) => l);
   const prices = {};
@@ -183,6 +184,12 @@ export async function fetchAmEldoradoPrices(items) {
           const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
           if (!offers.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; }
           prices[it.key] = { ...priceOf(offers, j.recordCount || offers.length, shopUrl("")), ...listingWindow(offers, (j.recordCount || 0) > offers.length), variant: "" };
+          continue;
+        }
+        if (frOnly) {
+          const j = await eldoradoJson(OFFERS + "pageSize=5&" + filter + "&adopt-me-traits=fr");
+          const offers = (j.results || []).filter((r) => traitOf(r) === "fr").map(offerTuple).filter((o) => o[1] > 0);
+          if (offers.length) prices[it.key] = { ...priceOf(offers, j.recordCount || offers.length, shopUrl("fr")), ...listingWindow(offers, (j.recordCount || 0) > offers.length), variant: "Fly Ride" };
           continue;
         }
         const j = await eldoradoJson(OFFERS + "pageSize=50&" + filter);
