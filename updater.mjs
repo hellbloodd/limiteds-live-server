@@ -108,9 +108,9 @@ async function savePrices(prefix, state, allPrices, { partial = false } = {}) {
   const snap = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
   lastListings[prefix] = partial ? { ...(prev || {}), ...snap } : snap;
   const prices = partial ? { ...(state.eldorado?.prices || {}) } : {};
-  if (partial) for (const [k, p] of Object.entries(allPrices)) if (!(p.usd > 0)) delete prices[k]; // nothing listed any more
+  if (partial) for (const [k, p] of Object.entries(allPrices)) if (!(p.usd > 0) && !p.variants) delete prices[k]; // nothing listed any more
   for (const [k, p] of Object.entries(allPrices)) {
-    if (!(p.usd > 0)) continue;
+    if (!(p.usd > 0) && !p.variants) continue; // (Adopt Me pets can have other versions listed but no Fly Ride)
     const { offers, windowMax, ...keep } = p;
     // the 5 cheapest listing prices, for the Flip Finder's price ladder
     if (offers?.length) keep.ladder = offers.map((o) => Math.round(o[1] * 100) / 100).filter((v) => v > 0).sort((a, b) => a - b).slice(0, 5);

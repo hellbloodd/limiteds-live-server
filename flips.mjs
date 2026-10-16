@@ -24,6 +24,20 @@ async function collect(port) {
     pricesByGame[game] = data.pricesUpdatedAt || null;
     if (data.pricesUpdatedAt && (!pricesUpdatedAt || data.pricesUpdatedAt > pricesUpdatedAt)) pricesUpdatedAt = data.pricesUpdatedAt;
     for (const i of data.items || []) {
+      // Adopt Me pets: one flip row per version (No Potion, Fly Ride, Neon, Mega Neon...).
+      if (i.variants?.length) {
+        for (const v of i.variants) {
+          if (!(v.usd > 0) || !(v.second > 0)) continue;
+          const fr = v.code === "fr"; // sales are tracked for the Fly Ride listings
+          rows.push({
+            game, page, key: `${i.key}:${v.code}`, name: i.name, image: i.image, value: v.value, usd: v.usd, second: v.second,
+            listings: v.listings, url: v.url, variant: v.label,
+            sold24h: fr ? i.sold24h || 0 : 0, sold7d: fr ? i.sold7d || 0 : 0, soldPrice: fr ? i.soldPrice ?? null : null,
+            ladder: v.ladder || null, valuePerUsd: v.value ? Math.round(v.value / v.usd * 10) / 10 : null, unit: "",
+          });
+        }
+        continue;
+      }
       if (!(i.usd > 0) || !(i.second > 0)) continue;
       rows.push({
         game, page, key: i.key, name: i.name, image: i.image, value: i.value, usd: i.usd, second: i.second,

@@ -102,6 +102,10 @@ export async function scrapeAmValues() {
         ["Mega Neon", fmtV(m)], ["Mega Fly Ride", fmtV(mFR)],
       ] : [],
       flyRide: round(rFR) || null,
+      // value of each potion/neon version, keyed by Eldorado's trait code (for per-variant flips)
+      vals: type === "pets" ? Object.fromEntries(Object.entries({
+        none: rNP || r, f: rF, r: rR, fr: rFR, n: nNP || n, nf: nF, nr: nR, nfr: nFR, m: mNP || m, mf: mF, mr: mR, mfr: mFR,
+      }).filter(([, v]) => v > 0).map(([k, v]) => [k, round(v)])) : null,
     };
     // A few non-pet items appear twice under the same name: keep the higher value.
     const dupe = `${type}:${name.toLowerCase()}`;
@@ -149,6 +153,20 @@ function matchLeaf(item, leaves) {
   return cands.length === 1 ? cands[0] : null;
 }
 
+// Eldorado's trait codes for pets, with readable labels. One unfiltered request returns the 50
+// cheapest listings of every version; versions missing from it (popular pets have hundreds of
+// listings) get their own filtered request.
+export const AM_TRAITS = { none: "No Potion", f: "Fly", r: "Ride", fr: "Fly Ride", n: "Neon", nf: "Neon Fly", nr: "Neon Ride", nfr: "Neon Fly Ride", m: "Mega Neon", mf: "Mega Fly", mr: "Mega Ride", mfr: "Mega Fly Ride" };
+const FILTERABLE = ["none", "f", "r", "fr", "n", "nfr", "m", "mfr"]; // the others only show up in the unfiltered list
+const traitOf = (r) => (r.offer?.attributes || []).find((a) => a.id === "adopt-me-traits")?.value?.id || "";
+const OFFERS = "/api/v1/item-management/offers?gameId=201&category=CustomItem&pageIndex=1"
+  + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&";
+
+function priceOf(offers, listings, url) {
+  const list = offers.map((o) => o[1]).sort((a, b) => a - b);
+  return { ...pickPrices(list), listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100) };
+}
+
 export async function fetchAmEldoradoPrices(items) {
   const leaves = await fetchEldoradoLeaves();
   const queue = items.map((it) => [it, matchLeaf(it, leaves)]).filter(([, l]) => l);
@@ -157,21 +175,41 @@ export async function fetchAmEldoradoPrices(items) {
     for (let job; (job = queue.shift());) {
       const [it, [type, rarity, name]] = job;
       const pet = type === "Pets";
-      const filter = `tradeEnvironmentValue0=${encodeURIComponent(type)}&tradeEnvironmentValue1=${encodeURIComponent(rarity)}`
-        + `&tradeEnvironmentValue2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`;
+      const filter = `tradeEnvironmentValue0=${encodeURIComponent(type)}&tradeEnvironmentValue1=${encodeURIComponent(rarity)}&tradeEnvironmentValue2=${encodeURIComponent(name)}`;
+      const shopUrl = (code) => `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${code ? `&adopt-me-traits=${code}` : ""}`;
       try {
-        const j = await eldoradoJson("/api/v1/item-management/offers?gameId=201&category=CustomItem&pageIndex=1&pageSize=5"
-          + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
-        const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
-        const list = offers.map((o) => o[1]).sort((a, b) => a - b);
-        if (!list.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; } // nothing listed now
-                prices[it.key] = {
-          ...pickPrices(list), // cheapest real listing + the next one up
-          ...listingWindow(offers, (j.recordCount || 0) > offers.length),
-          listings: j.recordCount || list.length,
-          variant: pet ? "Fly Ride" : "",
-          url: `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`,
-        };
+        if (!pet) { // eggs: no traits
+          const j = await eldoradoJson(OFFERS + "pageSize=5&" + filter);
+          const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
+          if (!offers.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; }
+          prices[it.key] = { ...priceOf(offers, j.recordCount || offers.length, shopUrl("")), ...listingWindow(offers, (j.recordCount || 0) > offers.length), variant: "" };
+          continue;
+        }
+        const j = await eldoradoJson(OFFERS + "pageSize=50&" + filter);
+        const results = j.results || [];
+        const full = (j.recordCount || 0) <= results.length;
+        const groups = {}; // trait -> { offers, count }
+        for (const r of results) {
+          const o = offerTuple(r), t = traitOf(r);
+          if (!(o[1] > 0) || !AM_TRAITS[t]) continue;
+          (groups[t] ||= { offers: [], count: 0, full }).offers.push(o);
+          groups[t].count++;
+        }
+        // versions that have a value but fewer than 2 listings in the window: ask for them directly
+        if (!full) for (const t of FILTERABLE) {
+          if (!(it.vals?.[t] > 0) || (groups[t]?.offers.length || 0) >= 2) continue;
+          try {
+            const f = await eldoradoJson(OFFERS + "pageSize=10&" + filter + `&adopt-me-traits=${t}`);
+            const offers = (f.results || []).filter((r) => traitOf(r) === t).map(offerTuple).filter((o) => o[1] > 0);
+            if (offers.length) groups[t] = { offers, count: f.results.length < 10 ? offers.length : f.recordCount || offers.length, full: f.results.length < 10 };
+          } catch { /* skip this version */ }
+        }
+        const variants = {};
+        for (const [t, g] of Object.entries(groups)) { const { url, ...v } = priceOf(g.offers, g.count, ""); variants[t] = v; } // url rebuilt from baseUrl
+        const fr = groups.fr;
+        prices[it.key] = fr
+          ? { ...priceOf(fr.offers, fr.count, shopUrl("fr")), ...listingWindow(fr.offers, !fr.full), variant: "Fly Ride", variants, baseUrl: shopUrl("") }
+          : Object.keys(variants).length ? { offers: [], windowMax: Infinity, variants, baseUrl: shopUrl(""), usd: 0 } : { offers: [], windowMax: Infinity };
       } catch { /* no price this time */ }
     }
   }));
@@ -182,11 +220,11 @@ export async function fetchAmEldoradoPrices(items) {
 
 // Stored compactly; the picture URL and detail rows are kept because they can't be rebuilt.
 export function compactAmItem(it) {
-  return [it.key, it.name, it.category, it.value, it.rarity, it.image, it.extra, it.flyRide];
+  return [it.key, it.name, it.category, it.value, it.rarity, it.image, it.extra, it.flyRide, it.vals || null];
 }
 const expandAmItem = (a) => {
-  const [key, name, category, value, rarity, image, extra, flyRide] = a;
-  return { key, name, category, value, rarity, image, extra, flyRide, stability: "", origin: "", demand: null, sourceUrl: AM_VALUES_PAGE };
+  const [key, name, category, value, rarity, image, extra, flyRide, vals] = a;
+  return { key, name, category, value, rarity, image, extra, flyRide, vals: vals || null, stability: "", origin: "", demand: null, sourceUrl: AM_VALUES_PAGE };
 };
 
 let readAmRows;
@@ -233,10 +271,12 @@ export function startAmTracker() {
 
 function eldoradoFields(it) {
   const p = amEldorado.prices[it.key];
-  if (!p?.usd) return {};
+  const variantRows = () => Object.entries(p.variants || {}).map(([code, v]) => ({ code, label: AM_TRAITS[code], value: it.vals?.[code] ?? null, ...v, url: `${p.baseUrl}&adopt-me-traits=${code}` }));
+  if (!p?.usd) return p?.variants ? { variants: variantRows() } : {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
+  const variants = p.variants ? variantRows() : null;
+  return { variants, usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
 }
 
 // Returns true if the request was handled.
