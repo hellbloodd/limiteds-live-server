@@ -513,7 +513,7 @@ export function startMm2Tracker() {
 function eldoradoFields(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
     priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key]) };
 }
 

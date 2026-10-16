@@ -89,6 +89,9 @@
   .item img { width:42px; height:42px; object-fit:contain; border-radius:10px; flex:none; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); transition:transform .3s var(--ease); }
   .row:hover .item img { transform:scale(1.08) rotate(-2deg); }
   .item .name { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trust { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; }
+  .trust.trusted { color:#22c55e; background:#22c55e1a; } .trust.ok { color:var(--muted); background:var(--surface-2, #ffffff10); }
+  .trust.new { color:#f5b400; background:#f5b4001f; } .trust.risky { color:#ef4444; background:#ef44441f; }
   .chip { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); margin-right:4px; }
   .num { text-align:right; }
   .profit { font-weight:800; }
@@ -238,6 +241,7 @@ for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
+let refetchTimer = null;
 let shown = [];
 let lastData = null;
 let sortKey = "profit", sortDir = -1;
@@ -247,7 +251,10 @@ function compute(r) {
   const relist = Math.max(0, r.second - 0.01);
   const feeAmt = relist * fee;
   const profit = relist - feeAmt - r.usd;
-  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7) };
+  // sellsEveryH: how long one sale takes on average (from 7-day sales); profit/day assumes you can
+  // keep one relisted at the front, so it's capped at one flip per sale.
+  const sellsEveryH = r.sold7d ? 168 / r.sold7d : null;
+  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH };
 }
 
 function render() {
@@ -266,7 +273,7 @@ function render() {
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
           <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${trustChip(r.trust?.[0])}</div>
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
@@ -280,7 +287,7 @@ function render() {
       <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on Eldorado</a>
     </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
   $("t-count").textContent = list.length.toLocaleString();
-  $("t-count-sub").textContent = `of ${rows.length.toLocaleString()} items with 2+ listings`;
+  $("t-count-sub").textContent = `of ${(lastData?.total ?? rows.length).toLocaleString()} items with 2+ listings`;
   const best = [...list].sort((a, b) => b.profit - a.profit)[0];
   $("t-best").textContent = best ? `+${money(best.profit)}` : "—";
   $("t-best-sub").textContent = best ? `${best.name} · ${best.roi.toFixed(0)}% ROI` : " ";
@@ -288,7 +295,9 @@ function render() {
 
 async function load(fresh = false) {
   try {
-    const data = await fetch(`/api/flips${fresh ? "?fresh=1" : ""}`).then((r) => r.json());
+    const qs = new URLSearchParams({ fee: settings.fee, minProfit: settings.minProfit, minRoi: settings.minRoi, minListings: settings.minListings, minSold: settings.minSold, game: settings.game });
+    if (fresh) qs.set("fresh", "1");
+    const data = await fetch(`/api/flips?${qs}`).then((r) => r.json()); // the server applies the filters
     lastData = data;
     rows = data.rows || [];
     $("t-updated").textContent = data.pricesUpdatedAt ? new Date(data.pricesUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -303,6 +312,7 @@ for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]
   $(k).addEventListener("input", () => {
     settings[k] = k === "game" ? $(k).value : Math.max(0, Number($(k).value) || 0);
     save(); render();
+    clearTimeout(refetchTimer); refetchTimer = setTimeout(() => load(), 400); // fetch rows for the new filters
   });
 }
 $("q").addEventListener("input", render);
@@ -312,7 +322,20 @@ document.querySelector(".head").addEventListener("click", (e) => {
   render();
 });
 // ---------- item card: is this flip real, or is the 2nd listing just too high? ----------
+// Seller trust (from Eldorado reviews): ✅ trusted 50+ ratings & 97%+, 👍 ok, 🆕 under 10 ratings, ⚠️ under 93%.
+const TRUST = { trusted: ["✅", "trusted"], ok: ["👍", "ok"], new: ["🆕", "new"], risky: ["⚠️", "risky"] };
+function trustChip(t) {
+  if (!t) return "";
+  const [icon, cls] = TRUST[t.level];
+  return `<span class="trust ${cls}" title="Seller: ${t.score}% positive from ${t.ratings} ratings">${icon} ${t.level === "new" ? "new seller" : `${t.score}%`}</span>`;
+}
+const hours = (h) => (h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(h < 10 ? 1 : 0)} h` : `${(h / 24).toFixed(0)} days`);
+
 function verdict(r) {
+  const t = r.trust?.[0];
+  if (t?.level === "risky") return ["bad", `⛔ The cheapest listing's seller has only ${t.score}% positive reviews`, `${t.ratings} ratings — high scam risk, skip this one or check the seller carefully`];
+  if (t?.level === "new") return ["warn", `⚠️ The cheapest listing is from a new seller (${t.ratings} ratings)`, "New sellers are where most scams come from — check their profile before buying"];
+  if (r.undercut?.everyMin != null && r.undercut.everyMin < 60) return ["warn", `⚠️ This item gets undercut about every ${hours(r.undercut.everyMin / 60)}`, "Your relist probably won't stay the cheapest for long — price it a bit lower or expect to reprice"];
   const L = r.ladder || [];
   const third = L[2];
   if (r.soldPrice) {
@@ -344,6 +367,9 @@ function openCard(r) {
       <div><span>Value</span><b>${Number(r.value).toLocaleString()}</b></div>
       <div><span>Listings</span><b>${r.listings ?? "?"}</b></div>
       <div><span>Fee (${settings.fee}%)</span><b>−${money(r.feeAmt)}</b></div>
+      <div><span>Sells about every</span><b>${r.sellsEveryH ? hours(r.sellsEveryH) : "—"}</b></div>
+      <div><span>Undercut about every</span><b>${r.undercut ? (r.undercut.everyMin != null ? hours(r.undercut.everyMin / 60) : "rarely") : "—"}</b></div>
+      <div><span>Seller (buy)</span><b>${r.trust?.[0] ? `${TRUST[r.trust[0].level][0]} ${r.trust[0].score}% (${r.trust[0].ratings})` : "checking…"}</b></div>
     </div>
     <div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cheapest listings on Eldorado</div>
     <div class="ladder">${rungs}</div>
@@ -361,12 +387,14 @@ async function loadSnipes() {
   try {
     const s = await fetch("/api/snipes").then((r) => r.json());
     $("snipes").hidden = false;
-    $("snipes-sub").textContent = `watching ${s.hotItems} items · ${s.checksPerMin || 0} checks/min · ${s.fastItems || 0} moving items re-checked every 45s`;
+    const res = s.results || {};
+    $("snipes-sub").textContent = `watching ${s.hotItems} items · ${s.checksPerMin || 0} checks/min${s.booster?.active ? " · PC booster on" : ""}`
+      + (res.checked ? ` · ${res.goneWithinHour}/${res.checked} sniped listings were bought within 1h${res.medianGoneMin != null ? ` (typically in ${res.medianGoneMin} min)` : ""}` : "");
     const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
     $("snipe-list").innerHTML = s.recent.length ? s.recent.map((x) => `<a class="snipe${x.suspicious ? " sus" : ""}" href="${esc(x.url)}" target="_blank" rel="noopener" title="${x.suspicious ? "Very cheap — may be mislabelled" : "Open on Eldorado"}">
       <img src="${esc(x.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
       <div style="min-width:0"><div class="s-name">${esc(x.name)}</div>
-      <div class="s-meta">${esc(x.game)} · ${ago(x.at)}</div>
+      <div class="s-meta">${esc(x.game)} · ${ago(x.at)}${x.goneAfterMin != null ? ` · <b class="down">gone after ${x.goneAfterMin} min</b>` : ""}${x.trust ? ` · ${trustChip(x.trust)}` : ""}</div>
       <div class="tabular" style="font-size:12px"><b>${money(x.price)}</b> <span class="dim">vs ${money(x.usual)}</span> <b class="up">−${x.discount}%</b></div></div></a>`).join("")
       : `<span class="dim" style="font-size:12px">No snipes yet — new listings far under the usual price will show here and in Discord.</span>`;
   } catch { /* server waking up */ }

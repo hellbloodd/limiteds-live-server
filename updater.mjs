@@ -13,7 +13,7 @@ import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchA
 import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
 import { checkDeals, checkFlips } from "./deals.mjs";
 import { checkUndercuts } from "./tools.mjs";
-import { startSniper } from "./sniper.mjs";
+import { startSniper, delegateFull } from "./sniper.mjs";
 
 let serverPort = null; // set when running inside the live server (deal alerts read its pages' data)
 
@@ -114,7 +114,11 @@ async function savePrices(prefix, state, allPrices, { partial = false, live = fa
     if (!(p.usd > 0) && !p.variants) continue; // (Adopt Me pets can have other versions listed but no Fly Ride)
     const { offers, windowMax, ...keep } = p;
     // the 5 cheapest listing prices, for the Flip Finder's price ladder
-    if (offers?.length) keep.ladder = offers.map((o) => Math.round(o[1] * 100) / 100).filter((v) => v > 0).sort((a, b) => a - b).slice(0, 5);
+    if (offers?.length) {
+      const sorted = offers.filter((o) => o[1] > 0).sort((a, b) => a[1] - b[1]);
+      keep.ladder = sorted.slice(0, 5).map((o) => Math.round(o[1] * 100) / 100);
+      keep.sellers = sorted.slice(0, 2).map((o) => o[4] || null); // who sells the cheapest and the 2nd (seller trust)
+    }
     // partial: keep what the fresh check didn't fetch (Adopt Me versions, listing counts...)
     prices[k] = partial ? { ...(prices[k] || {}), ...keep } : keep;
   }
@@ -257,9 +261,11 @@ async function pushAdoptMe() {
     await writeChangedRows(AM_PREFIX, { latest: state.latest, history, history_fetched: historyFetched, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} Adopt Me values.`);
     refreshPricesInBackground("Adopt Me", eldorado?.updatedAt, async () => {
-      const prices = await fetchAmEldoradoPrices(items);
+      // with the PC booster on, it does the whole Adopt Me refresh from its own IP
+      const fromPc = await delegateFull("Adopt Me", items).catch((e) => { console.warn(`[${stamp()}] Adopt Me booster refresh failed (${e.message}) - doing it here.`); return null; });
+      const prices = fromPc || await fetchAmEldoradoPrices(items);
       await savePrices(AM_PREFIX, state, prices);
-      return `Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed.`;
+      return `Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed${fromPc ? " (by the PC booster)" : ""}.`;
     });
     return true;
   } catch (e) {

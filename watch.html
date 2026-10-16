@@ -99,7 +99,8 @@ async function load() {
       const cheapest = w.live?.usd, next = w.live?.second;
       const undercut = cheapest != null && cheapest < w.myPrice - 0.004;
       if (undercut) under++; else if (cheapest != null) top++;
-      const advice = cheapest == null ? `<span class="dim">no price data yet</span>`
+      const advice = w.suggest ? `Set <b class="${w.suggest.belowCost ? "down" : ""}">${money(w.suggest.price)}</b><div class="dim" style="font-size:11px">${esc(w.suggest.why)}</div>`
+        : cheapest == null ? `<span class="dim">no price data yet</span>`
         : undercut ? `Relist at <b>${money(Math.max(0.01, cheapest - 0.01))}</b>`
         : next ? `You're cheapest — room up to <b>${money(next - 0.01)}</b>` : `You're the only/cheapest listing`;
       return `<div class="row" style="--d:${Math.min(n, 20) * 25}ms">

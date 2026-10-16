@@ -167,7 +167,8 @@ const OFFERS = "/api/v1/item-management/offers?gameId=201&category=CustomItem&pa
 
 function priceOf(offers, listings, url) {
   const list = offers.map((o) => o[1]).sort((a, b) => a - b);
-  return { ...pickPrices(list), listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100) };
+  const bySeller = [...offers].sort((a, b) => a[1] - b[1]);
+  return { ...pickPrices(list), listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100), sellers: bySeller.slice(0, 2).map((o) => o[4] || null) };
 }
 
 // frOnly: just the Fly Ride listings, one request per pet (the sniper's fast path).
@@ -288,7 +289,7 @@ function eldoradoFields(it) {
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
   const variants = p.variants ? variantRows() : null;
-  return { variants, usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
+  return { variants, usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
 }
 
 // Returns true if the request was handled.

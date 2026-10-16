@@ -5,6 +5,26 @@
 //
 // Needs: SITE (default https://agony-values.onrender.com) and OWNER_KEY (same as on Render).
 import { listingsFor } from "./sniper.mjs";
+import { fetchAmEldoradoPrices } from "./am-values.mjs";
+
+const FULL = { "Adopt Me": (items) => fetchAmEldoradoPrices(items) };
+let fullRunning = false;
+// A whole game's price refresh handed over by the server (runs alongside the item checks).
+async function runFull() {
+  fullRunning = true;
+  try {
+    const job = await api("/api/booster/full");
+    if (!job.game || !FULL[job.game]) return;
+    const t0 = Date.now();
+    console.log(`
+${new Date().toLocaleTimeString()}  Refreshing all ${job.game} prices (${job.items.length} items)...`);
+    const prices = await FULL[job.game](job.items);
+    const r = await api("/api/booster/full", { game: job.game, prices });
+    console.log(`${new Date().toLocaleTimeString()}  ${job.game}: ${r.priced ?? 0} prices sent in ${Math.round((Date.now() - t0) / 1000)} s.`);
+  } catch (e) { console.log(`
+Full refresh failed: ${e.message}`); }
+  finally { fullRunning = false; }
+}
 
 const SITE = (process.env.SITE || "https://agony-values.onrender.com").replace(/\/$/, "");
 const KEY = String(process.env.OWNER_KEY || "").trim();
@@ -17,7 +37,7 @@ let total = 0;
 const started = Date.now();
 
 async function api(path, body) {
-  const r = await fetch(SITE + path, { method: body ? "POST" : "GET", headers: H, body: body && JSON.stringify(body), signal: AbortSignal.timeout(60000) });
+  const r = await fetch(SITE + path, { method: body ? "POST" : "GET", headers: H, body: body && JSON.stringify(body), signal: AbortSignal.timeout(180000) });
   if (r.status === 401) { console.error("The site refused the owner key - check OWNER_KEY in booster-key.txt."); process.exit(1); }
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
@@ -28,6 +48,7 @@ for (;;) {
   let work;
   try { work = await api(`/api/booster/work?max=${PARALLEL * 6}`); }
   catch (e) { console.log(`Can't reach the site (${e.message}) - retrying in 15 s.`); await sleep(15000); continue; }
+  if (work.full && !fullRunning) runFull();
   if (!work.items?.length) { await sleep(3000); continue; }
 
   const queue = [...work.items], results = [];

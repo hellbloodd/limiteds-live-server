@@ -9,6 +9,7 @@ import { readRow, writeMm2Row } from "./mm2-values.mjs";
 import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
 import { eldoradoJson } from "./mm2-values.mjs";
 
+import { sellerTrust } from "./sellers.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OWNER_KEY = String(process.env.OWNER_KEY || "").trim();
 
@@ -139,6 +140,37 @@ export async function checkUndercuts(game, port) {
   return sent;
 }
 
+// The price to set for one of your listings: 1¢ under the cheapest seller worth competing with
+// (a new or low-rated seller far below is often fake), never under what you paid plus Eldorado's
+// fee (from your Profits ledger), and if you're already cheapest, as high as the 2nd allows.
+const FEE = Number(process.env.FLIP_FEE_PCT || 10) / 100;
+function suggestPrice(w, l, ledger, me) {
+  if (!l?.usd) return null;
+  const buys = ledger.filter((e) => e.game === w.game && e.key === w.key).sort((a, b) => b.ts - a.ts);
+  const lastBuy = buys.find((e) => e.type === "buy");
+  const soldSince = lastBuy && buys.some((e) => e.type === "sell" && e.ts > lastBuy.ts);
+  const cost = lastBuy && !soldSince ? lastBuy.price : null;
+  const floor = cost ? Math.ceil((cost / (1 - FEE)) * 100) / 100 + 0.01 : 0.01; // break-even after the fee
+  const [s0, s1] = l.sellers || [];
+  const t0 = sellerTrust(s0);
+  const iAmCheapest = (me && s0 === me) || Math.abs(l.usd - w.myPrice) < 0.005;
+  let price, why;
+  if (iAmCheapest) {
+    if (!l.second) return { price: w.myPrice, why: "You're the only listing.", floor: cost ? floor : null };
+    price = Math.max(w.myPrice, l.second - 0.01);
+    why = price > w.myPrice + 0.004 ? `You're cheapest — you can raise to 1¢ under the next listing (${l.second}).` : "You're cheapest — keep this price.";
+  } else if (t0 && (t0.level === "risky" || t0.level === "new") && l.second) {
+    price = l.second - 0.01;
+    why = `The cheapest ($${l.usd}) is from a ${t0.level === "new" ? "new" : "low-rated"} seller — beat the next one instead.`;
+  } else {
+    price = l.usd - 0.01;
+    why = "1¢ under the cheapest listing.";
+  }
+  price = Math.round(price * 100) / 100;
+  if (price < floor) return { price: floor, why: `Matching would sell under what you paid ($${cost}) after the ${Math.round(FEE * 100)}% fee — hold at break-even.`, floor, belowCost: true };
+  return { price, why, floor: cost ? floor : null };
+}
+
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
   const page = { "/watch": "watch.html", "/profits": "profits.html" }[url.pathname.replace(/\/$/, "")];
@@ -196,7 +228,12 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
     if (route === "watchlist") {
       // add live prices so the page shows where you stand
       const live = new Map((await allItems(port)).map((i) => [`${i.game}|${i.key}`, i]));
-      sendJson(res, 200, { entries: list.map((w) => ({ ...w, live: live.get(`${w.game}|${w.key}`) || null })) });
+      const ledger = (await readRow("ledger").catch(() => null)) || [];
+      const me = (await readRow("owner_settings").catch(() => null))?.eldoradoUserId || null;
+      sendJson(res, 200, { entries: list.map((w) => {
+        const l = live.get(`${w.game}|${w.key}`) || null;
+        return { ...w, live: l, suggest: suggestPrice(w, l, ledger, me) };
+      }) });
     } else {
       const live = new Map((await allItems(port)).map((i) => [`${i.game}|${i.key}`, i]));
       sendJson(res, 200, { entries: list.map((e) => ({ ...e, liveUsd: live.get(`${e.game}|${e.key}`)?.usd ?? null })) });

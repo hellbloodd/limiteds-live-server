@@ -105,6 +105,55 @@ function titleName(title) {
     .replace(/\b(sword|limited|unique|secret|bb|blade ball)\b\s*$/gi, ""));
 }
 
+// Which of our items an Eldorado listing is (by its title), or null.
+function matchBbOffer(r, byName) {
+  const usd = r.offer?.pricePerUnitInUSD?.amount;
+  const title = r.offer?.offerTitle || "";
+  if (!(usd > 0)) return null;
+  // bundles ("Ace Set | Sword + Emote + Explosion", "Ace, astral bow, crystal greatblade...") aren't one item's price
+  if (/\b(set|bundle|pack|lot)\b/i.test(title) || (title.match(/,/g) || []).length >= 2 || (title.match(/\+/g) || []).length >= 2) return null;
+  // Sellers write "Blue Bunny Scythe Emote" or "Blue Bunny Scythe | Emote" for the emote, so
+  // "emote"/"explosion" anywhere in the title decides the category; otherwise it's the sword.
+  const kind = /\bemotes?\b/i.test(title) ? "emotes" : /\bexplosions?\b/i.test(title) ? "explosions" : "swords";
+  const lead = titleName(title);
+  // Some names contain the word themselves ("Chroma Blade Explosion"), so try the full lead first.
+  let cands = (byName.get(lead) || []).filter((m) => m.category === kind);
+  if (!cands.length && kind !== "swords") {
+    // "Aurora Burst Emote" -> "Aurora Burst"; "Chroma Blade - Explosion" -> "Chroma Blade Explosion"
+    const base = normName(lead.replace(/\b(emote|explosion)s?\b/g, ""));
+    const word = kind === "emotes" ? "emote" : "explosion";
+    cands = [...(byName.get(base) || []), ...(byName.get(`${base} ${word}`) || [])].filter((m) => m.category === kind);
+  }
+  if (kind === "swords" && cands.length > 1) {
+    // "finisher" -> the Finisher version; "no finisher" / "without finisher" / nothing -> the plain one.
+    const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o|non)[\s-]*finisher/i.test(title);
+    cands = cands.filter((m) => (finisher ? m.variant === "Finisher" : m.variant !== "Finisher"));
+  }
+  return cands.length === 1 ? cands[0].key : null;
+}
+
+function byNameOf(items) {
+  const byName = new Map(); // base name -> items (all versions)
+  for (const it of items) {
+    const n = normName(it.baseName || it.name);
+    byName.set(n, [...(byName.get(n) || []), it]);
+  }
+  return byName;
+}
+
+// One item's listings via Eldorado's search (for the sniper): { usd, second, offers, listings, url }.
+let byNameCache = { items: null, map: null };
+export async function fetchBbItemListings(item, all = bbItems) {
+  if (byNameCache.items !== all) byNameCache = { items: all, map: byNameOf(all) };
+  const q = item.baseName || item.name.replace(/ \([^)]*\)$/, "");
+  const j = await eldoradoJson(`/api/v1/item-management/offers?gameId=203&category=CustomItem&pageIndex=1&pageSize=40`
+    + `&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&searchQuery=${encodeURIComponent(q)}`);
+  const offers = (j.results || []).filter((r) => matchBbOffer(r, byNameCache.map) === item.key).map(offerTuple);
+  if (!offers.length) return null;
+  const list = offers.map((o) => o[1]).sort((a, b) => a - b);
+  return { ...pickPrices(list), offers, listings: offers.length, url: `${BB_SHOP}?searchQuery=${encodeURIComponent(item.name)}` };
+}
+
 export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
   const byName = new Map(); // base name -> items (all versions)
   for (const it of items) {
@@ -137,29 +186,8 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
   onProgress(totalPages, totalPages);
   for (const j of pages) {
     for (const r of j.results || []) {
-      const usd = r.offer?.pricePerUnitInUSD?.amount;
-      const title = r.offer?.offerTitle || "";
-      if (!(usd > 0)) continue;
-      // bundles ("Ace Set | Sword + Emote + Explosion", "Ace, astral bow, crystal greatblade...") aren't one item's price
-      if (/\b(set|bundle|pack|lot)\b/i.test(title) || (title.match(/,/g) || []).length >= 2 || (title.match(/\+/g) || []).length >= 2) continue;
-      // Sellers write "Blue Bunny Scythe Emote" or "Blue Bunny Scythe | Emote" for the emote, so
-      // "emote"/"explosion" anywhere in the title decides the category; otherwise it's the sword.
-      const kind = /\bemotes?\b/i.test(title) ? "emotes" : /\bexplosions?\b/i.test(title) ? "explosions" : "swords";
-      const lead = titleName(title);
-      // Some names contain the word themselves ("Chroma Blade Explosion"), so try the full lead first.
-      let cands = (byName.get(lead) || []).filter((m) => m.category === kind);
-      if (!cands.length && kind !== "swords") {
-        // "Aurora Burst Emote" -> "Aurora Burst"; "Chroma Blade - Explosion" -> "Chroma Blade Explosion"
-        const base = normName(lead.replace(/\b(emote|explosion)s?\b/g, ""));
-        const word = kind === "emotes" ? "emote" : "explosion";
-        cands = [...(byName.get(base) || []), ...(byName.get(`${base} ${word}`) || [])].filter((m) => m.category === kind);
-      }
-      if (kind === "swords" && cands.length > 1) {
-        // "finisher" -> the Finisher version; "no finisher" / "without finisher" / nothing -> the plain one.
-        const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o|non)[\s-]*finisher/i.test(title);
-        cands = cands.filter((m) => (finisher ? m.variant === "Finisher" : m.variant !== "Finisher"));
-      }
-      if (cands.length === 1) (found[cands[0].key] ||= []).push(offerTuple(r));
+      const key = matchBbOffer(r, byName);
+      if (key) (found[key] ||= []).push(offerTuple(r));
     }
   }
   const prices = {};
@@ -242,7 +270,7 @@ export function startBbTracker() {
 function eldoradoFields(it) {
   const p = bbEldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
 }
 
 // Token price from Eldorado's Blade Ball Currency page, in its default "Recommended" order. The
