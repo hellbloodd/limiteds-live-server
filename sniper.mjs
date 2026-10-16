@@ -55,7 +55,7 @@ async function buildHotList(port) {
 }
 
 // Fresh listings for one item: { usd, second, offers: [[id, usd, qty, expires, seller], ...], url }
-async function listingsFor(game, item) {
+export async function listingsFor(game, item) {
   if (game === "MM2") {
     mm2Leaves ||= await fetchEldoradoItems();
     const m = matchEldorado(item, mm2Leaves);
@@ -81,7 +81,11 @@ export function findSnipes(before, offers, item, owner = null) {
 }
 
 async function checkOne(game, item) {
-  const p = await listingsFor(game, item).catch(() => null);
+  return processListings(game, item, await listingsFor(game, item).catch(() => null));
+}
+
+// What one check found (here, or on the PC booster): price updates, schedule, snipe alerts.
+async function processListings(game, item, p) {
   checks++;
   if (!p?.offers?.length) return false;
   const id = `${game}|${item.key}`;
@@ -129,8 +133,11 @@ async function loop(port, busy) {
   const due = () => {
     const now = Date.now();
     let best = null;
+    const split = boosterActive();
     for (const job of hot) {
-      const sc = schedule.get(`${job.game}|${job.item.key}`);
+      const id = `${job.game}|${job.item.key}`;
+      if (split && boosterOwns(id)) continue; // the PC booster checks these
+      const sc = schedule.get(id);
       if (sc && sc.nextAt <= now && !sc.taken && (!best || sc.nextAt < best.sc.nextAt)) best = { job, sc };
     }
     return best;
@@ -167,5 +174,43 @@ export function sniperStatus() {
   const mins = Math.max(1, (Date.now() - statsSince) / 60000);
   const ints = hot.map((j) => schedule.get(`${j.game}|${j.item.key}`)?.interval || 0);
   return { hotItems: hot.length, parallel: PARALLEL, checksPerMin: Math.round(checks / mins), changedPerMin: Math.round(changes / mins * 10) / 10,
-    fastItems: ints.filter((i) => i <= CHECK_MIN_MS).length, slowItems: ints.filter((i) => i >= CHECK_MAX_MS).length, recent: recentSnipes };
+    fastItems: ints.filter((i) => i <= CHECK_MIN_MS).length, slowItems: ints.filter((i) => i >= CHECK_MAX_MS).length, booster: boosterStatus(), recent: recentSnipes };
 }
+
+// ---------- PC booster ----------
+// booster.mjs on the owner's PC asks for work (/api/booster/work), checks those items from its own
+// IP (Eldorado's request limit is per IP) and sends back what it saw (/api/booster/results). While
+// it's active it owns half the items; if it goes quiet for 90 s the server takes them all back.
+let boosterSeenAt = 0, boosterChecks = 0;
+const boosterActive = () => Date.now() - boosterSeenAt < 90 * 1000;
+function boosterOwns(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return (h & 1) === 1;
+}
+export function boosterWork(max = 40) {
+  boosterSeenAt = Date.now();
+  const now = Date.now(), out = [];
+  const jobs = hot.filter((j) => boosterOwns(`${j.game}|${j.item.key}`))
+    .map((j) => ({ j, sc: schedule.get(`${j.game}|${j.item.key}`) }))
+    .filter(({ sc }) => sc && sc.nextAt <= now && !(sc.boosterAt > now - 120 * 1000))
+    .sort((a, b) => a.sc.nextAt - b.sc.nextAt).slice(0, max);
+  for (const { j, sc } of jobs) { sc.boosterAt = now; out.push({ game: j.game, item: j.item }); }
+  return { items: out, mm2LeavesAt };
+}
+export async function boosterResults(results) {
+  boosterSeenAt = Date.now();
+  let n = 0;
+  for (const { game, key, listings } of results || []) {
+    const job = hot.find((j) => j.game === game && String(j.item.key) === String(key));
+    const sc = job && schedule.get(`${game}|${job.item.key}`);
+    if (!sc) continue;
+    const changed = await processListings(game, job.item, listings).catch(() => false);
+    sc.interval = changed ? CHECK_MIN_MS : Math.min(sc.interval * 2, CHECK_MAX_MS);
+    sc.nextAt = Date.now() + sc.interval;
+    sc.boosterAt = 0;
+    n++; boosterChecks++;
+  }
+  return { ok: true, processed: n };
+}
+export const boosterStatus = () => ({ active: boosterActive(), lastSeen: boosterSeenAt ? new Date(boosterSeenAt).toISOString() : null, checks: boosterChecks });

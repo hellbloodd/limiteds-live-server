@@ -6,7 +6,8 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
-import { sniperStatus } from "./sniper.mjs";
+import { sniperStatus, boosterWork, boosterResults } from "./sniper.mjs";
+import { isOwner } from "./tools.mjs";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
 const recentErrors = [];
 for (const level of ["error", "warn"]) {
@@ -3643,6 +3644,14 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
+    // PC booster (booster.mjs): owner only
+    if (parsedUrl.pathname === "/api/booster/work" || parsedUrl.pathname === "/api/booster/results") {
+      if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong or missing owner key." });
+      if (parsedUrl.pathname === "/api/booster/work") return sendJson(res, 200, boosterWork(Number(parsedUrl.searchParams.get("max")) || 40));
+      let body = ""; for await (const c of req) { body += c; if (body.length > 5e6) break; }
+      let results = []; try { results = JSON.parse(body).results || []; } catch { /* bad body */ }
+      return sendJson(res, 200, await boosterResults(results));
+    }
     if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {

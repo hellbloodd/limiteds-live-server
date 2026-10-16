@@ -12,7 +12,7 @@ import { eldoradoJson } from "./mm2-values.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OWNER_KEY = String(process.env.OWNER_KEY || "").trim();
 
-function isOwner(req) {
+export function isOwner(req) {
   const got = Buffer.from(String(req.headers["x-owner-key"] || ""));
   const want = Buffer.from(OWNER_KEY);
   return OWNER_KEY.length >= 6 && got.length === want.length && timingSafeEqual(got, want);
