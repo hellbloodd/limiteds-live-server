@@ -17,7 +17,7 @@ const MIN_PEERS = 6;
 const MAX_ALERTS_PER_CHECK = 10;
 const REALERT_DROP = 0.9;                                    // re-alert if 10% cheaper than last alert
 const REALERT_AFTER_MS = 24 * 60 * 60 * 1000;
-const SITE = process.env.PUBLIC_SITE_URL || "https://limiteds-live-server.onrender.com";
+const SITE = process.env.PUBLIC_SITE_URL || "https://agony-values.onrender.com";
 
 // Our own pages' data, so alerts use exactly the numbers the site shows.
 const GAMES = {
