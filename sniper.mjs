@@ -11,6 +11,7 @@ import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
 // Runs continuously: SNIPE_PARALLEL items at a time, and the next pass starts as soon as one ends.
 const PARALLEL = Number(process.env.SNIPE_PARALLEL || 5);
 const HOT_LIST_SIZE = Number(process.env.SNIPE_HOT_LIST || 500);
+const MIN_PRICE = Number(process.env.SNIPE_MIN_PRICE || 5); // only items whose cheapest listing is at least this
 let lastPassMs = 0;
 const DISCOUNT = Number(process.env.SNIPE_DISCOUNT_PCT || 25) / 100; // at least 25% under the usual price
 const MIN_PROFIT = Number(process.env.SNIPE_MIN_PROFIT || 3);          // after the fee, relisting under the next one
@@ -26,12 +27,16 @@ let mm2Leaves = null;
 let ownerId = null;
 
 async function buildHotList(port) {
-  const out = [];
+  // Every game's active items priced SNIPE_MIN_PRICE+ in one pool, most active first, up to the
+  // hot list size (no fixed share per game).
+  const pool = [];
   for (const game of SNIPE_GAMES) {
-    const items = (await gameItems(GAMES[game], port).catch(() => [])).filter((i) => i.usd >= 5 && ((i.sold7d || 0) >= 1 || (i.listings || 0) >= 3));
-    items.sort((a, b) => (b.sold7d || 0) - (a.sold7d || 0) || (b.listings || 0) - (a.listings || 0) || b.usd - a.usd);
-    for (const item of items.slice(0, Math.ceil(HOT_LIST_SIZE / SNIPE_GAMES.length))) out.push({ game, item });
+    for (const item of await gameItems(GAMES[game], port).catch(() => [])) {
+      if (item.usd >= MIN_PRICE && ((item.sold7d || 0) >= 1 || (item.listings || 0) >= 3)) pool.push({ game, item });
+    }
   }
+  pool.sort((a, b) => (b.item.sold7d || 0) - (a.item.sold7d || 0) || (b.item.listings || 0) - (a.item.listings || 0) || b.item.usd - a.item.usd);
+  const out = pool.slice(0, HOT_LIST_SIZE);
   hot = out;
   hotBuiltAt = Date.now();
   ownerId = (await readRow("owner_settings").catch(() => null))?.eldoradoUserId || null;
