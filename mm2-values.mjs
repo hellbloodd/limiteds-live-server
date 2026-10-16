@@ -387,9 +387,14 @@ async function eldoradoJsonUncached(path) {
   for (let attempt = 1; ; attempt++) {
     await eldoradoSlot();
     let res;
-    try { res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" } }); }
-    finally { eldoradoRelease(); }
-    if (res.ok) return res.json();
+    try {
+      // 20 s cap: a request that never answers would otherwise freeze a game's price refresh for good
+      res = await fetch(ELDORADO + path, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(20000) });
+      if (res.ok) return await res.json();
+    } catch (e) {
+      if (attempt >= 3) throw new Error(`Eldorado request failed: ${e.message}`);
+      continue;
+    } finally { eldoradoRelease(); }
     if (res.status !== 429 || attempt >= 6) throw new Error(`Eldorado ${res.status}`);
     await new Promise((r) => setTimeout(r, attempt * 2500 + Math.random() * 1000)); // back off, spread out retries
   }
