@@ -136,7 +136,7 @@ let forcePrices = false;
 let priorityGame = null; // the game whose page clicked "Refresh now" gets its prices first
 const pricesRunning = {};
 const priceStatus = {}; // game -> { startedAt, okAt, message, errorAt, error } for /api/status
-export const updaterStatus = () => ({ running: { ...pricesRunning }, prices: priceStatus });
+export const updaterStatus = () => ({ updating: Boolean(running), values: pushStatus, running: { ...pricesRunning }, prices: priceStatus });
 const wantedPrices = []; // [game, job] collected during an update, started when it finishes
 export const pendingPrices = [];
 function refreshPricesInBackground(game, lastUpdatedAt, job) {
@@ -253,8 +253,18 @@ async function pushStealABrainrot() {
   }
 }
 
+// Each game's value update gets 8 minutes: one that hangs (a database or site request that never
+// answers) must not hold up the others' price refreshes forever.
+const PUSH_LIMIT_MS = 8 * 60 * 1000;
+const pushStatus = {}; // game -> { startedAt, doneAt, ok, timedOut }
+function guarded(game, push) {
+  pushStatus[game] = { startedAt: new Date().toISOString() };
+  let timer;
+  const limit = new Promise((res) => { timer = setTimeout(() => { console.error(`[${stamp()}] ${game} value update took over 8 min - moving on.`); pushStatus[game].timedOut = true; res(false); }, PUSH_LIMIT_MS); });
+  return Promise.race([push().then((ok) => { pushStatus[game] = { ...pushStatus[game], doneAt: new Date().toISOString(), ok }; return ok; }), limit]).finally(() => clearTimeout(timer));
+}
 async function pushOnce() {
-  const results = await Promise.all([pushMm2(), pushBladeBall(), pushAdoptMe(), pushStealABrainrot()]);
+  const results = await Promise.all([guarded("MM2", pushMm2), guarded("Blade Ball", pushBladeBall), guarded("Adopt Me", pushAdoptMe), guarded("Steal a Brainrot", pushStealABrainrot)]);
   return results.every(Boolean);
 }
 
