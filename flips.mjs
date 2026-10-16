@@ -26,6 +26,7 @@ async function collect(port) {
       rows.push({
         game, page, key: i.key, name: i.name, image: i.image, value: i.value, usd: i.usd, second: i.second,
         listings: i.listings, url: i.eldoradoUrl, variant: i.priceVariant || "",
+        sold24h: i.sold24h || 0, sold7d: i.sold7d || 0, soldPrice: i.soldPrice ?? null,
       });
     }
   }

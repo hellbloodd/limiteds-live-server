@@ -26,6 +26,7 @@ let mm2History = {}; // { itemKey: [[timestamp, value], ...] }
 let mm2LastError = "";
 let mm2Eldorado = { updatedAt: null, prices: {} }; // prices: { itemKey: { usd, listings, url } }
 let mm2PriceHistory = {};
+let mm2Sales = {};
 
 // ---------- Supabase ----------
 
@@ -48,14 +49,14 @@ async function supabaseFetch(path, options = {}) {
 
 // The mm2_state table holds one row per piece of state. MM2 uses unprefixed ids
 // (latest, history, ...); other games use a prefix, e.g. "bb_latest" for Blade Ball.
-const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "eldorado_history", "heartbeat"];
+const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "eldorado_history", "sales", "heartbeat"];
 
 export async function readMm2State(prefix = "", only = STATE_IDS) {
   const rows = [];
   for (const id of only) rows.push(...await supabaseFetch(`mm2_state?select=id,data&id=eq.${prefix + id}`));
   const byId = Object.fromEntries(rows.map((r) => [r.id.slice(prefix.length), r.data]));
   return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null,
-    priceHistory: byId.eldorado_history || {}, heartbeat: byId.heartbeat || null };
+    priceHistory: byId.eldorado_history || {}, sales: byId.sales || {}, heartbeat: byId.heartbeat || null };
 }
 
 // Server side: each poll asks only for the rows' updated_at (tiny) and re-downloads just the rows
@@ -72,7 +73,7 @@ export function createStateReader(prefix = "") {
       for (const r of rows) { data[r.id.slice(prefix.length)] = r.data; seen[r.id] = r.updated_at; }
     }
     return { latest: data.latest || null, history: data.history || {}, eldorado: data.eldorado || null,
-      priceHistory: data.eldorado_history || {}, heartbeat: data.heartbeat || null };
+      priceHistory: data.eldorado_history || {}, sales: data.sales || {}, heartbeat: data.heartbeat || null };
   };
 }
 
@@ -229,6 +230,63 @@ export function pickPrices(sorted) {
   return { usd: sorted[i], second: sorted[i + 1] ?? null };
 }
 
+// ---------- Eldorado sales tracking ----------
+// Each price check keeps the item's cheapest listings as [offerId, usd, quantity, expiresMs, sellerId].
+// Comparing two checks: a listing whose quantity went down sold that many; a listing that vanished
+// probably sold - unless it expired, its seller relisted, or newer cheaper listings just pushed it
+// out of the window we look at. Sales are kept as { itemKey: [[unixSeconds, usd, qty], ...] }.
+export const offerTuple = (r) => [r.offer?.id, r.offer?.pricePerUnitInUSD?.amount, r.offer?.quantity ?? 1,
+  Date.parse(r.offer?.expireDate) || 0, r.offer?.userId || r.user?.id || ""];
+
+// offers: tuples seen this check; full: true if only the first `n` listings were fetched (so anything
+// priced above the last one we saw may still exist).
+export function listingWindow(offers, full) {
+  return { offers, windowMax: full && offers.length ? Math.max(...offers.map((o) => o[1])) : Infinity };
+}
+
+export function detectSales(prevByKey, prices, now = Date.now()) {
+  const events = {};
+  for (const [key, prev] of Object.entries(prevByKey)) {
+    const p = prices[key];
+    if (!p?.offers || !prev?.offers) continue; // price check failed this time - can't tell
+    const cur = new Map(p.offers.map((o) => [o[0], o]));
+    const sellersNow = new Set(p.offers.map((o) => o[4]));
+    for (const [id, usd, qty, expires, seller] of prev.offers) {
+      const c = cur.get(id);
+      let sold = 0, price = usd;
+      if (c) { if (c[2] < qty) { sold = qty - c[2]; price = c[1]; } }
+      else if (!(expires && expires <= now) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) sold = 1;
+      if (sold > 0 && usd > 0) (events[key] ||= []).push([Math.round(now / 1000), Math.round(price * 100) / 100, sold]);
+    }
+  }
+  return events;
+}
+
+// Adds new sale events and drops ones older than 30 days. Returns true if anything was added.
+export function mergeSales(sales, events, now = Date.now()) {
+  const cutoff = now / 1000 - 30 * 86400;
+  for (const [key, list] of Object.entries(events)) (sales[key] ||= []).push(...list);
+  for (const [key, list] of Object.entries(sales)) {
+    const kept = list.filter((e) => e[0] >= cutoff);
+    if (kept.length) sales[key] = kept; else delete sales[key];
+  }
+  return Object.keys(events).length > 0;
+}
+
+// { sold24h, sold7d, soldPrice } - soldPrice is the median price of sales in the last 7 days.
+export function salesStats(list, now = Date.now()) {
+  if (!list?.length) return { sold24h: 0, sold7d: 0, soldPrice: null };
+  const t = now / 1000;
+  let sold24h = 0, sold7d = 0;
+  const prices = [];
+  for (const [ts, usd, qty] of list) {
+    if (ts >= t - 86400) sold24h += qty;
+    if (ts >= t - 7 * 86400) { sold7d += qty; prices.push(usd); }
+  }
+  prices.sort((a, b) => a - b);
+  return { sold24h, sold7d, soldPrice: prices.length ? prices[prices.length >> 1] : null };
+}
+
 // ---------- Eldorado price history ----------
 // { itemKey: [[day, usd], ...] } where day = days since 1970 (UTC). One point per day at most, and a
 // new point only when the price differs from the previous one (so a flat price costs nothing).
@@ -365,12 +423,13 @@ export async function fetchEldoradoPrice(m) {
   const j = await eldoradoJson("/api/v1/item-management/offers?gameId=204&category=CustomItem&pageIndex=1&pageSize=5"
     + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&"
     + eldoradoFilter(m));
-  const prices = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
-  if (!prices.length) return null;
+  const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
+  const prices = offers.map((o) => o[1]).sort((a, b) => a - b);
+  if (!prices.length) return { offers: [], windowMax: Infinity }; // no listings now (lets sales tracking see it)
   // Skip listings far below the rest - usually a mis-tagged item (a normal Traveler's Gun listed as Chroma).
   const { usd, second } = pickPrices(prices);
   return {
-    usd, second, listings: j.recordCount || prices.length,
+    usd, second, listings: j.recordCount || prices.length, ...listingWindow(offers, (j.recordCount || 0) > offers.length),
     url: `${ELDORADO_SHOP}?te_v0=${encodeURIComponent(m.type)}&te_v1=${encodeURIComponent(m.rarity)}&te_v2=${encodeURIComponent(m.name)}${m.chroma ? "&mm2-properties=chroma" : ""}`,
   };
 }
@@ -381,8 +440,9 @@ let readMm2Rows;
 async function loadFromSupabase() {
   try {
     readMm2Rows ||= createStateReader();
-    const { latest, history, eldorado, heartbeat, priceHistory } = await readMm2Rows();
+    const { latest, history, eldorado, heartbeat, priceHistory, sales } = await readMm2Rows();
     mm2PriceHistory = priceHistory;
+    mm2Sales = sales;
     if (eldorado?.prices) mm2Eldorado = eldorado;
     if (latest?.items?.length) {
       mm2Items = latest.items;
@@ -420,9 +480,9 @@ export function startMm2Tracker() {
 
 function eldoradoFields(it) {
   const p = mm2Eldorado.prices[it.key];
-  if (!p) return {};
+  if (!p?.usd) return {};
   return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
-    priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd) };
+    priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key]) };
 }
 
 // History without points from before the item had a real value (fractional sort-order numbers below 1).

@@ -5,6 +5,7 @@
 import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
+  detectSales, mergeSales,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
@@ -20,8 +21,8 @@ async function getState(prefix) {
   if (!stateCache[prefix]) {
     // Row by row, skipping Blade Ball's item list (rebuilt every run): one big read times out
     // when Supabase's free tier is busy.
-    const s = await readMm2State(prefix, prefix === "" ? undefined : ["history", "history_fetched", "eldorado", "eldorado_history"]);
-    rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado, eldorado_history: s.priceHistory });
+    const s = await readMm2State(prefix, prefix === "" ? undefined : ["history", "history_fetched", "eldorado", "eldorado_history", "sales"]);
+    rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado, eldorado_history: s.priceHistory, sales: s.sales });
     stateCache[prefix] = s;
   }
   return stateCache[prefix];
@@ -75,7 +76,7 @@ async function refreshEldorado(items, previous) {
       const [it, m] = job;
       try {
         const p = await fetchEldoradoPrice(m);
-        if (p) prices[it.key] = p;
+        if (p) prices[it.key] = p; // may be listings-only ({ offers: [] }) when nothing is listed
       } catch {
         if (previous?.prices?.[it.key]) prices[it.key] = previous.prices[it.key]; // keep the last known price
       }
@@ -91,13 +92,26 @@ const stamp = () => new Date().toLocaleTimeString();
 // time, so it's written at most every 3 hours (or when the day changes) - prices themselves every time.
 const PRICE_HISTORY_SAVE_MS = 3 * 60 * 60 * 1000;
 const priceHistorySaved = {}; // prefix -> [ms, day]
-async function savePrices(prefix, state, prices) {
+const lastListings = {}; // prefix -> { itemKey: { offers, windowMax } } from the previous check (memory only)
+async function savePrices(prefix, state, allPrices) {
+  // Sales: compare this check's listings with the previous one, then keep only prices for saving.
+  state.sales ||= {};
+  const soldNow = lastListings[prefix] ? detectSales(lastListings[prefix], allPrices) : {};
+  const salesChanged = mergeSales(state.sales, soldNow);
+  lastListings[prefix] = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
+  const prices = {};
+  for (const [k, p] of Object.entries(allPrices)) {
+    if (!(p.usd > 0)) continue;
+    const { offers, windowMax, ...keep } = p;
+    prices[k] = keep;
+  }
+  if (salesChanged) console.log(`[${stamp()}] ${prefix || "mm2_"}: ${Object.values(soldNow).flat().reduce((n, e) => n + e[2], 0)} Eldorado sale(s) detected.`);
   state.eldorado = { updatedAt: new Date().toISOString(), prices };
   state.priceHistory ||= {};
   recordPriceHistory(state.priceHistory, prices);
   const now = Date.now(), day = Math.floor(now / 864e5);
   const [savedAt = 0, savedDay = -1] = priceHistorySaved[prefix] || [];
-  const rows = { eldorado: state.eldorado };
+  const rows = { eldorado: state.eldorado, sales: state.sales };
   if (now - savedAt > PRICE_HISTORY_SAVE_MS || day !== savedDay) {
     rows.eldorado_history = state.priceHistory;
     priceHistorySaved[prefix] = [now, day];

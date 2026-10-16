@@ -5,7 +5,7 @@
 // schema.org Product block with the name, picture, rarity, demand and value (in Dragons -
 // Dragon Cannelloni = 1). Rarities are re-checked once a day; Secret/OG values every update.
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, mergeMm2History, periodChanges, sparkline,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline,
   eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
@@ -23,6 +23,7 @@ let sbHistory = {};
 let sbLastError = "";
 let sbEldorado = { updatedAt: null, prices: {} };
 let sbPriceHistory = {};
+let sbSales = {};
 
 // ---------- sabrvalues.com ----------
 
@@ -113,10 +114,12 @@ export async function fetchSabEldoradoPrices(items) {
       try {
         const j = await eldoradoJson("/api/v1/item-management/offers?gameId=259&category=CustomItem&pageIndex=1&pageSize=5"
           + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
-        const list = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
-        if (!list.length) continue;
+        const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
+        const list = offers.map((o) => o[1]).sort((a, b) => a - b);
+        if (!list.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; } // nothing listed now
                 prices[it.key] = {
           ...pickPrices(list), // cheapest real listing + the next one up
+          ...listingWindow(offers, (j.recordCount || 0) > offers.length),
           listings: j.recordCount || list.length,
           url: `${SB_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=none`,
         };
@@ -140,8 +143,9 @@ let readSbRows;
 async function loadFromSupabase() {
   try {
     readSbRows ||= createStateReader(SB_PREFIX);
-    const { latest, history, eldorado, heartbeat, priceHistory } = await readSbRows();
+    const { latest, history, eldorado, heartbeat, priceHistory, sales } = await readSbRows();
     sbPriceHistory = priceHistory;
+    sbSales = sales;
     if (eldorado?.prices) sbEldorado = eldorado;
     if (latest?.items?.length) {
       sbItems = latest.items.map(expandSabItem);
@@ -177,9 +181,9 @@ export function startSabTracker() {
 
 function eldoradoFields(it) {
   const p = sbEldorado.prices[it.key];
-  if (!p) return {};
+  if (!p?.usd) return {};
   // Values are in Dragons, often far below 1, so keep 3 significant digits.
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd) };
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd), ...salesStats(sbSales[it.key]) };
 }
 
 // Returns true if the request was handled.

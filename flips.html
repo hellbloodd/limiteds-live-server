@@ -71,7 +71,7 @@
   .note { font-size:12px; color:var(--muted); flex-basis:100%; }
 
   .table { display:flex; flex-direction:column; gap:8px; padding-bottom:40px; }
-  .head, .row { display:grid; grid-template-columns:minmax(220px, 2.2fr) repeat(5, minmax(78px, 1fr)) minmax(70px, .8fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
+  .head, .row { display:grid; grid-template-columns:minmax(200px, 2fr) repeat(5, minmax(72px, 1fr)) minmax(64px, .8fr) minmax(70px, .9fr) minmax(80px, 1fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
   .head { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
   .head button { all:unset; cursor:pointer; } .head button:hover, .head button.on { color:var(--accent); }
   .row { background:linear-gradient(160deg, color-mix(in srgb, var(--surface) 92%, var(--accent) 8%), var(--surface)); border:1px solid var(--border); border-radius:14px;
@@ -146,7 +146,8 @@
     <div class="field"><label for="minProfit">Min profit $</label><input id="minProfit" type="number" min="0" step="0.5"></div>
     <div class="field"><label for="minRoi">Min ROI %</label><input id="minRoi" type="number" min="0" step="1"></div>
     <div class="field"><label for="minListings">Min listings</label><input id="minListings" type="number" min="2" step="1"></div>
-    <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. Check the listings before buying: the cheapest seller may be slow or the next listing may not sell.</div>
+    <div class="field"><label for="minSold">Min sold (7d)</label><input id="minSold" type="number" min="0" step="1"></div>
+    <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. "Sold" counts sales the site has seen on Eldorado (stock going down or listings disappearing) — tracking started recently, so it grows over the first days. "Profit / day" = profit × average sales per day: the best guess of what a flip earns. Check the listings before buying.</div>
   </div>
 
   <div class="table" id="table">
@@ -158,6 +159,8 @@
       <button data-sort="profit" class="num">Profit</button>
       <button data-sort="roi" class="num">ROI</button>
       <button data-sort="listings" class="num">Listings</button>
+      <button data-sort="sold7d" class="num">Sold 7d</button>
+      <button data-sort="perDay" class="num">Profit / day</button>
       <span></span>
     </div>
     <div id="rows"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
@@ -170,10 +173,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(Math.abs(n) >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 // Settings are remembered in this browser.
-const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, game: "" };
+const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, minSold: 0, game: "" };
 let settings = DEFAULTS;
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem("flipSettings") || "{}") }; } catch { /* private mode */ }
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "game"]) $(k).value = settings[k];
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]) $(k).value = settings[k];
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
@@ -184,14 +187,15 @@ function compute(r) {
   const relist = Math.max(0, r.second - 0.01);
   const feeAmt = relist * fee;
   const profit = relist - feeAmt - r.usd;
-  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100 };
+  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7) };
 }
 
 function render() {
   const q = $("q").value.toLowerCase();
   const list = rows.map(compute).filter((r) => (!settings.game || r.game === settings.game)
     && (!q || r.name.toLowerCase().includes(q))
-    && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings);
+    && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings
+    && r.sold7d >= settings.minSold);
   list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
   document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
   const maxRoi = Math.max(...list.map((r) => r.roi), 1);
@@ -210,6 +214,8 @@ function render() {
       <div class="num tabular profit ${r.profit >= 0 ? "up" : "down"}" data-label="Profit">${r.profit >= 0 ? "+" : ""}${money(r.profit)}</div>
       <div class="num tabular" data-label="ROI">${r.roi.toFixed(0)}%<div class="roi-bar"><i style="--w:${Math.max(4, Math.min(100, r.roi / maxRoi * 100)).toFixed(0)}%"></i></div></div>
       <div class="num tabular dim" data-label="Listings">${r.listings ?? "?"}</div>
+      <div class="num tabular ${r.sold7d ? "" : "dim"}" data-label="Sold 7d" title="${r.sold24h} in the last 24h${r.soldPrice ? ` · typical sale ${money(r.soldPrice)}` : ""}">${r.sold7d}${r.sold24h ? ` <span class="up" style="font-size:11px">+${r.sold24h}</span>` : ""}</div>
+      <div class="num tabular ${r.perDay > 0 ? "up" : "dim"}" data-label="Profit / day">${r.perDay > 0 ? "+" + money(r.perDay) : "—"}</div>
       <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on Eldorado</a>
     </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
   $("t-count").textContent = list.length.toLocaleString();
@@ -231,7 +237,7 @@ async function load() {
   }
 }
 
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "game"]) {
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]) {
   $(k).addEventListener("input", () => {
     settings[k] = k === "game" ? $(k).value : Math.max(0, Number($(k).value) || 0);
     save(); render();

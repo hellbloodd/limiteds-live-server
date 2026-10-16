@@ -3,7 +3,7 @@
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
@@ -19,6 +19,7 @@ let bbHistory = {};
 let bbLastError = "";
 let bbEldorado = { updatedAt: null, prices: {} };
 let bbPriceHistory = {};
+let bbSales = {};
 
 // ---------- bbvalues.uk ----------
 
@@ -109,7 +110,7 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
     const n = normName(it.baseName || it.name);
     byName.set(n, [...(byName.get(n) || []), it]);
   }
-  const found = {}; // key -> [usd, ...]
+  const found = {}; // key -> [offer tuple, ...]
   const fetchPage = (page) => eldoradoJson(`/api/v1/item-management/offers?gameId=203&category=CustomItem&pageIndex=${page}`
     + `&pageSize=${ELDORADO_PAGE_SIZE}&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false`
     + "&offerSortingCriterion=Price&isAscending=true");
@@ -143,17 +144,18 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
         const finisher = /finisher/i.test(title) && !/\b(no|without|w\/o|non)[\s-]*finisher/i.test(title);
         cands = cands.filter((m) => (finisher ? m.variant === "Finisher" : m.variant !== "Finisher"));
       }
-      if (cands.length === 1) (found[cands[0].key] ||= []).push(usd);
+      if (cands.length === 1) (found[cands[0].key] ||= []).push(offerTuple(r));
     }
   }
   const prices = {};
-  for (const [key, list] of Object.entries(found)) {
-    list.sort((a, b) => a - b);
+  for (const [key, offers] of Object.entries(found)) {
+    const list = offers.map((o) => o[1]).sort((a, b) => a - b);
     // Skip listings far below the rest (mislabelled items), same rule as MM2.
         const item = items.find((i) => i.key === key);
     prices[key] = {
       ...pickPrices(list), // cheapest real listing + the next one up
       listings: list.length,
+      ...listingWindow(offers.slice(0, 40), false), // every listing is scanned, so nothing hides off-window
       url: `${BB_SHOP}?searchQuery=${encodeURIComponent(item.name)}`,
     };
   }
@@ -178,8 +180,9 @@ let readBbRows;
 async function loadFromSupabase() {
   try {
     readBbRows ||= createStateReader(BB_PREFIX);
-    const { latest, history, eldorado, heartbeat, priceHistory } = await readBbRows();
+    const { latest, history, eldorado, heartbeat, priceHistory, sales } = await readBbRows();
     bbPriceHistory = priceHistory;
+    bbSales = sales;
     if (eldorado?.prices) bbEldorado = eldorado;
     if (latest?.items?.length) {
       bbItems = latest.items.map(expandBbItem);
@@ -216,8 +219,8 @@ export function startBbTracker() {
 
 function eldoradoFields(it) {
   const p = bbEldorado.prices[it.key];
-  if (!p) return {};
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd) };
+  if (!p?.usd) return {};
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
 }
 
 // Returns true if the request was handled.

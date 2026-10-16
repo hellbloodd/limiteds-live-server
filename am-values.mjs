@@ -5,7 +5,7 @@
 // unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
@@ -19,6 +19,7 @@ let amHistory = {};
 let amLastError = "";
 let amEldorado = { updatedAt: null, prices: {} };
 let amPriceHistory = {};
+let amSales = {};
 let amCategories = [];
 
 // ---------- adoptmevalues.app ----------
@@ -161,10 +162,12 @@ export async function fetchAmEldoradoPrices(items) {
       try {
         const j = await eldoradoJson("/api/v1/item-management/offers?gameId=201&category=CustomItem&pageIndex=1&pageSize=5"
           + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
-        const list = (j.results || []).map((r) => r.offer?.pricePerUnitInUSD?.amount).filter((v) => v > 0).sort((a, b) => a - b);
-        if (!list.length) continue;
+        const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
+        const list = offers.map((o) => o[1]).sort((a, b) => a - b);
+        if (!list.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; } // nothing listed now
                 prices[it.key] = {
           ...pickPrices(list), // cheapest real listing + the next one up
+          ...listingWindow(offers, (j.recordCount || 0) > offers.length),
           listings: j.recordCount || list.length,
           variant: pet ? "Fly Ride" : "",
           url: `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${pet ? "&adopt-me-traits=fr" : ""}`,
@@ -190,8 +193,9 @@ let readAmRows;
 async function loadFromSupabase() {
   try {
     readAmRows ||= createStateReader(AM_PREFIX);
-    const { latest, history, eldorado, heartbeat, priceHistory } = await readAmRows();
+    const { latest, history, eldorado, heartbeat, priceHistory, sales } = await readAmRows();
     amPriceHistory = priceHistory;
+    amSales = sales;
     if (eldorado?.prices) amEldorado = eldorado;
     if (latest?.items?.length) {
       amItems = latest.items.map(expandAmItem);
@@ -229,10 +233,10 @@ export function startAmTracker() {
 
 function eldoradoFields(it) {
   const p = amEldorado.prices[it.key];
-  if (!p) return {};
+  if (!p?.usd) return {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
-  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd) };
+  return { usd: p.usd, second: p.second ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key]) };
 }
 
 // Returns true if the request was handled.

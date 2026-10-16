@@ -483,6 +483,7 @@ $("grid").addEventListener("click", async (e) => {
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
     ${priceVsRow(i)}
+    <dt>Sold on Eldorado</dt><dd class="tabular">${i.sold7d ? `${fmt(i.sold24h)} in 24h · ${fmt(i.sold7d)} in 7d${i.soldPrice ? ` · typical sale ${usd(i.soldPrice)}` : ""}` : `<span class="dim">none seen yet — sales are tracked from now on</span>`}</dd>
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>
     ${i.valueText ? `<p class="dim">This item is valued as a trade ratio, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
