@@ -6,6 +6,16 @@ import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus } from "./sniper.mjs";
+// The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
+const recentErrors = [];
+for (const level of ["error", "warn"]) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    recentErrors.unshift(`${new Date().toISOString().slice(11, 19)} ${args.map(String).join(" ").slice(0, 300)}`);
+    recentErrors.length = Math.min(recentErrors.length, 30);
+    orig(...args);
+  };
+}
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
@@ -3626,7 +3636,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
-    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), sniper: { ...sniperStatus(), recent: undefined } });
+    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
