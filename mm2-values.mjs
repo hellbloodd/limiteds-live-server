@@ -25,6 +25,7 @@ let mm2UpdatedAt = 0;
 let mm2History = {}; // { itemKey: [[timestamp, value], ...] }
 let mm2LastError = "";
 let mm2Eldorado = { updatedAt: null, prices: {} }; // prices: { itemKey: { usd, listings, url } }
+let mm2PriceHistory = {};
 
 // ---------- Supabase ----------
 
@@ -47,13 +48,14 @@ async function supabaseFetch(path, options = {}) {
 
 // The mm2_state table holds one row per piece of state. MM2 uses unprefixed ids
 // (latest, history, ...); other games use a prefix, e.g. "bb_latest" for Blade Ball.
-const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "heartbeat"];
+const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "eldorado_history", "heartbeat"];
 
 export async function readMm2State(prefix = "", only = STATE_IDS) {
   const rows = [];
   for (const id of only) rows.push(...await supabaseFetch(`mm2_state?select=id,data&id=eq.${prefix + id}`));
   const byId = Object.fromEntries(rows.map((r) => [r.id.slice(prefix.length), r.data]));
-  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null, heartbeat: byId.heartbeat || null };
+  return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null,
+    priceHistory: byId.eldorado_history || {}, heartbeat: byId.heartbeat || null };
 }
 
 // Server side: each poll asks only for the rows' updated_at (tiny) and re-downloads just the rows
@@ -69,7 +71,8 @@ export function createStateReader(prefix = "") {
       const rows = await supabaseFetch(`mm2_state?select=id,data,updated_at&id=in.(${changed.join(",")})`);
       for (const r of rows) { data[r.id.slice(prefix.length)] = r.data; seen[r.id] = r.updated_at; }
     }
-    return { latest: data.latest || null, history: data.history || {}, eldorado: data.eldorado || null, heartbeat: data.heartbeat || null };
+    return { latest: data.latest || null, history: data.history || {}, eldorado: data.eldorado || null,
+      priceHistory: data.eldorado_history || {}, heartbeat: data.heartbeat || null };
   };
 }
 
@@ -218,6 +221,46 @@ function cleanMm2Items(items) {
   return [...byName.values()];
 }
 
+// ---------- Eldorado price history ----------
+// { itemKey: [[day, usd], ...] } where day = days since 1970 (UTC). One point per day at most, and a
+// new point only when the price differs from the previous one (so a flat price costs nothing).
+const DAY_MS = 864e5;
+const PRICE_HISTORY_MAX_POINTS = 400;
+
+export function recordPriceHistory(hist, prices, now = Date.now()) {
+  const day = Math.floor(now / DAY_MS);
+  for (const [key, p] of Object.entries(prices)) {
+    if (!(p?.usd > 0)) continue;
+    const usd = Math.round(p.usd * 100) / 100;
+    const points = hist[key] || (hist[key] = []);
+    const last = points[points.length - 1];
+    if (last && last[0] === day) {
+      last[1] = usd; // keep today's latest price
+      const prev = points[points.length - 2];
+      if (prev && prev[1] === usd) points.pop(); // back to yesterday's price: no change point needed
+    } else if (!last || last[1] !== usd) {
+      points.push([day, usd]);
+      if (points.length > PRICE_HISTORY_MAX_POINTS) points.splice(0, points.length - PRICE_HISTORY_MAX_POINTS);
+    }
+  }
+}
+
+// Price now vs 7 days / 30 days / 6 months / 1 year ago. A period is left out until we have
+// history that old (no "first price we saw" fallback - the comparison would be misleading).
+const PRICE_PERIODS = { "7d": 7, "30d": 30, "6m": 182, "1y": 365 };
+export function priceChangesFrom(points, usd) {
+  const out = {};
+  if (!points?.length || !(usd > 0)) return out;
+  const today = Math.floor(Date.now() / DAY_MS);
+  for (const [period, days] of Object.entries(PRICE_PERIODS)) {
+    const cutoff = today - days;
+    if (points[0][0] > cutoff) continue;
+    const then = points.filter(([d]) => d <= cutoff).pop()[1];
+    out[period] = { then, pct: Math.round((usd - then) / then * 1000) / 10 };
+  }
+  return out;
+}
+
 // Appends changed values to history in place. Returns true if anything changed.
 export function mergeMm2History(history, items, now) {
   let changed = false;
@@ -331,7 +374,8 @@ let readMm2Rows;
 async function loadFromSupabase() {
   try {
     readMm2Rows ||= createStateReader();
-    const { latest, history, eldorado, heartbeat } = await readMm2Rows();
+    const { latest, history, eldorado, heartbeat, priceHistory } = await readMm2Rows();
+    mm2PriceHistory = priceHistory;
     if (eldorado?.prices) mm2Eldorado = eldorado;
     if (latest?.items?.length) {
       mm2Items = latest.items;
@@ -370,7 +414,8 @@ export function startMm2Tracker() {
 function eldoradoFields(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p) return {};
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10 };
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
+    priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd) };
 }
 
 // History without points from before the item had a real value (fractional sort-order numbers below 1).
@@ -447,7 +492,7 @@ export async function handleMm2Request(url, res, sendJson) {
   if (url.pathname === "/api/mm2/history") {
     const key = url.searchParams.get("key") || "";
     const ratio = mm2Items.find((it) => it.key === key)?.valueText;
-    sendJson(res, 200, { key, points: ratio ? [] : numericHistory(key) });
+    sendJson(res, 200, { key, points: ratio ? [] : numericHistory(key), pricePoints: mm2PriceHistory[key] || [] });
     return true;
   }
   return false;

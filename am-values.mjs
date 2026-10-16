@@ -5,7 +5,7 @@
 // unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
@@ -18,6 +18,7 @@ let amUpdatedAt = 0;
 let amHistory = {};
 let amLastError = "";
 let amEldorado = { updatedAt: null, prices: {} };
+let amPriceHistory = {};
 let amCategories = [];
 
 // ---------- adoptmevalues.app ----------
@@ -190,7 +191,8 @@ let readAmRows;
 async function loadFromSupabase() {
   try {
     readAmRows ||= createStateReader(AM_PREFIX);
-    const { latest, history, eldorado, heartbeat } = await readAmRows();
+    const { latest, history, eldorado, heartbeat, priceHistory } = await readAmRows();
+    amPriceHistory = priceHistory;
     if (eldorado?.prices) amEldorado = eldorado;
     if (latest?.items?.length) {
       amItems = latest.items.map(expandAmItem);
@@ -231,7 +233,7 @@ function eldoradoFields(it) {
   if (!p) return {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10 };
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd) };
 }
 
 // Returns true if the request was handled.
@@ -256,7 +258,7 @@ export async function handleAmRequest(url, res, sendJson) {
   }
   if (url.pathname === "/api/adoptme/history") {
     const key = url.searchParams.get("key") || "";
-    sendJson(res, 200, { key, points: amHistory[key] || [] });
+    sendJson(res, 200, { key, points: amHistory[key] || [], pricePoints: amPriceHistory[key] || [] });
     return true;
   }
   return false;

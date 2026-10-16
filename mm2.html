@@ -68,6 +68,10 @@
   .card { position:relative; }
   .val.ratio { font-size:14px; }
   .val .unit { font-size:13px; }
+  .pvs { display:flex; flex-direction:column; gap:2px; }
+  .pv { font-size:12px; }
+  .pv .dim { display:inline-block; min-width:28px; }
+  .pv-note { font-size:11px; }
   .price { font-size:12px; margin-top:2px; color:var(--text); }
   .vpd { font-weight:700; }
   .periods { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-bottom:10px; font-size:13px; }
@@ -138,6 +142,17 @@ let items = [];
 // Detail rows are left out when the values site doesn't provide that field.
 // "og" -> "OG", "pet wear" -> "Pet wear"
 const catLabel = (c) => (c.length <= 2 ? c.toUpperCase() : c[0].toUpperCase() + c.slice(1));
+// "Eldorado price vs." row: today's cheapest price against 7d / 30d / 6 months / 1 year ago.
+function priceVsRow(i) {
+  const labels = { "7d": "7d", "30d": "30d", "6m": "6M", "1y": "1Y" };
+  const cells = Object.entries(labels).map(([k, label]) => {
+    const c = i.priceChanges?.[k];
+    if (!c) return `<span class="pv"><span class="dim">${label}</span> —</span>`;
+    const dir = c.pct > 0 ? "down" : c.pct < 0 ? "up" : "flat"; // cheaper is good for buyers
+    return `<span class="pv"><span class="dim">${label}</span> ${usd(c.then)} → ${usd(i.usd)} <b class="${dir}">${c.pct > 0 ? "+" : ""}${c.pct}%</b></span>`;
+  }).join("");
+  return `<dt>Eldorado price vs.</dt><dd class="tabular pvs">${cells}${Object.keys(i.priceChanges || {}).length ? "" : `<span class="dim pv-note">Tracked from now on — 7d fills in after a week.</span>`}</dd>`;
+}
 const row = (label, html) => (html ? `<dt>${label}</dt><dd>${html}</dd>` : "");
 let period = "7d";
 let medianVpd = 0;
@@ -281,6 +296,7 @@ $("grid").addEventListener("click", async (e) => {
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
+    ${priceVsRow(i)}
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>
     ${i.valueText ? `<p class="dim">This item is valued as a trade ratio, so there's no number to chart.</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}

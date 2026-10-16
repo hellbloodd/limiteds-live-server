@@ -4,7 +4,7 @@
 // can still run it by hand from a PC.
 import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
-  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers,
+  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
@@ -20,8 +20,8 @@ async function getState(prefix) {
   if (!stateCache[prefix]) {
     // Row by row, skipping Blade Ball's item list (rebuilt every run): one big read times out
     // when Supabase's free tier is busy.
-    const s = await readMm2State(prefix, prefix === "" ? undefined : ["history", "history_fetched", "eldorado"]);
-    rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado });
+    const s = await readMm2State(prefix, prefix === "" ? undefined : ["history", "history_fetched", "eldorado", "eldorado_history"]);
+    rememberRows(prefix, { latest: s.latest, history: s.history, history_fetched: s.historyFetched, eldorado: s.eldorado, eldorado_history: s.priceHistory });
     stateCache[prefix] = s;
   }
   return stateCache[prefix];
@@ -81,13 +81,29 @@ async function refreshEldorado(items, previous) {
       }
     }
   }));
-  const state = await getState("");
-  state.eldorado = { updatedAt: new Date().toISOString(), prices };
-  await writeChangedRows("", { eldorado: state.eldorado });
+  await savePrices("", await getState(""), prices);
   return { matched, priced: Object.keys(prices).length };
 }
 
 const stamp = () => new Date().toLocaleTimeString();
+
+// Saves a game's new Eldorado prices and adds them to its price history. The history row grows over
+// time, so it's written at most every 3 hours (or when the day changes) - prices themselves every time.
+const PRICE_HISTORY_SAVE_MS = 3 * 60 * 60 * 1000;
+const priceHistorySaved = {}; // prefix -> [ms, day]
+async function savePrices(prefix, state, prices) {
+  state.eldorado = { updatedAt: new Date().toISOString(), prices };
+  state.priceHistory ||= {};
+  recordPriceHistory(state.priceHistory, prices);
+  const now = Date.now(), day = Math.floor(now / 864e5);
+  const [savedAt = 0, savedDay = -1] = priceHistorySaved[prefix] || [];
+  const rows = { eldorado: state.eldorado };
+  if (now - savedAt > PRICE_HISTORY_SAVE_MS || day !== savedDay) {
+    rows.eldorado_history = state.priceHistory;
+    priceHistorySaved[prefix] = [now, day];
+  }
+  await writeChangedRows(prefix, rows);
+}
 
 // Eldorado price refreshes (hourly, a few minutes each) run in the background so a value update -
 // and the site's "Refresh now" button - never waits for them. One per game at a time.
@@ -132,8 +148,7 @@ async function pushBladeBall() {
     console.log(`[${stamp()}] Pushed ${items.length} Blade Ball values.`);
     refreshPricesInBackground("Blade Ball", eldorado?.updatedAt, async () => {
       const prices = await fetchBbEldoradoPrices(items);
-      state.eldorado = { updatedAt: new Date().toISOString(), prices };
-      await writeChangedRows(BB_PREFIX, { eldorado: state.eldorado });
+      await savePrices(BB_PREFIX, state, prices);
       return `Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed.`;
     });
     return true;
@@ -161,8 +176,7 @@ async function pushAdoptMe() {
     console.log(`[${stamp()}] Pushed ${items.length} Adopt Me values.`);
     refreshPricesInBackground("Adopt Me", eldorado?.updatedAt, async () => {
       const prices = await fetchAmEldoradoPrices(items);
-      state.eldorado = { updatedAt: new Date().toISOString(), prices };
-      await writeChangedRows(AM_PREFIX, { eldorado: state.eldorado });
+      await savePrices(AM_PREFIX, state, prices);
       return `Adopt Me Eldorado prices: ${Object.keys(prices).length} pets/eggs listed.`;
     });
     return true;
@@ -187,8 +201,7 @@ async function pushStealABrainrot() {
     console.log(`[${stamp()}] Pushed ${items.length} Steal a Brainrot values.`);
     refreshPricesInBackground("Steal a Brainrot", eldorado?.updatedAt, async () => {
       const prices = await fetchSabEldoradoPrices(items);
-      state.eldorado = { updatedAt: new Date().toISOString(), prices };
-      await writeChangedRows(SB_PREFIX, { eldorado: state.eldorado });
+      await savePrices(SB_PREFIX, state, prices);
       return `Steal a Brainrot Eldorado prices: ${Object.keys(prices).length} brainrots listed.`;
     });
     return true;

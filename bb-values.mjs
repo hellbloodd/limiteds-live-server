@@ -3,7 +3,7 @@
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
@@ -18,6 +18,7 @@ let bbUpdatedAt = 0;
 let bbHistory = {};
 let bbLastError = "";
 let bbEldorado = { updatedAt: null, prices: {} };
+let bbPriceHistory = {};
 
 // ---------- bbvalues.uk ----------
 
@@ -178,7 +179,8 @@ let readBbRows;
 async function loadFromSupabase() {
   try {
     readBbRows ||= createStateReader(BB_PREFIX);
-    const { latest, history, eldorado, heartbeat } = await readBbRows();
+    const { latest, history, eldorado, heartbeat, priceHistory } = await readBbRows();
+    bbPriceHistory = priceHistory;
     if (eldorado?.prices) bbEldorado = eldorado;
     if (latest?.items?.length) {
       bbItems = latest.items.map(expandBbItem);
@@ -216,7 +218,7 @@ export function startBbTracker() {
 function eldoradoFields(it) {
   const p = bbEldorado.prices[it.key];
   if (!p) return {};
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10 };
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd) };
 }
 
 // Returns true if the request was handled.
@@ -250,7 +252,7 @@ export async function handleBbRequest(url, res, sendJson) {
   }
   if (url.pathname === "/api/bladeball/history") {
     const key = url.searchParams.get("key") || "";
-    sendJson(res, 200, { key, points: bbHistory[key] || [] });
+    sendJson(res, 200, { key, points: bbHistory[key] || [], pricePoints: bbPriceHistory[key] || [] });
     return true;
   }
   return false;

@@ -5,7 +5,7 @@
 // schema.org Product block with the name, picture, rarity, demand and value (in Dragons -
 // Dragon Cannelloni = 1). Rarities are re-checked once a day; Secret/OG values every update.
 import {
-  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, mergeMm2History, periodChanges, sparkline,
+  curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, mergeMm2History, periodChanges, sparkline,
   eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
 
@@ -22,6 +22,7 @@ let sbUpdatedAt = 0;
 let sbHistory = {};
 let sbLastError = "";
 let sbEldorado = { updatedAt: null, prices: {} };
+let sbPriceHistory = {};
 
 // ---------- sabrvalues.com ----------
 
@@ -140,7 +141,8 @@ let readSbRows;
 async function loadFromSupabase() {
   try {
     readSbRows ||= createStateReader(SB_PREFIX);
-    const { latest, history, eldorado, heartbeat } = await readSbRows();
+    const { latest, history, eldorado, heartbeat, priceHistory } = await readSbRows();
+    sbPriceHistory = priceHistory;
     if (eldorado?.prices) sbEldorado = eldorado;
     if (latest?.items?.length) {
       sbItems = latest.items.map(expandSabItem);
@@ -178,7 +180,7 @@ function eldoradoFields(it) {
   const p = sbEldorado.prices[it.key];
   if (!p) return {};
   // Values are in Dragons, often far below 1, so keep 3 significant digits.
-  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)) };
+  return { usd: p.usd, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd) };
 }
 
 // Returns true if the request was handled.
@@ -203,7 +205,7 @@ export async function handleSabRequest(url, res, sendJson) {
   }
   if (url.pathname === "/api/stealabrainrot/history") {
     const key = url.searchParams.get("key") || "";
-    sendJson(res, 200, { key, points: sbHistory[key] || [] });
+    sendJson(res, 200, { key, points: sbHistory[key] || [], pricePoints: sbPriceHistory[key] || [] });
     return true;
   }
   return false;
