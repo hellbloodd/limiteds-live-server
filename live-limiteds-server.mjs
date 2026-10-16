@@ -4,11 +4,11 @@ import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
 import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
-import { requestRefresh, requestSelectedRefresh, startAutoUpdates } from "./updater.mjs";
+import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
+import { sniperStatus } from "./sniper.mjs";
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
-import { sniperStatus } from "./sniper.mjs";
 
 // ============================================================================
 // ARCHITECTURE
@@ -3626,6 +3626,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
+    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), sniper: { ...sniperStatus(), recent: undefined } });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

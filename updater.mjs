@@ -135,6 +135,8 @@ async function savePrices(prefix, state, allPrices, { partial = false } = {}) {
 let forcePrices = false;
 let priorityGame = null; // the game whose page clicked "Refresh now" gets its prices first
 const pricesRunning = {};
+const priceStatus = {}; // game -> { startedAt, okAt, message, errorAt, error } for /api/status
+export const updaterStatus = () => ({ running: { ...pricesRunning }, prices: priceStatus });
 const wantedPrices = []; // [game, job] collected during an update, started when it finishes
 export const pendingPrices = [];
 function refreshPricesInBackground(game, lastUpdatedAt, job) {
@@ -151,10 +153,12 @@ function startWantedPrices() {
   const firstDone = first ? new Promise((res) => { first.push(res); }) : Promise.resolve();
   for (const entry of jobs) {
     const [game, job, markDone] = entry;
+    priceStatus[game] = { ...priceStatus[game], startedAt: new Date().toISOString() };
     const run = entry === first ? job() : firstDone.then(job);
     pendingPrices.push(run.finally(() => markDone?.())
       .then(async (msg) => {
         console.log(`[${stamp()}] ${msg}`);
+        priceStatus[game] = { ...priceStatus[game], okAt: new Date().toISOString(), message: msg };
         await reloadAllTrackers();
         if (serverPort) {
           const sent = await checkDeals(game, serverPort).catch((e) => { console.error(`[${stamp()}] ${game} deal alerts failed: ${e.message}`); return 0; });
@@ -164,7 +168,7 @@ function startWantedPrices() {
             if (n) console.log(`[${stamp()}] ${game}: sent ${n} ${label} alert(s) to Discord.`);
           }
         }
-      }, (e) => console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`))
+      }, (e) => { console.error(`[${stamp()}] ${game} Eldorado price refresh failed: ${e.message}`); priceStatus[game] = { ...priceStatus[game], errorAt: new Date().toISOString(), error: e.message }; })
       .finally(() => { pricesRunning[game] = false; }));
   }
 }

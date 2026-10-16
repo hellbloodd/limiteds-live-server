@@ -203,7 +203,9 @@ export async function fetchAmEldoradoPrices(items, { frOnly = false } = {}) {
           groups[t].count++;
         }
         // versions that have a value but fewer than 2 listings in the window: ask for them directly
-        if (!full) for (const t of FILTERABLE) {
+        // (skipped for cheap pets - Fly Ride under $3 - to keep the request count down)
+        const frCheapest = Math.min(...(groups.fr?.offers || []).map((o) => o[1]));
+        if (!full && !(frCheapest < 3)) for (const t of FILTERABLE) {
           if (!(it.vals?.[t] > 0) || (groups[t]?.offers.length || 0) >= 2) continue;
           try {
             const f = await eldoradoJson(OFFERS + "pageSize=10&" + filter + `&adopt-me-traits=${t}`);

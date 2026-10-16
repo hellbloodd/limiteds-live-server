@@ -105,7 +105,7 @@ async function checkOne(game, item) {
   }
 }
 
-// busy(): true while a full Eldorado price refresh runs - the sniper then drops to 2 at a time so
+// busy(): true while a full Eldorado price refresh runs - the sniper then drops to 1 at a time so
 // the refresh still gets most of Eldorado's request budget.
 async function loop(port, busy) {
   for (;;) {
@@ -116,7 +116,7 @@ async function loop(port, busy) {
       const queue = [...hot];
       await Promise.all(Array.from({ length: PARALLEL }, async (_, w) => {
         for (let job; (job = queue.shift());) {
-          while (w >= 2 && busy()) await new Promise((r) => setTimeout(r, 5000));
+          while (w >= 1 && busy()) await new Promise((r) => setTimeout(r, 5000));
           await checkOne(job.game, job.item).catch(() => {});
         }
       }));
