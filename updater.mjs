@@ -7,7 +7,7 @@ import {
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
   detectSales, mergeSales,
 } from "./mm2-values.mjs";
-import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem } from "./bb-values.mjs";
+import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem, expandBbItem } from "./bb-values.mjs";
 import { AM_PREFIX, scrapeAmValues, fetchAmEldoradoPrices, compactAmItem, fetchAmHistory } from "./am-values.mjs";
 import { SB_PREFIX, scrapeSabValues, fetchSabEldoradoPrices, compactSabItem } from "./sab-values.mjs";
 import { checkDeals, checkFlips } from "./deals.mjs";
@@ -194,6 +194,16 @@ async function pushBladeBall() {
     return true;
   } catch (e) {
     console.error(`[${stamp()}] Blade Ball push failed: ${e.message}`);
+    // bbvalues.uk down: Eldorado prices still refresh, using the last saved values.
+    try {
+      const state = await getState(BB_PREFIX);
+      const items = lastItems[BB_PREFIX] || (state.latest?.items || []).map(expandBbItem);
+      if (items.length) refreshPricesInBackground("Blade Ball", state.eldorado?.updatedAt, async () => {
+        const prices = await fetchBbEldoradoPrices(items);
+        await savePrices(BB_PREFIX, state, prices);
+        return `Blade Ball Eldorado prices: ${Object.keys(prices).length} items listed (values from the last update).`;
+      });
+    } catch { /* nothing saved yet */ }
     return false;
   }
 }

@@ -30,7 +30,7 @@ async function bbJson(path) {
   let text;
   for (let attempt = 1; ; attempt++) {
     try { text = await curlGet(BB_ORIGIN + path, BB_API_HEADERS); break; } catch (e) {
-      if (attempt >= 40) throw new Error(`bbvalues.uk unavailable (${e.message})`);
+      if (attempt >= 4) throw new Error(`bbvalues.uk unavailable (${e.message})`); // the next update tries again
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
@@ -187,10 +187,14 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
 export function compactBbItem(it) {
   return [it.key, it.name, it.category, it.value, it.stability, it.rarity, it.origin, it.change24h];
 }
-const expandBbItem = (it) => {
+export const expandBbItem = (it) => {
   if (!Array.isArray(it)) return { ...it, image: bbImage(it.key), sourceUrl: `${BB_ORIGIN}/values/` };
   const [key, name, category, value, stability, rarity, origin, change24h] = it;
-  return { key, name, category, value, stability, rarity, origin, change24h, demand: null, image: bbImage(key), sourceUrl: `${BB_ORIGIN}/values/` };
+  // baseName/variant rebuilt from the name ("Fire Dragon (Finisher)") for Eldorado matching
+  const m = String(name).match(/^(.*) \(([^)]*)\)$/);
+  const labels = m ? m[2].split(", ") : [];
+  const variant = labels.find((l) => ["Finisher", "No Finisher", "Accessory"].includes(l)) || "";
+  return { key, name, baseName: m ? m[1] : name, variant, category, value, stability, rarity, origin, change24h, demand: null, image: bbImage(key), sourceUrl: `${BB_ORIGIN}/values/` };
 };
 const bbImage = (key) => `${BB_IMAGES}/${encodeURIComponent(`${key}.webp`)}`;
 
