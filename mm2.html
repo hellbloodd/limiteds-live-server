@@ -84,9 +84,127 @@
   .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
   a { color:var(--accent); }
   .empty { color:var(--muted); padding:40px 16px; text-align:center; grid-column:1/-1; }
+
+  /* ================= Design layer: glass, glow and motion ================= */
+  :root { --accent-2:#f0c96b; --glow:#d9a44155; --glass:rgba(18,22,31,.62); --ease:cubic-bezier(.2,.8,.2,1); }
+  html[data-game="bladeball"] { --accent:#5b9dff; --accent-2:#a77bff; --accent-soft:#5b9dff22; --glow:#5b9dff55; }
+  html[data-game="adoptme"] { --accent:#ff7eb6; --accent-2:#ffb36b; --accent-soft:#ff7eb622; --glow:#ff7eb655; }
+  html[data-game="stealabrainrot"] { --accent:#34d399; --accent-2:#a3e635; --accent-soft:#34d39922; --glow:#34d39955; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --glass:rgba(255,255,255,.7); } }
+
+  body { min-height:100vh; overflow-x:hidden; }
+  /* drifting colour glows + faint grid behind everything */
+  body::before, body::after { content:""; position:fixed; z-index:-1; pointer-events:none; border-radius:50%; filter:blur(90px); opacity:.55; }
+  body::before { width:620px; height:620px; top:-220px; left:-160px; background:radial-gradient(circle, var(--glow), transparent 70%); animation:drift1 26s ease-in-out infinite alternate; }
+  body::after { width:560px; height:560px; bottom:-240px; right:-140px; background:radial-gradient(circle, color-mix(in srgb, var(--accent-2) 35%, transparent), transparent 70%); animation:drift2 32s ease-in-out infinite alternate; }
+  .bg-grid { position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.35;
+    background-image:linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size:48px 48px; mask-image:radial-gradient(ellipse at 50% 0%, #000 0%, transparent 70%); }
+  @keyframes drift1 { to { transform:translate(140px, 90px) scale(1.15); } }
+  @keyframes drift2 { to { transform:translate(-120px, -70px) scale(1.1); } }
+
+  /* sticky glass header */
+  header { position:sticky; top:0; z-index:20; background:var(--glass); backdrop-filter:blur(14px) saturate(140%); -webkit-backdrop-filter:blur(14px) saturate(140%); border-bottom:1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+  .brand-mark { background:linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow:0 0 0 1px #ffffff14 inset, 0 6px 18px -6px var(--glow); position:relative; overflow:hidden; }
+  .brand-mark::after { content:""; position:absolute; inset:0; background:linear-gradient(110deg, transparent 30%, #ffffff66 50%, transparent 70%); transform:translateX(-120%); animation:shine 5s var(--ease) infinite; }
+  @keyframes shine { 0%, 70% { transform:translateX(-120%); } 100% { transform:translateX(120%); } }
+
+  /* tabs */
+  .tab { transition:color .2s, border-color .2s, background .2s, transform .2s var(--ease); background:color-mix(in srgb, var(--surface) 60%, transparent); }
+  .tab:hover { transform:translateY(-1px); }
+  .tab.active { background:linear-gradient(135deg, var(--accent-soft), transparent); box-shadow:0 0 18px -6px var(--glow); }
+
+  /* hero */
+  .hero { display:flex; justify-content:space-between; align-items:flex-end; gap:18px; flex-wrap:wrap; padding:22px 0 14px; animation:rise .6s var(--ease) both; }
+  .hero h1 { margin:0; font:700 clamp(24px, 4vw, 38px)/1.1 "Unbounded", sans-serif; letter-spacing:-.02em;
+    background:linear-gradient(100deg, var(--text) 10%, var(--accent) 55%, var(--accent-2) 90%); -webkit-background-clip:text; background-clip:text; color:transparent;
+    background-size:200% 100%; animation:hue-slide 8s ease-in-out infinite alternate; }
+  @keyframes hue-slide { to { background-position:100% 0; } }
+  .hero p { margin:6px 0 0; }
+  .tiles { display:grid; grid-template-columns:repeat(4, minmax(120px, 1fr)); gap:10px; flex:1 1 520px; max-width:720px; }
+  .tile { background:var(--glass); backdrop-filter:blur(10px); border:1px solid var(--border); border-radius:14px; padding:10px 12px; display:flex; flex-direction:column; gap:2px; min-width:0;
+    animation:rise .6s var(--ease) both; transition:transform .25s var(--ease), border-color .25s; }
+  .tile:nth-child(2) { animation-delay:.06s; } .tile:nth-child(3) { animation-delay:.12s; } .tile:nth-child(4) { animation-delay:.18s; }
+  .tile:hover { transform:translateY(-2px); border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); }
+  .tile span { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .tile b { font:700 19px "JetBrains Mono", monospace; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile b.small { font:700 14px "Manrope", sans-serif; }
+  .tile small { color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:640px) { .tiles { grid-template-columns:repeat(2, 1fr); } }
+
+  /* control panel */
+  .panel { background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border:1px solid var(--border); border-radius:16px; padding:12px 14px 2px; margin-bottom:14px; animation:rise .6s .1s var(--ease) both; }
+  .controls { padding-top:0; }
+  input, select { transition:border-color .2s, box-shadow .2s, background .2s; background:color-mix(in srgb, var(--surface) 80%, transparent); }
+  input:focus, select:focus { box-shadow:0 0 0 3px var(--accent-soft), 0 0 22px -8px var(--glow); }
+  .periods button, .range, .refresh { transition:all .2s var(--ease); }
+  .periods button:hover, .range:hover { color:var(--text); border-color:var(--muted-2); }
+  .periods button.on, .range.on { box-shadow:0 0 14px -6px var(--glow); }
+  .refresh { display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, var(--accent-soft), transparent); border-color:color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .refresh:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 18px -8px var(--glow); }
+  .refresh .ico { display:inline-block; }
+  .refresh:disabled .ico { animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #refresh-status:not(:empty) { padding:3px 10px; border-radius:999px; background:var(--accent-soft); color:var(--text); animation:pop .35s var(--ease); }
+
+  /* cards */
+  .grid { gap:12px; }
+  .card { background:linear-gradient(160deg, color-mix(in srgb, var(--surface) 92%, var(--accent) 8%), var(--surface)); border-color:color-mix(in srgb, var(--border) 85%, transparent);
+    transition:transform .3s var(--ease), box-shadow .3s var(--ease), border-color .3s; animation:rise .5s var(--ease) both; animation-delay:var(--d, 0ms); isolation:isolate; overflow:hidden; }
+  .card::before { content:""; position:absolute; inset:-1px; border-radius:inherit; padding:1px; z-index:-1; opacity:0; transition:opacity .3s;
+    background:linear-gradient(135deg, var(--accent), transparent 40%, transparent 60%, var(--accent-2));
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude; }
+  .card::after { content:""; position:absolute; inset:0; z-index:-1; opacity:0; transition:opacity .3s; background:radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), var(--accent-soft), transparent 60%); }
+  .card:hover { transform:translateY(-4px); box-shadow:0 18px 40px -22px var(--glow), 0 8px 18px -12px #000a; border-color:transparent; }
+  .card:hover::before, .card:hover::after { opacity:1; }
+  .card img { transition:transform .45s var(--ease); background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); }
+  .card:hover img { transform:scale(1.08) rotate(-2deg); }
+  .card:active { transform:translateY(-1px) scale(.99); }
+  .badge { display:inline-block; vertical-align:1px; margin-left:4px; font:800 10px "Manrope", sans-serif; letter-spacing:.04em; padding:3px 8px; border-radius:999px;
+    color:#1b1305; background:linear-gradient(135deg, #ffb347, #ff6a3d); box-shadow:0 4px 14px -4px #ff6a3d99; animation:pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 4px 22px -2px #ff6a3dcc; transform:scale(1.05); } }
+  .val { background:linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .val .unit { -webkit-text-fill-color:initial; }
+  svg.spark polyline { stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1s .2s var(--ease) forwards; }
+
+  /* skeleton loading */
+  .skel { height:96px; border-radius:14px; border:1px solid var(--border);
+    background:linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size:300% 100%; animation:shimmer 1.4s ease-in-out infinite; }
+  @keyframes shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+
+  /* detail dialog */
+  dialog { border-color:color-mix(in srgb, var(--accent) 30%, var(--border)); box-shadow:0 30px 80px -30px #000, 0 0 60px -30px var(--glow);
+    background:linear-gradient(170deg, color-mix(in srgb, var(--surface) 90%, var(--accent) 10%), var(--surface) 40%); }
+  dialog[open] { animation:zoom .35s var(--ease); }
+  dialog::backdrop { background:rgba(4,6,10,.55); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); animation:fade .3s; }
+  .d-head { display:flex; gap:14px; align-items:center; margin-bottom:4px; }
+  .d-head img { width:84px; height:84px; object-fit:contain; border-radius:16px; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); animation:float 4s ease-in-out infinite; }
+  @keyframes float { 50% { transform:translateY(-4px) rotate(1deg); } }
+  .ptable div { transition:transform .2s var(--ease); } .ptable div:hover { transform:translateY(-2px); }
+  .close { transition:transform .2s, color .2s; } .close:hover { transform:rotate(90deg); color:var(--text); }
+  svg.chart .line { stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1.1s var(--ease) forwards; }
+  svg.chart .area { opacity:0; animation:fade .8s .5s forwards; }
+
+  /* back to top */
+  .to-top { position:fixed; right:18px; bottom:18px; z-index:15; width:42px; height:42px; border-radius:50%; border:1px solid var(--border); cursor:pointer;
+    background:var(--glass); backdrop-filter:blur(10px); color:var(--text); font-size:18px; opacity:0; transform:translateY(12px); pointer-events:none; transition:all .3s var(--ease); }
+  .to-top.show { opacity:1; transform:none; pointer-events:auto; }
+  .to-top:hover { border-color:var(--accent); box-shadow:0 0 20px -6px var(--glow); }
+
+  @keyframes rise { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+  @keyframes fade { from { opacity:0; } to { opacity:1; } }
+  @keyframes pop { from { opacity:0; transform:scale(.92); } to { opacity:1; transform:none; } }
+  @keyframes zoom { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
+  @keyframes draw { to { stroke-dashoffset:0; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation:none !important; transition:none !important; }
+    svg.spark polyline, svg.chart .line { stroke-dasharray:none; stroke-dashoffset:0; }
+    svg.chart .area { opacity:1; }
+  }
 </style>
 </head>
 <body>
+<div class="bg-grid" aria-hidden="true"></div>
 <header>
   <div class="wrap top">
     <a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a>
@@ -100,6 +218,19 @@
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
   </nav>
+  <section class="hero">
+    <div>
+      <h1 id="hero-title">Values</h1>
+      <p id="hero-sub" class="dim"></p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span>Items</span><b id="t-items" class="tabular">—</b><small id="t-items-sub">&nbsp;</small></div>
+      <div class="tile"><span>On Eldorado</span><b id="t-priced" class="tabular">—</b><small id="t-priced-sub">&nbsp;</small></div>
+      <div class="tile"><span>Best deal now</span><b id="t-deal" class="small">—</b><small id="t-deal-sub">&nbsp;</small></div>
+      <div class="tile"><span>Updated</span><b id="t-updated" class="tabular">—</b><small id="t-updated-sub">&nbsp;</small></div>
+    </div>
+  </section>
+  <div class="panel">
   <div class="controls">
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
     <select id="cat"><option value="">All categories</option><option value="deals">🔥 Best deals</option></select>
@@ -120,12 +251,14 @@
   </div>
   <div class="stats-row">
     <div class="stats" id="stats"></div>
-    <button id="refresh" class="refresh" type="button">↻ Refresh now</button>
+    <button id="refresh" class="refresh" type="button"><span class="ico">↻</span> Refresh now</button>
     <span id="refresh-status" class="dim"></span>
   </div>
-  <div class="grid" id="grid"><div class="empty">Loading values… (the server may be waking up, give it ~30s)</div></div>
+  </div>
+  <div class="grid" id="grid"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
 </div>
 
+<button class="to-top" id="to-top" type="button" aria-label="Back to top">↑</button>
 <dialog id="dlg">
   <button class="close" onclick="dlg.close()" aria-label="Close">×</button>
   <div id="detail"></div>
@@ -136,6 +269,9 @@
 const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "supremevalues.com",
   sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
 document.title = `${GAME.title} · Agony Values`;
+document.documentElement.dataset.game = GAME.tab; // per-game accent colours
+document.getElementById("hero-title").textContent = GAME.title;
+document.getElementById("hero-sub").textContent = `Live ${GAME.noun} values from ${GAME.sourceName}, with Eldorado.gg prices.`;
 document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === GAME.tab));
 document.getElementById("q").placeholder = `Search ${GAME.noun}…`;
 let items = [];
@@ -171,6 +307,52 @@ const fmt = (n) => n == null ? "N/A" : n.toLocaleString();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
 
+// Animated number for the hero tiles.
+function countUp(el, to, format = (n) => Math.round(n).toLocaleString()) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { el.textContent = format(to); return; }
+  const from = Number(el.dataset.n || 0), t0 = performance.now(), dur = 900;
+  el.dataset.n = to;
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = format(from + (to - from) * e);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+const ago = (iso) => {
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return !iso ? "—" : m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+};
+// How many times better an item's value per $ is than items of similar value (within 2x) -
+// the same rule the Discord deal alerts use. dealX[key] >= 2.5 is a deal.
+let dealX = {};
+function computeDeals() {
+  dealX = {};
+  const priced = items.filter((i) => i.valuePerUsd > 0 && i.usd > 0).sort((a, b) => a.value - b.value);
+  let lo = 0, hi = 0;
+  for (const i of priced) {
+    while (priced[lo].value < i.value / 2) lo++;
+    while (hi < priced.length && priced[hi].value <= i.value * 2) hi++;
+    if (i.usd < 3 || (i.listings ?? 0) < 2 || hi - lo - 1 < 6) continue;
+    const peers = priced.slice(lo, hi).filter((p) => p !== i).map((p) => p.valuePerUsd).sort((a, b) => a - b);
+    dealX[i.key] = i.valuePerUsd / peers[peers.length >> 1];
+  }
+}
+const isDeal = (i) => (dealX[i.key] || 0) >= 2.5;
+
+function fillHero(data) {
+  countUp($("t-items"), items.length);
+  $("t-items-sub").textContent = `${(data.categories || []).length} categories`;
+  const priced = items.filter((i) => i.usd).length;
+  countUp($("t-priced"), priced);
+  $("t-priced-sub").textContent = priced ? `typical ${fmtVpd(medianVpd)} value / $` : "no prices yet";
+  const best = items.filter(isDeal).sort((a, b) => dealX[b.key] - dealX[a.key])[0];
+  $("t-deal").textContent = best ? best.name : "None right now";
+  $("t-deal-sub").textContent = best ? `${usd(best.usd)} · ${dealX[best.key].toFixed(1)}× similar items` : "checked every 15 min";
+  $("t-updated").textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  $("t-updated-sub").textContent = data.pricesUpdatedAt ? `prices ${ago(data.pricesUpdatedAt)}` : " ";
+}
+
 let lastUpdatedAt = null;
 let lastPricesAt = null;
 async function load() {
@@ -185,6 +367,8 @@ async function load() {
     const cat = $("cat");
     if (cat.options.length === 2) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}`;
+    computeDeals();
+    fillHero(data);
     render();
   } catch (e) {
     $("grid").innerHTML = `<div class="empty">Couldn't load values: ${esc(e.message)}</div>`;
@@ -196,7 +380,7 @@ function render() {
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
   const deals = c === "deals";
   const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q))
-    && (deals ? i.valuePerUsd >= medianVpd * 1.25 : !c || i.category === c));
+    && (deals ? isDeal(i) : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
@@ -204,16 +388,17 @@ function render() {
     demand: (a, b) => v(b.demand) - v(a.demand),
     vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
-  list.sort(deals && s === "value" ? sorters.vpd : sorters[s]);
-  $("grid").innerHTML = list.length ? list.map((i) => `
-    <div class="card" data-key="${esc(i.key)}">
+  list.sort(deals && s === "value" ? (a, b) => dealX[b.key] - dealX[a.key] : sorters[s]);
+  $("grid").innerHTML = list.length ? list.map((i, n) => `
+    <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
+
       <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
       <div>
         <div class="name">${esc(i.name)}</div>
         <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
-        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
+        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${isDeal(i) ? ` <span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>` : ""}</div>` : ""}
       </div>
       ${spark(i.spark)}
     </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
@@ -226,7 +411,7 @@ function spark(vals) {
   const pts = vals.map((v, k) => `${(k / (vals.length - 1) * W).toFixed(1)},${(H - 2 - (v - lo) / (hi - lo || 1) * (H - 4)).toFixed(1)}`).join(" ");
   const dir = vals[vals.length - 1] - vals[0];
   const color = dir > 0 ? "var(--green)" : dir < 0 ? "var(--red)" : "var(--muted-2)";
-  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts}" pathLength="1" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
 const RANGES = [["1M", 30], ["3M", 90], ["1Y", 365], ["All", 0]];
@@ -260,8 +445,8 @@ function chartView(allPoints, days) {
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" data-x0="${x0}" data-x1="${x1}">
       <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".25"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
       ${grid}
-      <path d="${area}" fill="url(#g)"/>
-      <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+      <path class="area" d="${area}" fill="url(#g)"/>
+      <path class="line" d="${d}" pathLength="1" fill="none" stroke="var(--accent)" stroke-width="2"/>
       <text x="${L}" y="${H - 6}">${dfmt(x0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">Today</text>
       <line id="cursor" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
     </svg>
@@ -290,7 +475,7 @@ function mountChart(points) {
 $("grid").addEventListener("click", async (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   const i = items.find((x) => x.key === card.dataset.key);
-  $("detail").innerHTML = `<h2>${esc(i.name)}</h2><div class="cat">${esc(catLabel(i.category))}</div>
+  $("detail").innerHTML = `<div class="d-head">${i.image ? `<img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<div><h2>${esc(i.name)}</h2><div class="cat">${esc(catLabel(i.category))}</div></div></div>
     <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unitName ? ` ${esc(GAME.unitName)}` : ""}</dd>${row("Range", i.range && i.range !== "[N/A]" ? esc(i.range) : "")}
     ${row("Stability", esc(i.stability))}${row("Demand", i.demand != null ? fmt(i.demand) : "")}
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
@@ -309,6 +494,14 @@ $("grid").addEventListener("click", async (e) => {
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+$("grid").addEventListener("pointermove", (e) => {
+  const card = e.target.closest(".card"); if (!card) return;
+  const r = card.getBoundingClientRect();
+  card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+  card.style.setProperty("--my", `${e.clientY - r.top}px`);
+});
+addEventListener("scroll", () => $("to-top").classList.toggle("show", scrollY > 600), { passive: true });
+$("to-top").addEventListener("click", () => scrollTo({ top: 0, behavior: "smooth" }));
 $("periods").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]"); if (!b) return;
   period = b.dataset.p;
