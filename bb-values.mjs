@@ -97,6 +97,7 @@ const normName = (s) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g,
 function titleName(title) {
   const lead = String(title)
     .replace(/^[^\p{L}\p{N}]+/u, "") // leading emoji / symbols
+    .replace(/^(roblox\s*)?(blade\s*ball|bb)\s*[>»:|\-–—]+\s*/i, "") // "Blade Ball > Ace Emote"
     .split(/\s[-–—|:]\s|[|【\[(♨⚡✅🔥⭐🌟🔴🟢]|\s{2,}/u)[0];
   return normName(lead
     // "+ Finisher", "w/ Finisher", "No Finisher", "without finisher" ... and anything after it
@@ -119,16 +120,28 @@ export async function fetchBbEldoradoPrices(items, onProgress = () => {}) {
   const totalPages = Math.min(first.totalPages || 1, ELDORADO_MAX_PAGES);
   const pages = [first];
   const queue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
-  await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
-    // a page Eldorado refuses (429) is skipped rather than failing the whole scan
-    for (let page; (page = queue.shift());) pages.push(await fetchPage(page).catch(() => { failedPages++; return { results: [] }; }));
-  }));
+  // A page Eldorado refuses (429) is retried in later rounds - a skipped page hides its listings
+  // (often the cheapest ones), so every page has to come back.
+  for (let round = 0; queue.length && round < 5; round++) {
+    if (round) await new Promise((r) => setTimeout(r, 5000 * round));
+    const failed = [];
+    await Promise.all(Array.from({ length: round ? 2 : ELDORADO_WORKERS }, async () => {
+      for (let page; (page = queue.shift());) {
+        try { pages.push(await fetchPage(page)); } catch { failed.push(page); }
+      }
+    }));
+    queue.push(...failed);
+  }
+  failedPages = queue.length;
+  if (failedPages) console.warn(`Blade Ball Eldorado scan: ${failedPages} page(s) still missing after retries.`);
   onProgress(totalPages, totalPages);
   for (const j of pages) {
     for (const r of j.results || []) {
       const usd = r.offer?.pricePerUnitInUSD?.amount;
       const title = r.offer?.offerTitle || "";
       if (!(usd > 0)) continue;
+      // bundles ("Ace Set | Sword + Emote + Explosion", "Ace, astral bow, crystal greatblade...") aren't one item's price
+      if (/\b(set|bundle|pack|lot)\b/i.test(title) || (title.match(/,/g) || []).length >= 2 || (title.match(/\+/g) || []).length >= 2) continue;
       // Sellers write "Blue Bunny Scythe Emote" or "Blue Bunny Scythe | Emote" for the emote, so
       // "emote"/"explosion" anywhere in the title decides the category; otherwise it's the sword.
       const kind = /\bemotes?\b/i.test(title) ? "emotes" : /\bexplosions?\b/i.test(title) ? "explosions" : "swords";
