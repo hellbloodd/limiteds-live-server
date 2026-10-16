@@ -49,6 +49,12 @@
       <button class="btn" id="add" type="button">Add listing</button>
       <div class="msg" id="msg" style="flex-basis:100%"></div>
     </div>
+    <div class="panel">
+      <div class="field grow"><label for="eld-user">Your Eldorado username — your listings sync automatically every 15 min</label>
+        <input id="eld-user" type="text" placeholder="e.g. HellBlood" autocomplete="off"></div>
+      <button class="btn" id="eld-save" type="button">Save &amp; sync now</button>
+      <div class="msg" id="eld-msg" style="flex-basis:100%"></div>
+    </div>
     <div class="tbl">
       <div class="head"><span>Item</span><span class="num">Your price</span><span class="num">Cheapest now</span><span class="num">Next</span><span class="num">Status</span><span>Advice</span><span></span></div>
       <div id="rows"></div>
@@ -97,13 +103,13 @@ async function load() {
         : undercut ? `Relist at <b>${money(Math.max(0.01, cheapest - 0.01))}</b>`
         : next ? `You're cheapest — room up to <b>${money(next - 0.01)}</b>` : `You're the only/cheapest listing`;
       return `<div class="row" style="--d:${Math.min(n, 20) * 25}ms">
-        <div class="item"><div style="min-width:0"><div class="name">${esc(w.name)}</div><span class="chip">${esc(w.game)}</span></div></div>
+        <div class="item"><div style="min-width:0"><div class="name" title="${esc(w.title || w.name)}">${esc(w.name)}</div><span class="chip">${esc(w.game)}</span>${w.source === "eldorado" ? `<span class="chip" title="Synced from your Eldorado shop">⟳ Eldorado${w.qty > 1 ? ` ×${w.qty}` : ""}</span>` : ""}${w.key ? "" : `<span class="dim" style="font-size:11px">not matched to a tracked item</span>`}</div></div>
         <div class="num tabular" data-label="Your price">${money(w.myPrice)}</div>
         <div class="num tabular" data-label="Cheapest now">${money(cheapest)}</div>
         <div class="num tabular dim" data-label="Next">${money(next)}</div>
         <div class="num" data-label="Status">${cheapest == null ? `<span class="dim">—</span>` : undercut ? `<b class="down">Undercut</b>` : `<b class="up">Cheapest</b>`}</div>
         <div data-label="Advice">${advice}</div>
-        <button class="btn ghost" data-del="${esc(w.id)}" type="button">Remove</button>
+        ${w.source === "eldorado" ? `<span class="dim" style="font-size:11px;text-align:center">synced</span>` : `<button class="btn ghost" data-del="${esc(w.id)}" type="button">Remove</button>`}
       </div>`;
     }).join("") : `<div class="empty">No listings yet — add the items you're selling above.</div>`;
     $("t-count").textContent = entries.length; $("t-under").textContent = under; $("t-top").textContent = top;
@@ -113,7 +119,22 @@ async function load() {
   }
 }
 
-$("unlock").addEventListener("click", () => { key = $("key").value.trim(); try { localStorage.setItem("ownerKey", key); } catch {} load(); });
+async function loadSettings() {
+  try { const s = await api("/api/owner-settings"); if (s.eldoradoUser) { $("eld-user").value = s.eldoradoUser; $("eld-msg").textContent = `Synced with Eldorado user ${s.eldoradoUser}.`; } } catch { /* locked */ }
+}
+$("eld-save").addEventListener("click", async () => {
+  $("eld-msg").textContent = "Looking you up on Eldorado…";
+  try {
+    const s = await api("/api/owner-settings", { method: "POST", body: JSON.stringify({ eldoradoUser: $("eld-user").value.trim() }) });
+    if (!s.eldoradoUser) { $("eld-msg").textContent = "Eldorado sync turned off."; return; }
+    $("eld-msg").textContent = `Found ${s.eldoradoUser} — syncing your listings…`;
+    const r = await api("/api/sync-listings", { method: "POST" });
+    const total = Object.values(r).reduce((n, x) => n + (x?.listings || 0), 0);
+    $("eld-msg").textContent = `Synced ✓ ${total} listing${total === 1 ? "" : "s"} found on Eldorado.`;
+    load();
+  } catch (e) { $("eld-msg").textContent = e.message; }
+});
+$("unlock").addEventListener("click", () => { key = $("key").value.trim(); try { localStorage.setItem("ownerKey", key); } catch {} load().then(loadSettings); });
 $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("unlock").click(); });
 $("add").addEventListener("click", async () => {
   if (!picked) { $("msg").textContent = "Pick an item from the list first."; return; }
@@ -128,7 +149,7 @@ $("rows").addEventListener("click", async (e) => {
   await api(`/api/watchlist?id=${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }).catch((err) => { $("msg").textContent = err.message; });
   load();
 });
-load();
+load().then(loadSettings);
 setInterval(load, 5 * 60 * 1000);
 </script>
 </body>
