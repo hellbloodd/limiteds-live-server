@@ -11,4 +11,6 @@ echo Saved. The booster will start by itself from now on.
 :run
 set /p OWNER_KEY=<booster-key.txt
 node booster.mjs
+rem hidden mode (run-booster-hidden.vbs): restart after a crash instead of waiting for a key press
+if /i "%~1"=="hidden" (timeout /t 30 /nobreak >nul & goto run)
 pause
