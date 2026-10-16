@@ -6,7 +6,10 @@
 // drops another 10% or a day has passed.
 import { readRow, writeMm2Row } from "./mm2-values.mjs";
 
-const WEBHOOK = process.env.DISCORD_WEBHOOK_URL || "";
+// DISCORD_WEBHOOK_URL, or any environment variable holding a Discord webhook link.
+const isWebhook = (v) => /^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(String(v || "").trim());
+const WEBHOOK = (isWebhook(process.env.DISCORD_WEBHOOK_URL) ? process.env.DISCORD_WEBHOOK_URL
+  : Object.values(process.env).find(isWebhook) || "").trim();
 const DEAL_MULT = Number(process.env.DEAL_MULTIPLIER || 2.5); // x value per $ of similar-value items
 const MIN_USD = Number(process.env.DEAL_MIN_USD || 3);        // $1-ish listings are just Eldorado's price floor
 const MIN_LISTINGS = 2;                                       // one lone listing isn't a market
