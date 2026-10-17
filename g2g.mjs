@@ -2,7 +2,7 @@
 // items category, filtered by game, cheapest first, grouped per item). Refreshed every 15 minutes;
 // G2G has its own request budget, separate from Eldorado's. Kept in Supabase row "g2g_prices".
 import { readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
-import { registerMarket } from "./markets.mjs";
+import { registerMarket, listingHasFinisher, itemIsFinisher, finKey } from "./markets.mjs";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const GAME_IDS = { "MM2": "928871b7", "Blade Ball": "941f9c83", "Adopt Me": "150df5a4", "Steal a Brainrot": "7840f705" };
@@ -29,6 +29,7 @@ export async function fetchG2gGame(game) {
       // MM2 names on G2G carry the type and year ("Icepiercer Gun 2022"); ours don't
       let id = norm(game === "MM2" ? parts[1].replace(/\b(19|20)\d{2}\b/g, "").replace(/\b(gun|knife)\s*$/i, "") : parts[1]);
       if (game === "Adopt Me" && parts[2]) { const code = AM_CODES[parts[2].toLowerCase()]; if (code) id += `|${code}`; }
+      if (game === "Blade Ball") id = finKey(id, listingHasFinisher(x.title));
       if (game === "Steal a Brainrot" && parts.length >= 4 && !/no mutation/i.test(parts[3])) continue; // mutated brainrots are priced differently
       // the item's G2G page with all its sellers, cheapest first
       const fa = String(x.offer_group || "").split("/").filter(Boolean).map((g) => g.replace("#", ":")).join("|");
@@ -49,14 +50,14 @@ export async function g2gRefresh() {
     try { games[game] = await fetchG2gGame(game); }
     catch (e) { console.warn(`G2G ${game} prices failed: ${e.message}`); }
   }
-  data = { v: 2, updatedAt: new Date().toISOString(), games };
+  data = { v: 3, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("g2g_prices", data).catch(() => {});
 }
 
 export function startG2g() {
   registerMarket("G2G", g2gPrice);
   (async () => {
-    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 2) data = saved; } // v2: exact listing links + MM2 names
+    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 3) data = saved; } // v2: exact listing links + MM2 names
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await g2gRefresh().catch(() => {});
   })();
   setInterval(() => g2gRefresh().catch(() => {}), EVERY_MS).unref();
@@ -67,7 +68,7 @@ export function g2gPrice(game, name, code = "") {
   const g = data.games[game];
   if (!g) return null;
   const base = norm(String(name).replace(/ \((No )?Finisher\)$/i, ""));
-  const hit = (code && g[`${base}|${code}`]) || (!code || code === "fr" ? g[base] : null);
+  const hit = game === "Blade Ball" ? g[finKey(base, itemIsFinisher(name))] : (code && g[`${base}|${code}`]) || (!code || code === "fr" ? g[base] : null);
   if (!hit) return null;
   return { ...hit, url: hit.url || `https://www.g2g.com/search?q=${encodeURIComponent(name.replace(/ \([^)]*\)$/, ""))}` };
 }

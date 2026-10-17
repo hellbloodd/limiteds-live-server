@@ -58,6 +58,12 @@ export function robustMin(prices) {
   return s.find((v) => v >= median * 0.5) ?? s[0];
 }
 
+// Blade Ball: a listing is the Finisher version only if it says "finisher" (and not "no / without
+// finisher"). Our items: "X (Finisher)" vs "X (No Finisher)" / plain.
+export const listingHasFinisher = (title) => /finisher/i.test(title) && !/\b(no|without|w\/o|non)[\s-]*finisher/i.test(title);
+export const itemIsFinisher = (name) => /\(Finisher\)$/i.test(String(name));
+export const finKey = (id, finisher) => (finisher ? `${id}|fin` : id);
+
 // Adopt Me version written in a title -> our trait code (null if it doesn't say).
 export function amCode(title) {
   // "Adopt Me > Skelicorn > M" style: the last part is the version

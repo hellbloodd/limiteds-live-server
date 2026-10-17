@@ -2,7 +2,7 @@
 // cheapest price per item; we keep them (Supabase rows "market_gameboost" / "market_itemku") and
 // offer them to the Flip Finder like G2G/U7BUY. Prices older than 6 hours aren't used.
 import { readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
-import { registerMarket, words } from "./markets.mjs";
+import { registerMarket, words, itemIsFinisher, finKey } from "./markets.mjs";
 
 const MAX_AGE_MS = 6 * 3600 * 1000;
 const SEARCH = {
@@ -17,7 +17,7 @@ function lookup(market) {
     const d = store[market];
     if (!d?.games?.[game] || Date.now() - (Date.parse(d.updatedAt) || 0) > MAX_AGE_MS) return null;
     const base = words(String(name).replace(/ \((No )?Finisher\)$/i, "").replace(/ \([^)]*\)$/, ""));
-    const hit = game === "Adopt Me" ? d.games[game][`${base}|${code || "fr"}`] : d.games[game][base];
+    const hit = game === "Adopt Me" ? d.games[game][`${base}|${code || "fr"}`] : d.games[game][game === "Blade Ball" ? finKey(base, itemIsFinisher(name)) : base];
     if (!hit) return null;
     const q = encodeURIComponent(name.replace(/ \([^)]*\)$/, ""));
     const url = hit.url || (market === "GameBoost" ? `https://gameboost.com/${SEARCH.GameBoost[game]}/items?search=${q}` : `https://www.itemku.com/en/g/${SEARCH.Itemku[game]}?q=${q}`);
@@ -28,18 +28,18 @@ function lookup(market) {
 export function startRemoteMarkets() {
   for (const m of Object.keys(SEARCH)) {
     registerMarket(m, lookup(m));
-    // v2 = stricter title matching; older saved prices are dropped
-    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && d.v === 2 && !store[m]) store[m] = d; }).catch(() => {});
+    // v3 = stricter title matching + finisher check; older saved prices are dropped
+    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && d.v === 3 && !store[m]) store[m] = d; }).catch(() => {});
   }
 }
 
 // From the booster: { market, games: { game: { id: { usd, offers, rating?, url? } } } }
 export async function receiveMarket(market, games) {
   if (!SEARCH[market] || !games || typeof games !== "object") return { ok: false };
-  const prev = store[market]?.v === 2 ? store[market].games : {};
+  const prev = store[market]?.v === 3 ? store[market].games : {};
   const merged = { ...prev };
   for (const [g, map] of Object.entries(games)) if (SEARCH[market][g] && map && Object.keys(map).length) merged[g] = map; // a failed game keeps its last prices
-  store[market] = { v: 2, updatedAt: new Date().toISOString(), games: merged };
+  store[market] = { v: 3, updatedAt: new Date().toISOString(), games: merged };
   if (supabaseConfig()) await writeMm2Row(rowId(market), store[market]).catch(() => {});
   return { ok: true, items: Object.values(merged).reduce((n, m) => n + Object.keys(m).length, 0) };
 }

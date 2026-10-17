@@ -2,7 +2,7 @@
 // Cloudflare browser check that plain requests can't pass), matches each listing to our items by
 // title, and returns the cheapest price per item. Needs Google Chrome or Edge installed.
 import { existsSync } from "node:fs";
-import { nameIndex, matchTitle, amCode, words, robustMin } from "./markets.mjs";
+import { nameIndex, matchTitle, amCode, words, robustMin, listingHasFinisher, finKey } from "./markets.mjs";
 
 const BROWSERS = ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
   `${process.env.LOCALAPPDATA}/Google/Chrome/Application/chrome.exe`, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"];
@@ -16,6 +16,7 @@ function add(out, game, title, usd, extra, index) {
   if (!name) return;
   let id = words(name);
   if (game === "Adopt Me") { const code = amCode(title); if (!code) return; id += `|${code}`; }
+  if (game === "Blade Ball") id = finKey(id, listingHasFinisher(title));
   (out[id] ||= { all: [] }).all.push({ usd, ...extra });
 }
 // each item: the cheapest believable price (not a lone fake far under the rest)
