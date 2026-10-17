@@ -28,7 +28,8 @@ function lookup(market) {
 export function startRemoteMarkets() {
   for (const m of Object.keys(SEARCH)) {
     registerMarket(m, lookup(m));
-    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && d.v === 2 && !store[m]) store[m] = d; }) // v2: stricter title matching.catch(() => {});
+    // v2 = stricter title matching; older saved prices are dropped
+    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && d.v === 2 && !store[m]) store[m] = d; }).catch(() => {});
   }
 }
 
