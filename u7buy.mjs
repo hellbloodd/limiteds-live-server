@@ -48,12 +48,17 @@ export async function u7Refresh(port) {
   const games = { ...data.games };
   for (const game of Object.keys(SHOPS)) {
     try {
-      const items = (await (await fetch(`http://127.0.0.1:${port}${API[game]}`, { signal: AbortSignal.timeout(60000) })).json()).items || [];
+      // right after a restart our own game data may still be loading: wait for it (up to ~3 min)
+      let items = [];
+      for (let attempt = 0; attempt < 4 && !items.length; attempt++) {
+        if (attempt) await new Promise((r) => setTimeout(r, 60000));
+        items = (await (await fetch(`http://127.0.0.1:${port}${API[game]}`, { signal: AbortSignal.timeout(60000) })).json()).items || [];
+      }
       if (!items.length) console.warn(`U7BUY ${game}: no items from our own API yet - skipped this round`);
       if (items.length) games[game] = await fetchU7Game(game, items);
     } catch (e) { console.warn(`U7BUY ${game} prices failed: ${e.message}`); }
   }
-  data = { v: 2, updatedAt: new Date().toISOString(), games };
+  data = { v: 3, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("u7buy_prices", data).catch(() => {});
 }
 
@@ -69,7 +74,7 @@ export function u7Price(game, name, code = "") {
 export function startU7(port) {
   registerMarket("U7BUY", u7Price);
   (async () => {
-    if (supabaseConfig()) { const saved = await readRow("u7buy_prices").catch(() => null); if (saved?.games && saved.v === 2) data = saved; } // v2: stricter title matching
+    if (supabaseConfig()) { const saved = await readRow("u7buy_prices").catch(() => null); if (saved?.games && saved.v === 3) data = saved; } // v3: exact offer links
     await new Promise((r) => setTimeout(r, 2 * 60 * 1000)); // let the game data load first
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await u7Refresh(port).catch(() => {});
   })();
