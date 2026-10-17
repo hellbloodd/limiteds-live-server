@@ -49,14 +49,14 @@ export async function g2gRefresh() {
     try { games[game] = await fetchG2gGame(game); }
     catch (e) { console.warn(`G2G ${game} prices failed: ${e.message}`); }
   }
-  data = { updatedAt: new Date().toISOString(), games };
+  data = { v: 2, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("g2g_prices", data).catch(() => {});
 }
 
 export function startG2g() {
   registerMarket("G2G", g2gPrice);
   (async () => {
-    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games) data = saved; }
+    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 2) data = saved; } // v2: exact listing links + MM2 names
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await g2gRefresh().catch(() => {});
   })();
   setInterval(() => g2gRefresh().catch(() => {}), EVERY_MS).unref();
