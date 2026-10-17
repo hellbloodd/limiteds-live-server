@@ -36,7 +36,8 @@ async function allItems(port) {
   const items = [];
   for (const [game, g] of Object.entries(GAMES)) {
     for (const i of await gameItems(g, port).catch(() => [])) {
-      items.push({ game, key: i.key, name: i.name, image: i.image, usd: i.usd ?? null, second: i.second ?? null, url: i.eldoradoUrl || "" });
+      items.push({ game, key: i.key, name: i.name, image: i.image, usd: i.usd ?? null, second: i.second ?? null, url: i.eldoradoUrl || "",
+        value: i.value ?? null, soldPrice: i.soldPrice ?? null, sold7d: i.sold7d || 0, change7d: i.priceChanges?.["7d"]?.pct ?? null, sellers: i.sellers || null });
     }
   }
   searchCache = { at: Date.now(), items };
@@ -171,9 +172,65 @@ function suggestPrice(w, l, ledger, me) {
   return { price, why, floor: cost ? floor : null };
 }
 
+// ---------- Portfolio ----------
+// What you hold (Profits ledger, first-bought-first-sold), priced at today's Eldorado listings:
+// market value (cheapest listing), what you'd get selling now (1¢ under it, after the fee), and
+// unrealised profit. A daily point of the totals is kept in Supabase row "portfolio_history".
+async function portfolio(port) {
+  const ledger = ((await readRow("ledger").catch(() => null)) || []).slice().sort((a, b) => a.ts - b.ts);
+  const live = new Map((await allItems(port)).map((i) => [`${i.game}|${i.key}`, i]));
+  const lots = new Map();
+  let realised = 0;
+  for (const e of ledger) {
+    const k = `${e.game}|${e.key || e.name}`;
+    const L = lots.get(k) || { game: e.game, key: e.key, name: e.name, queue: [], firstTs: e.ts };
+    lots.set(k, L);
+    if (e.type === "buy") L.queue.push({ qty: e.qty, cost: e.price, ts: e.ts });
+    else {
+      let left = e.qty, cost = 0;
+      while (left > 0 && L.queue.length) {
+        const lot = L.queue[0], take = Math.min(left, lot.qty);
+        cost += take * lot.cost; lot.qty -= take; left -= take;
+        if (!lot.qty) L.queue.shift();
+      }
+      realised += e.qty * e.price - (e.fee || 0) - cost;
+    }
+  }
+  const holdings = [];
+  for (const [k, L] of lots) {
+    const qty = L.queue.reduce((n, l) => n + l.qty, 0);
+    if (!qty) continue;
+    const cost = L.queue.reduce((n, l) => n + l.qty * l.cost, 0);
+    const i = live.get(k);
+    const usd = i?.usd ?? null;
+    const sellNowEach = usd ? Math.max(0, (usd - 0.01) * (1 - FEE)) : null;
+    holdings.push({
+      game: L.game, key: L.key, name: L.name, image: i?.image || "", url: i?.url || "", qty, cost, avgCost: cost / qty,
+      heldDays: Math.floor((Date.now() - Math.min(...L.queue.map((l) => l.ts))) / 864e5),
+      usd, second: i?.second ?? null, soldPrice: i?.soldPrice ?? null, sold7d: i?.sold7d || 0, change7d: i?.change7d ?? null, value: i?.value ?? null,
+      marketValue: usd ? usd * qty : null, sellNow: sellNowEach != null ? sellNowEach * qty : null,
+      unrealised: sellNowEach != null ? sellNowEach * qty - cost : null,
+      sellersTrust: i?.sellers ? sellerTrust(i.sellers[0]) : null,
+    });
+  }
+  holdings.sort((a, b) => (b.marketValue ?? b.cost) - (a.marketValue ?? a.cost));
+  const sum = (f) => holdings.reduce((n, h) => n + (h[f] ?? 0), 0);
+  const totals = { cost: sum("cost"), marketValue: sum("marketValue"), sellNow: sum("sellNow"), unrealised: sum("unrealised"), realised, items: sum("qty"),
+    unpriced: holdings.filter((h) => h.usd == null).length };
+  // one point a day (the latest call of the day wins)
+  const hist = (await readRow("portfolio_history").catch(() => null)) || [];
+  const day = new Date().toISOString().slice(0, 10);
+  const point = [day, Math.round(totals.cost * 100) / 100, Math.round(totals.sellNow * 100) / 100, Math.round(realised * 100) / 100];
+  if (holdings.length || hist.length) {
+    if (hist.length && hist[hist.length - 1][0] === day) hist[hist.length - 1] = point; else hist.push(point);
+    await writeMm2Row("portfolio_history", hist.slice(-730)).catch(() => {});
+  }
+  return { fee: FEE, totals, holdings, history: hist };
+}
+
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));
@@ -218,6 +275,12 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
     return true;
   }
 
+  if (url.pathname === "/api/holdings") {
+    if (!OWNER_KEY) { sendJson(res, 503, { error: "Set OWNER_KEY (a password of 6+ characters) in Render's Environment first." }); return true; }
+    if (!isOwner(req)) { sendJson(res, 401, { error: "Wrong owner key." }); return true; }
+    sendJson(res, 200, await portfolio(port));
+    return true;
+  }
   const route = { "/api/watchlist": "watchlist", "/api/ledger": "ledger" }[url.pathname];
   if (!route) return false;
   if (!OWNER_KEY) { sendJson(res, 503, { error: "Set OWNER_KEY (a password of 6+ characters) in Render's Environment first." }); return true; }

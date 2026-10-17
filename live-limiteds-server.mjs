@@ -623,6 +623,7 @@ const DASHBOARD_HTML = `<title>Agony Values</title>
   <a class="view-tab" href="/flips" style="text-decoration:none">💸 Flip Finder</a>
   <a class="view-tab" href="/watch" style="text-decoration:none">🏷️ My Listings</a>
   <a class="view-tab" href="/profits" style="text-decoration:none">📒 Profits</a>
+  <a class="view-tab" href="/portfolio" style="text-decoration:none">💼 Portfolio</a>
   <div class="prices-freshness" id="prices-freshness" hidden>
     <span id="prices-freshness-text"></span>
     <button id="refresh-prices-btn" type="button">Refresh now</button>

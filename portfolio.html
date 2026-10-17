@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#a78bfa; --accent-2:#22d3ee; --accent-soft:#a78bfa22; --glow:#a78bfa55; }
+  .tiles { grid-template-columns:repeat(4, minmax(130px, 1fr)); max-width:760px; }
+  @media (max-width:640px) { .tiles { grid-template-columns:repeat(2, 1fr); } }
+  #hold { --cols:minmax(200px,2.2fr) 50px repeat(5, minmax(84px,1fr)) 64px; }
+  h2 { font:700 16px "Unbounded", sans-serif; margin:22px 0 8px; }
+  .row .item img { width:36px; height:36px; object-fit:contain; border-radius:8px; background:var(--surface-2); flex:none; }
+  .chart-panel { padding:14px 16px; }
+  .chart-panel svg { width:100%; height:180px; display:block; }
+  .legend { display:flex; gap:14px; font-size:11px; color:var(--muted); margin-top:6px; flex-wrap:wrap; }
+  .legend i { display:inline-block; width:10px; height:3px; border-radius:2px; vertical-align:middle; margin-right:5px; }
+  .alloc { display:flex; height:12px; border-radius:999px; overflow:hidden; background:var(--surface-2); margin:8px 0 6px; }
+  .alloc span { display:block; height:100%; }
+  .alloc-legend { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:12px; }
+  .alloc-legend i { display:inline-block; width:9px; height:9px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  .small { font-size:10px; }
+  .tip { font-size:12px; color:var(--muted); margin-top:4px; }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">Tracker</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab active" href="/portfolio">💼 Portfolio</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>Portfolio</h1>
+      <p class="dim">Everything you hold, priced at today's Eldorado listings. Built from your <a href="/profits">Profits</a> log — log each buy there and it shows up here.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span>Market value</span><b id="t-value" class="tabular">—</b><small id="t-value-sub">&nbsp;</small></div>
+      <div class="tile"><span>If sold now</span><b id="t-sell" class="tabular">—</b><small id="t-sell-sub">&nbsp;</small></div>
+      <div class="tile"><span>Unrealised</span><b id="t-unreal" class="tabular">—</b><small id="t-unreal-sub">&nbsp;</small></div>
+      <div class="tile"><span>Realised (all time)</span><b id="t-real" class="tabular">—</b><small id="t-real-sub">&nbsp;</small></div>
+    </div>
+  </section>
+
+  <div id="locked" class="panel lock" hidden>
+    <div style="width:100%">
+      <b>Owner key</b>
+      <p class="dim" style="font-size:12px">Your portfolio is private. Enter the OWNER_KEY you set in Render (remembered in this browser).</p>
+      <input id="key" type="password" placeholder="Owner key" autocomplete="current-password">
+      <button class="btn" id="unlock" type="button">Unlock</button>
+      <div class="msg err" id="lock-msg"></div>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <h2>Over time</h2>
+    <div class="panel chart-panel"><div style="width:100%">
+      <svg id="chart" viewBox="0 0 600 180" preserveAspectRatio="none" role="img" aria-label="Portfolio value over time"></svg>
+      <div class="legend"><span><i style="background:var(--accent)"></i>If sold now</span><span><i style="background:var(--muted)"></i>Cost of what you hold</span><span><i style="background:#22c55e"></i>Realised profit</span><span id="chart-note"></span></div>
+    </div></div>
+
+    <h2>By game</h2>
+    <div class="panel" style="display:block"><div class="alloc" id="alloc"></div><div class="alloc-legend" id="alloc-legend"></div></div>
+
+    <h2>Holding</h2>
+    <div class="tbl" id="hold"><div class="head"><span>Item</span><span class="num">Qty</span><span class="num">Avg cost</span><span class="num">Cheapest now</span><span class="num">7d</span><span class="num">If sold now</span><span class="num">Profit</span><span class="num">Held</span></div><div id="rows"></div></div>
+    <p class="tip">"If sold now" = relisting 1¢ under today's cheapest listing, after Eldorado's fee. "Profit" is that minus what you paid. Items with no listing right now aren't priced.</p>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const money = (n) => n == null ? "—" : (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const signed = (n) => n == null ? "—" : `<b class="${n >= 0 ? "up" : "down"}">${n >= 0 ? "+" : ""}${money(n)}</b>`;
+const pct = (n) => n == null || !isFinite(n) ? "" : `${n >= 0 ? "+" : ""}${n.toFixed(0)}%`;
+const GAME_COLORS = { "MM2": "#f43f5e", "Blade Ball": "#22d3ee", "Adopt Me": "#a78bfa", "Steal a Brainrot": "#f5b400" };
+let key = ""; try { key = localStorage.getItem("ownerKey") || ""; } catch {}
+const api = (path) => fetch(path, { headers: { "x-owner-key": key } })
+  .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }); return j; });
+
+function chart(hist) {
+  const svg = $("chart");
+  if (hist.length < 2) { svg.innerHTML = `<text x="300" y="95" text-anchor="middle" fill="currentColor" opacity=".5" font-size="13">The chart fills in day by day — come back tomorrow.</text>`; return; }
+  const W = 600, H = 180, P = 8;
+  const vals = hist.flatMap((p) => [p[1], p[2], p[3]]);
+  const lo = Math.min(0, ...vals), hi = Math.max(...vals, 1);
+  const x = (i) => P + i / (hist.length - 1) * (W - 2 * P), y = (v) => H - P - (v - lo) / (hi - lo) * (H - 2 * P);
+  const line = (idx, color, dash = "") => `<polyline fill="none" stroke="${color}" stroke-width="2" ${dash} vector-effect="non-scaling-stroke" points="${hist.map((p, i) => `${x(i).toFixed(1)},${y(p[idx]).toFixed(1)}`).join(" ")}"/>`;
+  svg.innerHTML = `<line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="currentColor" opacity=".12"/>`
+    + line(1, "var(--muted)", 'stroke-dasharray="4 4"') + line(3, "#22c55e") + line(2, "var(--accent)");
+  $("chart-note").textContent = `${hist[0][0]} → ${hist[hist.length - 1][0]}`;
+}
+
+async function load() {
+  try {
+    const d = await api("/api/holdings");
+    $("locked").hidden = true; $("app").hidden = false;
+    const t = d.totals;
+    $("t-value").textContent = money(t.marketValue);
+    $("t-value-sub").textContent = `${t.items} item${t.items === 1 ? "" : "s"}${t.unpriced ? ` · ${t.unpriced} unpriced` : ""}`;
+    $("t-sell").textContent = money(t.sellNow);
+    $("t-sell-sub").textContent = `after the ${Math.round(d.fee * 100)}% fee`;
+    $("t-unreal").innerHTML = signed(t.unrealised);
+    $("t-unreal-sub").textContent = t.cost ? `${pct(t.unrealised / t.cost * 100)} on ${money(t.cost)} cost` : "nothing held";
+    $("t-real").innerHTML = signed(t.realised);
+    $("t-real-sub").innerHTML = `<a href="/profits">see Profits</a>`;
+    chart(d.history || []);
+
+    const byGame = {};
+    for (const h of d.holdings) byGame[h.game] = (byGame[h.game] || 0) + (h.marketValue ?? h.cost);
+    const total = Object.values(byGame).reduce((a, b) => a + b, 0) || 1;
+    const games = Object.entries(byGame).sort((a, b) => b[1] - a[1]);
+    $("alloc").innerHTML = games.map(([g, v]) => `<span style="width:${(v / total * 100).toFixed(2)}%;background:${GAME_COLORS[g] || "#888"}" title="${esc(g)} ${money(v)}"></span>`).join("");
+    $("alloc-legend").innerHTML = games.length ? games.map(([g, v]) => `<span><i style="background:${GAME_COLORS[g] || "#888"}"></i>${esc(g)} <b class="tabular">${money(v)}</b> <span class="dim">${(v / total * 100).toFixed(0)}%</span></span>`).join("")
+      : `<span class="dim">Nothing held yet.</span>`;
+
+    $("rows").innerHTML = d.holdings.length ? d.holdings.map((h, n) => `<div class="row" style="--d:${Math.min(n, 20) * 25}ms">
+      <div class="item">${h.image ? `<img src="${esc(h.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : ""}
+        <div style="min-width:0"><div class="name" title="${esc(h.name)}">${h.url ? `<a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.name)}</a>` : esc(h.name)}</div><span class="chip">${esc(h.game)}</span>${h.sold7d ? `<span class="dim small">${h.sold7d} sold 7d</span>` : ""}</div></div>
+      <div class="num tabular" data-label="Qty">${h.qty}</div>
+      <div class="num tabular" data-label="Avg cost">${money(h.avgCost)}</div>
+      <div class="num tabular" data-label="Cheapest now">${money(h.usd)}${h.soldPrice ? `<div class="dim small">sells ~${money(h.soldPrice)}</div>` : ""}</div>
+      <div class="num tabular ${h.change7d > 0 ? "up" : h.change7d < 0 ? "down" : "dim"}" data-label="7d">${h.change7d == null ? "—" : pct(h.change7d)}</div>
+      <div class="num tabular" data-label="If sold now">${money(h.sellNow)}</div>
+      <div class="num tabular" data-label="Profit">${signed(h.unrealised)}${h.unrealised != null && h.cost ? `<div class="dim small">${pct(h.unrealised / h.cost * 100)}</div>` : ""}</div>
+      <div class="num tabular dim" data-label="Held">${h.heldDays}d</div></div>`).join("")
+      : `<div class="empty">Nothing held. Log a buy on the <a href="/profits">Profits</a> page and it appears here.</div>`;
+  } catch (e) {
+    if (e.status === 401 || e.status === 503) { $("locked").hidden = false; $("app").hidden = true; $("lock-msg").textContent = key ? e.message : ""; }
+    else $("rows").innerHTML = `<div class="empty">Couldn't load: ${esc(e.message)}</div>`;
+  }
+}
+$("unlock").addEventListener("click", () => { key = $("key").value.trim(); try { localStorage.setItem("ownerKey", key); } catch {} load(); });
+$("key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("unlock").click(); });
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
