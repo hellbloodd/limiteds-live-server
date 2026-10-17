@@ -8,6 +8,7 @@ import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem } from "./sniper.mjs";
 import { isOwner } from "./tools.mjs";
+import { startHealthAlerts } from "./health.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -3751,7 +3752,11 @@ startBbTracker();
 startAmTracker();
 startSabTracker();
 // The server fetches values itself (every 15 min + "Refresh now"); needs Supabase to store them.
-if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) startAutoUpdates(PORT);
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  startAutoUpdates(PORT);
+  // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
+  startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
+}
 
 // Keep-awake: Render's free plan sleeps a service after ~15 minutes without visitors, which would
 // pause updates, alerts, sales tracking and the sniper. Visiting our own public /ping through

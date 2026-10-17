@@ -246,7 +246,9 @@ export function listingWindow(offers, full) {
 
 // Listings auto-unlist 21 days after posting (expires). One that vanishes within a day of that date
 // is treated as expired, not sold.
-export function detectSales(prevByKey, prices, now = Date.now()) {
+// pending (optional): listings that vanished are parked there instead of counted at once - see
+// confirmVanished(). A drop in stock is always a sale right away.
+export function detectSales(prevByKey, prices, now = Date.now(), pending = null) {
   const events = {};
   for (const [key, prev] of Object.entries(prevByKey)) {
     const p = prices[key];
@@ -257,9 +259,33 @@ export function detectSales(prevByKey, prices, now = Date.now()) {
       const c = cur.get(id);
       let sold = 0, price = usd;
       if (c) { if (c[2] < qty) { sold = qty - c[2]; price = c[1]; } }
-      else if (!(expires && expires <= now + 24 * 3600 * 1000) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) sold = 1;
+      else if (!(expires && expires <= now + 24 * 3600 * 1000) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) {
+        if (pending) { (pending[key] ||= []).push({ id, seller, usd, at: now }); continue; }
+        sold = 1;
+      }
       if (sold > 0 && usd > 0) (events[key] ||= []).push([Math.round(now / 1000), Math.round(price * 100) / 100, sold]);
     }
+  }
+  return events;
+}
+
+// A vanished listing only counts as sold if, for CONFIRM_MS afterwards, it doesn't come back and its
+// seller doesn't list the same item again (a seller deleting and relisting, or changing the price,
+// isn't a sale). Returns confirmed sale events, dated when the listing vanished.
+const CONFIRM_MS = 3 * 3600 * 1000;
+export function confirmVanished(pending, prices, now = Date.now()) {
+  const events = {};
+  for (const [key, list] of Object.entries(pending)) {
+    const offers = prices[key]?.offers;
+    const ids = offers ? new Set(offers.map((o) => o[0])) : null;
+    const sellers = offers ? new Set(offers.map((o) => o[4]).filter(Boolean)) : null;
+    const keep = [];
+    for (const v of list) {
+      if (ids && (ids.has(v.id) || (v.seller && sellers.has(v.seller)))) continue; // came back / relisted: not a sale
+      if (now - v.at >= CONFIRM_MS) (events[key] ||= []).push([Math.round(v.at / 1000), Math.round(v.usd * 100) / 100, 1]);
+      else keep.push(v);
+    }
+    if (keep.length) pending[key] = keep; else delete pending[key];
   }
   return events;
 }
@@ -560,7 +586,10 @@ export function registerSupabaseTick(tick) {
 // mm2.html is shared by every game page; the config fills in the game-specific parts.
 export async function sendGamePage(res, config) {
   const html = (await readFile(join(HERE, "mm2.html"), "utf8"))
-    .replace("/*GAME_CONFIG*/", `window.GAME = ${JSON.stringify(config).replace(/</g, "\\u003c")};`);
+    .replace("/*GAME_CONFIG*/", `window.GAME = ${JSON.stringify(config).replace(/</g, "\\u003c")};`)
+    // link previews (Discord, messages) name this game, not MM2
+    .replaceAll("MM2 Values · Agony Values", `${config.title} · Agony Values`)
+    .replace(/(og:description" content=")[^"]*/, `$1Live ${config.title.replace(/ Values$/, "")} values from ${config.sourceName} with Eldorado.gg prices, value per $, price history and best deals.`);
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(html);
 }

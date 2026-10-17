@@ -90,8 +90,9 @@ async function checkOne(game, item) {
 }
 
 // What one check found (here, or on the PC booster): price updates, schedule, snipe alerts.
+let lastCheckAt = 0;
 async function processListings(game, item, p) {
-  checks++;
+  checks++; lastCheckAt = Date.now();
   if (!p?.offers?.length) return false;
   const id = `${game}|${item.key}`;
   const sig = p.offers.map((o) => `${o[0]}:${o[1]}:${o[2]}`).sort().join(",");
@@ -191,7 +192,7 @@ export function sniperStatus() {
   const mins = Math.max(1, (Date.now() - statsSince) / 60000);
   const ints = hot.map((j) => schedule.get(`${j.game}|${j.item.key}`)?.interval || 0);
   return { hotItems: hot.length, parallel: PARALLEL, checksPerMin: Math.round(checks / mins), changedPerMin: Math.round(changes / mins * 10) / 10,
-    fastItems: ints.filter((i) => i <= CHECK_MIN_MS).length, slowItems: ints.filter((i) => i >= CHECK_MAX_MS).length, booster: boosterStatus(), results: snipeResults(), recent: recentSnipes.slice(0, 50) };
+    fastItems: ints.filter((i) => i <= CHECK_MIN_MS).length, slowItems: ints.filter((i) => i >= CHECK_MAX_MS).length, booster: boosterStatus(), results: snipeResults(), lastCheckAt, recent: recentSnipes.slice(0, 50) };
 }
 
 // ---------- PC booster ----------

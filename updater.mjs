@@ -5,7 +5,7 @@
 import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
-  detectSales, mergeSales,
+  detectSales, mergeSales, confirmVanished,
   readRow,
 } from "./mm2-values.mjs";
 import { BB_PREFIX, scrapeBbValues, fetchBbEldoradoPrices, compactBbItem, expandBbItem } from "./bb-values.mjs";
@@ -96,7 +96,8 @@ const stamp = () => new Date().toLocaleTimeString();
 const PRICE_HISTORY_SAVE_MS = 3 * 60 * 60 * 1000;
 const priceHistorySaved = {}; // prefix -> [ms, day]
 const lastItems = {}; // prefix -> items from the last value update (memory only)
-const lastListings = {}; // prefix -> { itemKey: { offers, windowMax } } from the previous check (memory only)
+const lastListings = {};
+const vanished = {}; // prefix -> { itemKey: [{ id, seller, usd, at }] } waiting to be confirmed as sales // prefix -> { itemKey: { offers, windowMax } } from the previous check (memory only)
 // partial: only some items were re-checked (Flip Finder "Refresh now") - merge them into the
 // existing prices and listing snapshots instead of replacing everything.
 async function savePrices(prefix, state, allPrices, { partial = false, live = false } = {}) {
@@ -104,7 +105,11 @@ async function savePrices(prefix, state, allPrices, { partial = false, live = fa
   state.sales ||= {};
   const prev = lastListings[prefix];
   const prevSubset = prev && partial ? Object.fromEntries(Object.keys(allPrices).filter((k) => prev[k]).map((k) => [k, prev[k]])) : prev;
-  const soldNow = prevSubset ? detectSales(prevSubset, allPrices) : {};
+  const pending = (vanished[prefix] ||= {});
+  const soldNow = prevSubset ? detectSales(prevSubset, allPrices, Date.now(), pending) : {};
+  // vanished listings become sales only after 3 h without coming back or being relisted
+  const confirmed = confirmVanished(pending, Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers)));
+  for (const [k, ev] of Object.entries(confirmed)) (soldNow[k] ||= []).push(...ev);
   const salesChanged = mergeSales(state.sales, soldNow);
   const snap = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
   lastListings[prefix] = partial ? { ...(prev || {}), ...snap } : snap;
@@ -305,10 +310,10 @@ async function pushStealABrainrot() {
 const PUSH_LIMIT_MS = 8 * 60 * 1000;
 const pushStatus = {}; // game -> { startedAt, doneAt, ok, timedOut }
 function guarded(game, push) {
-  pushStatus[game] = { startedAt: new Date().toISOString() };
+  pushStatus[game] = { startedAt: new Date().toISOString(), lastOkAt: pushStatus[game]?.lastOkAt || null };
   let timer;
   const limit = new Promise((res) => { timer = setTimeout(() => { console.error(`[${stamp()}] ${game} value update took over 8 min - moving on.`); pushStatus[game].timedOut = true; res(false); }, PUSH_LIMIT_MS); });
-  return Promise.race([push().then((ok) => { pushStatus[game] = { ...pushStatus[game], doneAt: new Date().toISOString(), ok }; return ok; }), limit]).finally(() => clearTimeout(timer));
+  return Promise.race([push().then((ok) => { pushStatus[game] = { ...pushStatus[game], doneAt: new Date().toISOString(), ok, ...(ok ? { lastOkAt: new Date().toISOString() } : {}) }; return ok; }), limit]).finally(() => clearTimeout(timer));
 }
 async function pushOnce() {
   const results = await Promise.all([guarded("MM2", pushMm2), guarded("Blade Ball", pushBladeBall), guarded("Adopt Me", pushAdoptMe), guarded("Steal a Brainrot", pushStealABrainrot)]);
