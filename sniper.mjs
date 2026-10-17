@@ -71,16 +71,21 @@ export async function listingsFor(game, item) {
 }
 
 // Pure decision: which listings among `offers` (not seen `before`, not the owner's) are snipes.
+// A new listing is a snipe only if it's the cheapest listing right now and well under the current
+// market: the next-cheapest listing (or what the item usually sells for, if that's lower). Comparing
+// with an older price let alerts through when cheaper listings already existed.
 export function findSnipes(before, offers, item, owner = null) {
-  const usual = item.soldPrice || item.usd; // what it really sells for, else the cheapest we knew
   const sorted = [...offers].sort((a, b) => a[1] - b[1]);
   const out = [];
   for (const [offerId, price, , , seller] of sorted) {
     if (before.has(offerId) || (owner && seller === owner)) continue;
-    const next = sorted.find((x) => x[0] !== offerId && x[1] > price)?.[1] ?? item.second ?? usual;
+    const others = sorted.filter((x) => x[0] !== offerId);
+    const next = others[0]?.[1] ?? item.second ?? item.usd;      // cheapest other listing now
+    if (!(next > 0) || price >= next - 0.005) continue;           // not the cheapest: no deal
+    const usual = Math.min(next, item.soldPrice || Infinity);     // today's market, never an old higher price
     const profit = (next - 0.01) * (1 - FEE) - price;
     if (price > usual * (1 - DISCOUNT) || profit < MIN_PROFIT) continue;
-    out.push({ offerId, price, usual, next, profit, suspicious: price < usual * 0.4 }); // far below what it sells for: often a mislabelled item
+    out.push({ offerId, price, usual, next, profit, suspicious: price < usual * 0.4 }); // far below the market: often a mislabelled item
   }
   return out;
 }
@@ -123,7 +128,7 @@ async function processListings(game, item, p) {
         fields: [
           { name: "Game", value: game, inline: true },
           { name: "Listed at", value: `$${fmt(price)}`, inline: true },
-          { name: item.soldPrice ? "Usually sells for" : "Previous cheapest", value: `$${fmt(usual)}`, inline: true },
+          { name: usual < next ? "Usually sells for" : "Next cheapest now", value: `$${fmt(usual)}`, inline: true },
           { name: "Next listing", value: `$${fmt(next)}`, inline: true },
           { name: `Flip profit (${Math.round(FEE * 100)}% fee)`, value: `+$${fmt(profit)}`, inline: true },
           { name: "Sells", value: `${item.sold7d || 0} in 7d`, inline: true },
@@ -136,7 +141,7 @@ async function processListings(game, item, p) {
     }).catch(() => {});
     notifyPhones({
       title: `🎯 ${item.name} — ${snipe.discount}% under${suspicious ? " ⚠️" : ""}`,
-      body: [`💵 Listed $${fmt(price)} · ${item.soldPrice ? "usually sells" : "was"} $${fmt(usual)}`,
+      body: [`💵 Listed $${fmt(price)} · ${usual < next ? "usually sells" : "next cheapest"} $${fmt(usual)}`,
         `📈 Flip +$${fmt(profit)} (relist under $${fmt(next)})`,
         `${trust ? `${{ trusted: "✅", ok: "👍", new: "🆕", risky: "⚠️" }[trust.level]} Seller ${trust.score}% (${trust.ratings})` : "Seller unknown"} · ${game} · ${item.sold7d || 0} sold/7d`,
         ...(suspicious ? ["⚠️ Very cheap — may be mislabelled, check carefully"] : [])].join("\n"),
