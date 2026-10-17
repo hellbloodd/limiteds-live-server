@@ -2,6 +2,7 @@
 // items category, filtered by game, cheapest first, grouped per item). Refreshed every 15 minutes;
 // G2G has its own request budget, separate from Eldorado's. Kept in Supabase row "g2g_prices".
 import { readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
+import { registerMarket } from "./markets.mjs";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const GAME_IDS = { "MM2": "928871b7", "Blade Ball": "941f9c83", "Adopt Me": "150df5a4", "Steal a Brainrot": "7840f705" };
@@ -49,6 +50,7 @@ export async function g2gRefresh() {
 }
 
 export function startG2g() {
+  registerMarket("G2G", g2gPrice);
   (async () => {
     if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games) data = saved; }
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await g2gRefresh().catch(() => {});

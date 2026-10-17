@@ -282,7 +282,7 @@ function render() {
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
           <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on G2G, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.g2g ? `<span class="dim" style="font-size:10px;margin-left:4px" title="Cheapest on G2G">G2G ${money(r.g2g.usd)}</span>` : ""}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.others?.length ? r.others.map((o) => `<span class="dim" style="font-size:10px;margin-left:4px" title="Cheapest on ${esc(o.market)}">${esc(o.market)} ${money(o.usd)}</span>`).join("") : ""}</div>
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
@@ -293,7 +293,7 @@ function render() {
       <div class="num tabular dim" data-label="Listings">${r.listings ?? "?"}</div>
       <div class="num tabular ${r.sold7d ? "" : "dim"}" data-label="Sold 7d" title="${r.sold24h} in the last 24h${r.soldPrice ? ` · typical sale ${money(r.soldPrice)}` : ""}">${r.sold7d}${r.sold24h ? ` <span class="up" style="font-size:11px">+${r.sold24h}</span>` : ""}</div>
       <div class="num tabular ${r.perDay > 0 ? "up" : "dim"}" data-label="Profit / day">${r.perDay > 0 ? "+" + money(r.perDay) : "—"}</div>
-      <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? "Buy on G2G" : "Buy on Eldorado"}</a>
+      <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? `Buy on ${esc(r.buyMarket)}` : "Buy on Eldorado"}</a>
     </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
   $("t-count").textContent = list.length.toLocaleString();
   $("t-count-sub").textContent = `of ${(lastData?.total ?? rows.length).toLocaleString()} items with 2+ listings`;
@@ -382,8 +382,10 @@ function openCard(r) {
     </div>
     <div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cheapest listings on Eldorado</div>
     <div class="ladder">${rungs}</div>
-    ${r.market ? `<div class="verdict warn">🔁 Buy on G2G, relist on Eldorado<small>G2G charges its own buyer fees and delivery can be slower — check the seller and the final price on G2G before buying.</small></div>` : ""}
-    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? "Buy on G2G" : "Check listings on Eldorado"}</a>${r.market ? `<a class="ghost-link" href="${esc(r.sellUrl)}" target="_blank" rel="noopener">Eldorado listings</a>` : ""}<a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
+    ${r.market ? (r.usd < r.eldoradoUsd * 0.4
+      ? `<div class="verdict bad">⛔ ${esc(r.buyMarket)} is ${Math.round((1 - r.usd / r.eldoradoUsd) * 100)}% cheaper than Eldorado — probably a different version or a mislabelled listing<small>Open it and check it's exactly this item before buying.</small></div>`
+      : `<div class="verdict warn">🔁 Buy on ${esc(r.buyMarket)}, relist on Eldorado${r.buyRating ? ` · seller ${r.buyRating}%` : ""}<small>${esc(r.buyMarket)} adds its own buyer fees and delivery times — check the final price and the seller there first.</small></div>`) : ""}
+    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? `Buy on ${esc(r.buyMarket)}` : "Check listings on Eldorado"}</a>${r.market ? `<a class="ghost-link" href="${esc(r.sellUrl)}" target="_blank" rel="noopener">Eldorado listings</a>` : ""}<a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
   $("card").showModal();
 }
 $("rows").addEventListener("click", (e) => {

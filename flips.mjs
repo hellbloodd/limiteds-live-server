@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { sellerTrust, warmSellers } from "./sellers.mjs";
 import { undercutStats } from "./sniper.mjs";
-import { g2gPrice } from "./g2g.mjs";
+import { otherMarketPrices } from "./markets.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GAMES = [
@@ -53,11 +53,15 @@ async function collect(port) {
   // Other marketplaces: buying there and relisting 1¢ under Eldorado's cheapest is a flip too.
   for (const r of [...rows]) {
     const code = r.game === "Adopt Me" ? (String(r.key).split(":")[1] || "fr") : "";
-    const g = g2gPrice(r.game, r.name, code);
-    if (!g) continue;
-    r.g2g = { usd: g.usd, offers: g.offers, url: g.url };
-    if (g.usd < r.usd - 0.01) rows.push({ ...r, key: `${r.key}@g2g`, market: "G2G → Eldorado", usd: g.usd, second: r.usd, listings: r.listings,
-      url: g.url, sellUrl: r.url, ladder: [g.usd, ...(r.ladder || [r.usd])].slice(0, 5), sellers: null, g2g: null });
+    const others = otherMarketPrices(r.game, r.name, code);
+    if (!others.length) continue;
+    r.others = others.map((o) => ({ market: o.market, usd: o.usd, url: o.url, rating: o.rating ?? null })); // shown next to the Eldorado price
+    for (const o of others) {
+      if (!(o.usd < r.usd - 0.01)) continue;
+      rows.push({ ...r, key: `${r.key}@${o.market}`, market: `${o.market} → Eldorado`, buyMarket: o.market, usd: o.usd, second: r.usd,
+        url: o.url, sellUrl: r.url, ladder: [o.usd, ...(r.ladder || [r.usd])].slice(0, 5), sellers: null, others: null,
+        buyRating: o.rating ?? null, eldoradoUsd: r.usd });
+    }
   }
   return { pricesUpdatedAt, pricesByGame, count: rows.length, rows };
 }

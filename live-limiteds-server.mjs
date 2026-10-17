@@ -10,6 +10,7 @@ import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFini
 import { isOwner } from "./tools.mjs";
 import { startHealthAlerts } from "./health.mjs";
 import { startG2g, g2gStatus } from "./g2g.mjs";
+import { startU7, u7Status } from "./u7buy.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -3692,7 +3693,7 @@ const server = http.createServer(async (req, res) => {
       let results = []; try { results = JSON.parse(body).results || []; } catch { /* bad body */ }
       return sendJson(res, 200, await boosterResults(results));
     }
-    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), g2g: g2gStatus(), sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
+    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), markets: { G2G: g2gStatus(), U7BUY: u7Status() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -3755,7 +3756,8 @@ startSabTracker();
 // The server fetches values itself (every 15 min + "Refresh now"); needs Supabase to store them.
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startAutoUpdates(PORT);
-  startG2g(); // G2G.com prices for the Flip Finder (cross-market flips)
+  startG2g(); // other marketplaces' prices for the Flip Finder (cross-market flips)
+  startU7(PORT);
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }
