@@ -6,7 +6,7 @@
 import { fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, readRow } from "./mm2-values.mjs";
 import { fetchAmEldoradoPrices } from "./am-values.mjs";
 import { fetchSabEldoradoPrices } from "./sab-values.mjs";
-import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
+import { GAMES, gameItems, post, SITE, fmt, valueField } from "./deals.mjs";
 import { getSellerTrust } from "./sellers.mjs";
 import { notifyPhones } from "./push.mjs";
 import { fetchBbItemListings } from "./bb-values.mjs";
@@ -127,6 +127,7 @@ async function processListings(game, item, p) {
         description: suspicious ? "⚠️ This is very cheap — it may be a mislabelled item. Check the listing carefully." : undefined,
         fields: [
           { name: "Game", value: game, inline: true },
+          valueField(item, price),
           { name: "Listed at", value: `$${fmt(price)}`, inline: true },
           { name: usual < next ? "Usually sells for" : "Next cheapest now", value: `$${fmt(usual)}`, inline: true },
           { name: "Next listing", value: `$${fmt(next)}`, inline: true },
@@ -143,6 +144,7 @@ async function processListings(game, item, p) {
       title: `🎯 ${item.name} — ${snipe.discount}% under${suspicious ? " ⚠️" : ""}`,
       body: [`💵 Listed $${fmt(price)} · ${usual < next ? "usually sells" : "next cheapest"} $${fmt(usual)}`,
         `📈 Flip +$${fmt(profit)} (relist under $${fmt(next)})`,
+        `💎 Value ${valueField(item, price).value}`,
         `${trust ? `${{ trusted: "✅", ok: "👍", new: "🆕", risky: "⚠️" }[trust.level]} Seller ${trust.score}% (${trust.ratings})` : "Seller unknown"} · ${game} · ${item.sold7d || 0} sold/7d`,
         ...(suspicious ? ["⚠️ Very cheap — may be mislabelled, check carefully"] : [])].join("\n"),
       url: snipe.url, image: item.image, tag: `snipe-${offerId}` }).catch(() => {});

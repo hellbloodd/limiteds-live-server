@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { readRow, writeMm2Row } from "./mm2-values.mjs";
-import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
+import { GAMES, gameItems, post, SITE, fmt, valueField } from "./deals.mjs";
 import { eldoradoJson } from "./mm2-values.mjs";
 
 import { sellerTrust } from "./sellers.mjs";
@@ -128,6 +128,7 @@ export async function checkUndercuts(game, port) {
         description: `Someone listed **${w.name}** at **$${fmt(i.usd)}** — yours is **$${fmt(w.myPrice)}**.\nTo be the cheapest again, relist at **$${fmt(suggest)}**.`,
         fields: [
           { name: "Game", value: game, inline: true },
+          valueField(i),
           { name: "Listings", value: String(i.listings ?? "?"), inline: true },
           { name: "Links", value: `[See listings](${i.eldoradoUrl}) · [My Listings](${SITE}/watch)`, inline: false },
         ],

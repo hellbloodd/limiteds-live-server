@@ -58,6 +58,16 @@ export function findDeals(items) {
 
 export const gameItems = async (g, port) => (await (await fetch(`http://127.0.0.1:${port}${g.api}`)).json()).items || [];
 
+// "Value" field for alerts: the item's value (Adopt Me pets: the Fly Ride value, which is the
+// version priced on Eldorado), plus value per $ at the given price.
+export function valueField(i, price = i.usd) {
+  const v = i.priceVariant === "Fly Ride" && i.flyRide ? i.flyRide : i.value;
+  if (i.valueText) return { name: "Value", value: String(i.valueText), inline: true };
+  if (!(v > 0)) return { name: "Value", value: "—", inline: true };
+  const per = price > 0 ? ` · ${fmt(Math.round(v / price * 10) / 10)} / $` : "";
+  return { name: i.priceVariant === "Fly Ride" && i.flyRide ? "Value (Fly Ride)" : "Value", value: `${fmt(v)}${per}`, inline: true };
+}
+
 function embed(game, g, { item: i, times, typical }, test = false) {
   return {
     username: "Agony Values deals",
@@ -166,6 +176,7 @@ export async function checkFlips(game, port) {
         url: i.eldoradoUrl, color: 0xa78bfa, thumbnail: i.image ? { url: i.image } : undefined,
         fields: [
           { name: "Game", value: game, inline: true },
+          valueField(i),
           { name: "Buy at", value: `$${fmt(i.usd)}${i.priceVariant ? ` (${i.priceVariant})` : ""}`, inline: true },
           { name: "Relist at", value: `$${fmt(f.relist)}`, inline: true },
           { name: `Profit after ${Math.round(FLIP_FEE * 100)}% fee`, value: `+$${fmt(f.profit)}`, inline: true },
