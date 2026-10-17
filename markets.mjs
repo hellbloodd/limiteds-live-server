@@ -26,22 +26,53 @@ export function nameIndex(items) {
   return [...seen].sort((a, b) => b[0].length - a[0].length);
 }
 
-// Which item a title is about, or null. Bundles / random boxes / multi-item titles are skipped.
+// Words that may sit right next to an item name in a title without changing which item it is.
+// Anything else touching the name ("Shadow Dragon Ducky", "Golden Harvester") means it's a
+// different item we don't track, so the title is skipped.
+const NOISE = new Set(("fr nfr mfr n m f r np neon mega fly ride potion no pet pets legendary ultra rare uncommon common egg eggs adopt me mm2 murder mystery "
+  + "blade ball steal a brainrot roblox rbl item items knife gun godly ancient chroma unique vintage classic limited sword swords emote explosion finisher "
+  + "fast instant delivery cheap cheapest best safe 100 24 7 online in stock stock real new hot sale deal offer buy x1 1x 1 x the for with and of "
+  + "trade trading face to by from only all platform pc mobile mutation normal default sale weapon weapons wholesale super speedy quick legit trusted "
+  + "seller shop store price premium ready cheapest good guaranteed delivered auto automatic gift instantly fastest low lowest top quality 2021 2022 2023 2024 2025 2026 "
+  + "set_ value values ms m/s per second secret og brainrots").split(" "));
 export function matchTitle(title, index) {
   const t = words(title);
   if (/ (random|mystery box|set|bundle|pack|lot|account|accounts|any|giveaway) /.test(t) || (String(title).match(/[,+&]/g) || []).length >= 2) return null;
-  for (const [w, base] of index) if (t.includes(w)) return base;
+  for (const [w, base] of index) {
+    const at = t.indexOf(w);
+    if (at < 0) continue;
+    const before = t.slice(0, at).trim().split(" ").pop() || "";
+    const after = t.slice(at + w.length).trim().split(" ")[0] || "";
+    if ((before && !NOISE.has(before) && !/^\d+$/.test(before)) || (after && !NOISE.has(after) && !/^\d+$/.test(after))) continue; // part of a longer name
+    return base;
+  }
   return null;
+}
+
+// Cheapest price that isn't a likely fake/mislabelled outlier: the cheapest at or above half the
+// median of the 5 cheapest (same rule Eldorado prices used to have).
+export function robustMin(prices) {
+  const s = prices.filter((v) => v > 0).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const median = s[Math.floor(Math.min(s.length, 5) / 2)];
+  return s.find((v) => v >= median * 0.5) ?? s[0];
 }
 
 // Adopt Me version written in a title -> our trait code (null if it doesn't say).
 export function amCode(title) {
+  // "Adopt Me > Skelicorn > M" style: the last part is the version
+  const parts = String(title).split(">").map((x) => x.trim().toLowerCase());
+  if (parts.length >= 3) {
+    const v = parts[parts.length - 1];
+    const code = { fr: "fr", nfr: "nfr", mfr: "mfr", f: "f", r: "r", n: "n", m: "m", nf: "nf", nr: "nr", mf: "mf", mr: "mr", np: "none", "no potion": "none", normal: "none", neon: "n", mega: "m", "mega neon": "m" }[v];
+    if (code) return code;
+  }
   const t = words(title);
   if (/ (mfr|mega fly ride|mega neon fly ride) /.test(t)) return "mfr";
   if (/ (nfr|neon fly ride) /.test(t)) return "nfr";
   if (/ (mega neon|mega) /.test(t)) return "m";
   if (/ neon /.test(t)) return "n";
-  if (/ (fr|fly ride|fly and ride|fly ride) /.test(t)) return "fr";
+  if (/ (fr|fly ride|fly and ride) /.test(t)) return "fr";
   if (/ (no potion|np|nopotion) /.test(t)) return "none";
   if (/ fly /.test(t)) return "f";
   if (/ ride /.test(t)) return "r";

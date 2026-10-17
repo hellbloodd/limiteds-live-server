@@ -28,17 +28,17 @@ function lookup(market) {
 export function startRemoteMarkets() {
   for (const m of Object.keys(SEARCH)) {
     registerMarket(m, lookup(m));
-    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && !store[m]) store[m] = d; }).catch(() => {});
+    if (supabaseConfig()) readRow(rowId(m)).then((d) => { if (d?.games && d.v === 2 && !store[m]) store[m] = d; }) // v2: stricter title matching.catch(() => {});
   }
 }
 
 // From the booster: { market, games: { game: { id: { usd, offers, rating?, url? } } } }
 export async function receiveMarket(market, games) {
   if (!SEARCH[market] || !games || typeof games !== "object") return { ok: false };
-  const prev = store[market]?.games || {};
+  const prev = store[market]?.v === 2 ? store[market].games : {};
   const merged = { ...prev };
   for (const [g, map] of Object.entries(games)) if (SEARCH[market][g] && map && Object.keys(map).length) merged[g] = map; // a failed game keeps its last prices
-  store[market] = { updatedAt: new Date().toISOString(), games: merged };
+  store[market] = { v: 2, updatedAt: new Date().toISOString(), games: merged };
   if (supabaseConfig()) await writeMm2Row(rowId(market), store[market]).catch(() => {});
   return { ok: true, items: Object.values(merged).reduce((n, m) => n + Object.keys(m).length, 0) };
 }

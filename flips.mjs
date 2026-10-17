@@ -53,7 +53,8 @@ async function collect(port) {
   // Other marketplaces: buying there and relisting 1¢ under Eldorado's cheapest is a flip too.
   for (const r of [...rows]) {
     const code = r.game === "Adopt Me" ? (String(r.key).split(":")[1] || "fr") : "";
-    const others = otherMarketPrices(r.game, r.name, code);
+    // under 35% of Eldorado's price it's almost always a different item or a fake listing: ignored
+    const others = otherMarketPrices(r.game, r.name, code).filter((o) => o.usd >= r.usd * 0.35);
     if (!others.length) continue;
     r.others = others.map((o) => ({ market: o.market, usd: o.usd, url: o.url, rating: o.rating ?? null })); // shown next to the Eldorado price
     for (const o of others) {

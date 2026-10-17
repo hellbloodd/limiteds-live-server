@@ -1,7 +1,7 @@
 // U7BUY prices: every offer in each game's shop (100 a page, USD) from U7BUY's own API, matched
 // to our items by title. Refreshed every 15 minutes; kept in Supabase row "u7buy_prices".
 import { readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
-import { registerMarket, nameIndex, matchTitle, amCode, words } from "./markets.mjs";
+import { registerMarket, nameIndex, matchTitle, amCode, words, robustMin } from "./markets.mjs";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const SHOPS = { // game -> [spuId, shop page]
@@ -30,12 +30,15 @@ export async function fetchU7Game(game, items) {
       if (game === "Adopt Me") { const code = amCode(o.offerName); if (!code) continue; id += `|${code}`; }
       if (game === "Steal a Brainrot" && /mutation|gold|diamond|rainbow|lava|galaxy|candy|bloodrot|radioactive/i.test(o.offerName) && !/no mutation/i.test(o.offerName)) continue;
       const rating = Number(o.remoteStoreDetail?.favorableRate) || null, sold = o.remoteStoreDetail?.completedNum || 0;
-      const prev = out[id];
-      if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + 1, rating, sold };
-      else prev.offers++;
+      (out[id] ||= { all: [] }).all.push([usd, rating, sold]);
     }
     if (rows.length < PAGE) break;
     await new Promise((res) => setTimeout(res, 300));
+  }
+  for (const [id, o] of Object.entries(out)) {
+    const usd = robustMin(o.all.map((x) => x[0]));
+    const best = o.all.find((x) => x[0] === usd);
+    out[id] = { usd: Math.round(usd * 100) / 100, offers: o.all.length, rating: best?.[1] ?? null, sold: best?.[2] ?? 0 };
   }
   return out;
 }
@@ -44,11 +47,12 @@ export async function u7Refresh(port) {
   const games = { ...data.games };
   for (const game of Object.keys(SHOPS)) {
     try {
-      const items = (await (await fetch(`http://127.0.0.1:${port}${API[game]}`)).json()).items || [];
+      const items = (await (await fetch(`http://127.0.0.1:${port}${API[game]}`, { signal: AbortSignal.timeout(60000) })).json()).items || [];
+      if (!items.length) console.warn(`U7BUY ${game}: no items from our own API yet - skipped this round`);
       if (items.length) games[game] = await fetchU7Game(game, items);
     } catch (e) { console.warn(`U7BUY ${game} prices failed: ${e.message}`); }
   }
-  data = { updatedAt: new Date().toISOString(), games };
+  data = { v: 2, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("u7buy_prices", data).catch(() => {});
 }
 
@@ -64,7 +68,7 @@ export function u7Price(game, name, code = "") {
 export function startU7(port) {
   registerMarket("U7BUY", u7Price);
   (async () => {
-    if (supabaseConfig()) { const saved = await readRow("u7buy_prices").catch(() => null); if (saved?.games) data = saved; }
+    if (supabaseConfig()) { const saved = await readRow("u7buy_prices").catch(() => null); if (saved?.games && saved.v === 2) data = saved; } // v2: stricter title matching
     await new Promise((r) => setTimeout(r, 2 * 60 * 1000)); // let the game data load first
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await u7Refresh(port).catch(() => {});
   })();

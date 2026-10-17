@@ -2,7 +2,7 @@
 // Cloudflare browser check that plain requests can't pass), matches each listing to our items by
 // title, and returns the cheapest price per item. Needs Google Chrome or Edge installed.
 import { existsSync } from "node:fs";
-import { nameIndex, matchTitle, amCode, words } from "./markets.mjs";
+import { nameIndex, matchTitle, amCode, words, robustMin } from "./markets.mjs";
 
 const BROWSERS = ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
   `${process.env.LOCALAPPDATA}/Google/Chrome/Application/chrome.exe`, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"];
@@ -16,9 +16,16 @@ function add(out, game, title, usd, extra, index) {
   if (!name) return;
   let id = words(name);
   if (game === "Adopt Me") { const code = amCode(title); if (!code) return; id += `|${code}`; }
-  const prev = out[id];
-  if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + 1, ...extra };
-  else prev.offers++;
+  (out[id] ||= { all: [] }).all.push({ usd, ...extra });
+}
+// each item: the cheapest believable price (not a lone fake far under the rest)
+function finish(out) {
+  for (const [id, o] of Object.entries(out)) {
+    const usd = robustMin(o.all.map((x) => x.usd));
+    const { usd: _u, ...extra } = o.all.find((x) => x.usd === usd) || {};
+    out[id] = { usd: Math.round(usd * 100) / 100, offers: o.all.length, ...extra };
+  }
+  return out;
 }
 
 async function gameboost(page, game, index, log) {
@@ -90,7 +97,7 @@ export async function scanBrowserMarkets(items, log = console.log) {
         if (!items[game]?.length) continue;
         const t0 = Date.now();
         try {
-          result[market][game] = await fn(page, game, nameIndex(items[game]), log);
+          result[market][game] = finish(await fn(page, game, nameIndex(items[game]), log));
           log(`${market} ${game}: ${Object.keys(result[market][game]).length} items in ${Math.round((Date.now() - t0) / 1000)} s`);
         } catch (e) { log(`${market} ${game} failed: ${e.message.slice(0, 120)}`); }
       }
