@@ -39,6 +39,10 @@
   .tab:hover { color:var(--text); border-color:var(--muted-2); }
   .tab.active { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .controls { display:flex; flex-wrap:wrap; gap:8px; padding:12px 0; }
+  .ranges { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:0 0 10px; font-size:12px; color:var(--muted); }
+  .ranges label { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .ranges input { width:84px; padding:6px 8px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text); font:inherit; font-size:12px; }
+  .ranges-clear { font:800 11px Manrope, sans-serif; padding:5px 10px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; }
   input, select { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:9px 12px; font:inherit; }
   input { flex:1 1 220px; }
   input:focus, select:focus { outline:none; border-color:var(--accent); }
@@ -258,6 +262,11 @@
       <option value="name">Name</option>
     </select>
   </div>
+  <div class="ranges" id="ranges">
+    <label>Value <input id="vmin" type="number" min="0" step="any" inputmode="decimal" placeholder="min"> – <input id="vmax" type="number" min="0" step="any" inputmode="decimal" placeholder="max"></label>
+    <label>Price $ <input id="pmin" type="number" min="0" step="any" inputmode="decimal" placeholder="min"> – <input id="pmax" type="number" min="0" step="any" inputmode="decimal" placeholder="max"></label>
+    <button type="button" id="ranges-clear" class="ranges-clear" hidden>Clear</button>
+  </div>
   <div class="periods" id="periods">
     <span class="dim">Change:</span>
     <button data-p="24h">24h</button><button data-p="7d" class="on">7d</button><button data-p="30d">30d</button><button data-p="1y">1y</button><button data-p="all">All</button>
@@ -401,7 +410,13 @@ function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
   const deals = c === "deals";
-  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q))
+  // value / price ranges (empty = no limit); a price range hides items with no Eldorado price
+  const num = (id) => { const x = $(id).value.trim(); return x === "" ? null : Number(x); };
+  const [vmin, vmax, pmin, pmax] = ["vmin", "vmax", "pmin", "pmax"].map(num);
+  $("ranges-clear").hidden = [vmin, vmax, pmin, pmax].every((x) => x == null);
+  const inRange = (i) => (vmin == null || i.value >= vmin) && (vmax == null || i.value <= vmax)
+    && ((pmin == null && pmax == null) || (i.usd > 0 && (pmin == null || i.usd >= pmin) && (pmax == null || i.usd <= pmax)));
+  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && inRange(i)
     && (deals ? isDeal(i) : c === "rising" ? isRising(i) : c === "tokens" ? beatsTokens(i) : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
@@ -531,6 +546,12 @@ $("grid").addEventListener("click", async (e) => {
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+// ranges are remembered per game in this browser
+const RANGE_KEY = `ranges:${GAME.tab}`;
+try { const r = JSON.parse(localStorage.getItem(RANGE_KEY) || "{}"); for (const k of ["vmin", "vmax", "pmin", "pmax"]) if (r[k] != null) $(k).value = r[k]; } catch { /* private mode */ }
+const saveRanges = () => { try { localStorage.setItem(RANGE_KEY, JSON.stringify(Object.fromEntries(["vmin", "vmax", "pmin", "pmax"].map((k) => [k, $(k).value || null])))); } catch { /* ignore */ } };
+["vmin", "vmax", "pmin", "pmax"].forEach((id) => $(id).addEventListener("input", () => { saveRanges(); render(); }));
+$("ranges-clear").addEventListener("click", () => { ["vmin", "vmax", "pmin", "pmax"].forEach((id) => { $(id).value = ""; }); saveRanges(); render(); });
 $("grid").addEventListener("pointermove", (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   const r = card.getBoundingClientRect();
