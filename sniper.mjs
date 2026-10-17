@@ -133,7 +133,12 @@ async function processListings(game, item, p) {
         timestamp: new Date().toISOString(),
       }],
     }).catch(() => {});
-    notifyPhones({ title: `🎯 ${item.name} — ${snipe.discount}% under`, body: `$${fmt(price)} (usually $${fmt(usual)}) · +$${fmt(profit)} flip${trust ? ` · seller ${trust.score}%` : ""}${suspicious ? " · ⚠️ check carefully" : ""}`,
+    notifyPhones({
+      title: `🎯 ${item.name} — ${snipe.discount}% under${suspicious ? " ⚠️" : ""}`,
+      body: [`💵 Listed $${fmt(price)} · ${item.soldPrice ? "usually sells" : "was"} $${fmt(usual)}`,
+        `📈 Flip +$${fmt(profit)} (relist under $${fmt(next)})`,
+        `${trust ? `${{ trusted: "✅", ok: "👍", new: "🆕", risky: "⚠️" }[trust.level]} Seller ${trust.score}% (${trust.ratings})` : "Seller unknown"} · ${game} · ${item.sold7d || 0} sold/7d`,
+        ...(suspicious ? ["⚠️ Very cheap — may be mislabelled, check carefully"] : [])].join("\n"),
       url: snipe.url, image: item.image, tag: `snipe-${offerId}` }).catch(() => {});
   }
   return changed;
@@ -310,4 +315,10 @@ export function boosterFinishFull(game, prices) {
   const job = pendingFull; pendingFull = null;
   job.resolve(prices);
   return { ok: true, priced: Object.keys(prices).length };
+}
+
+// A real item for the "Phone alerts" test notification (so it looks like a real snipe).
+export function sampleItem() {
+  const j = hot.find((h) => h.item.image && h.item.usd > 0) || null;
+  return j && { game: j.game, ...j.item };
 }

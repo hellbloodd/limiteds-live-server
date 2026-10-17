@@ -15,16 +15,18 @@ self.addEventListener("push", (e) => {
   e.waitUntil((async () => {
     let n = { title: "Agony Values", body: "New alert — open the app.", url: "/flips" };
     try { n = { ...n, ...(await (await fetch("/api/push/latest", { cache: "no-store" })).json()) }; } catch { /* show the generic one */ }
+    // Android shows "image" as a big picture under the text (like a Discord embed) and the item as the icon.
     await self.registration.showNotification(n.title, {
-      body: n.body, icon: n.image || "/icons/icon-192.png", badge: "/icons/badge-96.png",
-      tag: n.tag || `av-${n.at || Date.now()}`, data: { url: n.url || "/flips" }, requireInteraction: false,
+      body: n.body, icon: n.image || "/icons/icon-192.png", image: n.image || undefined, badge: "/icons/badge-96.png",
+      tag: n.tag || `av-${n.at || Date.now()}`, data: { url: n.url || "/flips" }, requireInteraction: Boolean(n.image),
+      actions: n.url && n.url.startsWith("http") ? [{ action: "buy", title: "🛒 Buy on Eldorado" }, { action: "flips", title: "💸 Flip Finder" }] : [],
     });
   })());
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || "/flips";
+  const url = e.action === "flips" ? "/flips" : e.notification.data?.url || "/flips";
   e.waitUntil((async () => {
     if (new URL(url, self.location.origin).origin !== self.location.origin) return self.clients.openWindow(url); // e.g. the Eldorado listing
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

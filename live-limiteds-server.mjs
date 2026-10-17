@@ -6,7 +6,7 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
-import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull } from "./sniper.mjs";
+import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem } from "./sniper.mjs";
 import { isOwner } from "./tools.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
@@ -55,6 +55,7 @@ const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "rolimons-source-v3";
 
 const DASHBOARD_HTML = `<title>Agony Values</title>
+<meta property="og:site_name" content="Agony Values"><meta property="og:type" content="website"><meta property="og:title" content="Agony Values"><meta property="og:description" content="Roblox item values and Eldorado.gg prices for MM2, Blade Ball, Adopt Me and Steal a Brainrot — flips, snipes and alerts."><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png"><meta name="twitter:card" content="summary"><meta name="description" content="Roblox item values and Eldorado.gg prices for MM2, Blade Ball, Adopt Me and Steal a Brainrot — flips, snipes and alerts.">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
@@ -3667,7 +3668,14 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === "/api/push/latest") return sendJson(res, 200, latestNotification());
     if ((parsedUrl.pathname === "/api/push/subscribe" || parsedUrl.pathname === "/api/push/test") && req.method === "POST") {
       if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong or missing owner key." });
-      if (parsedUrl.pathname === "/api/push/test") return sendJson(res, 200, { sent: await notifyPhones({ title: "🔔 Agony Values alerts are on", body: "You'll get snipes here as they happen.", url: "/flips", tag: "av-test" }) });
+      if (parsedUrl.pathname === "/api/push/test") {
+        const it = sampleItem();
+        return sendJson(res, 200, { sent: await notifyPhones(it ? {
+          title: `🔔 Test: ${it.name} — example snipe`,
+          body: [`💵 Cheapest $${it.usd}${it.second ? ` · next $${it.second}` : ""}`, `🎮 ${it.game} · ${it.sold7d || 0} sold/7d`, "This is what a snipe alert looks like ✓"].join("\n"),
+          url: it.eldoradoUrl || "/flips", image: it.image, tag: "av-test",
+        } : { title: "🔔 Agony Values alerts are on", body: "You'll get snipes here as they happen.", url: "/flips", tag: "av-test" }) });
+      }
       let body = ""; for await (const c of req) { body += c; if (body.length > 10000) break; }
       try { return sendJson(res, 200, { ok: true, phones: await addSubscription(JSON.parse(body)) }); }
       catch (e) { return sendJson(res, 400, { error: e.message }); }
