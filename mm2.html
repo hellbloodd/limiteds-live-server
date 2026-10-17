@@ -439,7 +439,7 @@ function render() {
         <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
         <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
         <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
-        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span></div>` : ""}
+        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${i.listings ? ` <span class="dim" title="Listings on Eldorado right now">· ${i.listings} listed</span>` : ""}</div>` : ""}
       </div>
       ${tags(i)}
       ${spark(i.spark)}
