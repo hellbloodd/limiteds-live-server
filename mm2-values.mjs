@@ -321,8 +321,12 @@ export function salesStats(list, now = Date.now()) {
 const DAY_MS = 864e5;
 const PRICE_HISTORY_MAX_POINTS = 400;
 
+// Points are [day, usd] where day may have an hour fraction (20743.5 = noon): one point an hour
+// for the last 3 days (so the price chart has shape right away), then one a day for older history.
+const HOURLY_DAYS = 3;
 export function recordPriceHistory(hist, prices, now = Date.now()) {
-  const day = Math.floor(now / DAY_MS);
+  const day = Math.floor(now / 3600e3) / 24; // this hour, in days
+  const oldBefore = Math.floor(now / DAY_MS) - HOURLY_DAYS;
   for (const [key, p] of Object.entries(prices)) {
     if (!(p?.usd > 0)) continue;
     const usd = Math.round(p.usd * 100) / 100;
@@ -335,6 +339,16 @@ export function recordPriceHistory(hist, prices, now = Date.now()) {
     } else if (!last || last[1] !== usd) {
       points.push([day, usd]);
       if (points.length > PRICE_HISTORY_MAX_POINTS) points.splice(0, points.length - PRICE_HISTORY_MAX_POINTS);
+    }
+    // older than 3 days: keep only each day's last price
+    if (points.length > 2 && points[0][0] < oldBefore && points.some((q) => q[0] % 1 && q[0] < oldBefore)) {
+      const kept = [];
+      for (const q of points) {
+        if (q[0] >= oldBefore) { kept.push(q); continue; }
+        const d = Math.floor(q[0]);
+        if (kept.length && Math.floor(kept[kept.length - 1][0]) === d) kept[kept.length - 1] = [d, q[1]]; else kept.push([d, q[1]]);
+      }
+      points.splice(0, points.length, ...kept);
     }
   }
 }

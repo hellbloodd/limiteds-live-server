@@ -55,9 +55,16 @@
   .refresh:disabled { opacity:.6; cursor:default; }
   #refresh-status { font-size:12px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:10px; padding-bottom:40px; }
-  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px; cursor:pointer; display:flex; gap:12px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:8px; min-width:0; }
+  /* card layout: picture + name/category/badges, then value + mini chart, then the price line - nothing overlaps */
+  .c-top { display:flex; gap:10px; align-items:flex-start; min-width:0; }
+  .c-id { min-width:0; flex:1; }
+  .c-id .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .c-mid { display:flex; align-items:flex-end; justify-content:space-between; gap:8px; min-width:0; }
+  .c-mid > div { min-width:0; }
+  .c-foot { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; font-size:12px; padding-top:8px; border-top:1px solid var(--border); }
   .card:hover { border-color:var(--accent); }
-  .card img { width:64px; height:64px; object-fit:contain; flex:none; background:var(--surface-2); border-radius:10px; }
+  .card img { width:56px; height:56px; object-fit:contain; flex:none; background:var(--surface-2); border-radius:10px; }
   .name { font-weight:800; }
   .cat { color:var(--muted); font-size:12px; text-transform:capitalize; }
   .val { font-size:17px; font-weight:700; margin-top:4px; color:var(--accent); }
@@ -72,6 +79,9 @@
   svg.chart text { fill:var(--muted); font:11px "JetBrains Mono", monospace; }
   .chart-foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
   .range-row { display:flex; gap:6px; margin-bottom:8px; }
+  .kind-row { display:flex; gap:6px; margin:4px 0 8px; }
+  .kind { font:800 12px Manrope, sans-serif; padding:6px 12px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; }
+  .kind.on { color:var(--text); border-color:var(--accent); background:var(--accent-soft); }
   .range { background:none; border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:3px 10px; font:700 12px inherit; cursor:pointer; }
   .range.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .card { position:relative; }
@@ -89,10 +99,9 @@
   .ptable { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:0 0 14px; }
   .ptable div { background:var(--surface-2); border-radius:10px; padding:8px; text-align:center; display:flex; flex-direction:column; gap:2px; font-size:12px; }
   .ptable b { font-size:14px; }
-  .tags { position:absolute; top:12px; right:12px; display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+  .tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
   .tags .badge { margin-left:0; }
-  .card.has-tags .name, .card.has-tags .cat { padding-right:78px; }
-  svg.spark { position:absolute; right:12px; bottom:12px; width:70px; height:30px; }
+  svg.spark { flex:none; width:72px; height:30px; }
   .close { float:right; background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; }
   a { color:var(--accent); }
   .empty { color:var(--muted); padding:40px 16px; text-align:center; grid-column:1/-1; }
@@ -431,18 +440,23 @@ function render() {
   const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
   list.sort((deals || c === "rising") && s === "value" ? byDeal : sorters[s]);
   $("grid").innerHTML = list.length ? list.map((i, n) => `
-    <div class="card${isDeal(i) || beatsTokens(i) ? " has-tags" : ""}" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
-
-      <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
-      <div>
-        <div class="name">${esc(i.name)}${isRising(i) ? ` <span class="rise" title="Value up recently, still cheap on Eldorado">📈</span>` : ""}</div>
-        <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
-        <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
-        <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
-        ${i.usd ? `<div class="price tabular">${usd(i.usd)} <span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${i.listings ? ` <span class="dim" title="Listings on Eldorado right now">· ${i.listings} listed</span>` : ""}</div>` : ""}
+    <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
+      <div class="c-top">
+        <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
+        <div class="c-id">
+          <div class="name" title="${esc(i.name)}">${esc(i.name)}${isRising(i) ? ` <span class="rise" title="Value up recently, still cheap on Eldorado">📈</span>` : ""}</div>
+          <div class="cat">${esc(catLabel(i.category))}${i.stability ? ` · ${esc(i.stability)}` : ""}</div>
+          ${tags(i)}
+        </div>
       </div>
-      ${tags(i)}
-      ${spark(i.spark)}
+      <div class="c-mid">
+        <div>
+          <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
+          <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
+        </div>
+        ${spark(i.spark)}
+      </div>
+      ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b><span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
     </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
 }
 
@@ -471,8 +485,10 @@ function spark(vals) {
 const RANGES = [["1M", 30], ["3M", 90], ["1Y", 365], ["All", 0]];
 const shortNum = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : n.toLocaleString();
 
-function chartView(allPoints, days) {
-  if (allPoints.length < 2) return `<p class="dim">No value history for this item yet — it fills in as values change.</p>`;
+// fmtY: axis/readout format; points: [[ms, y], ...]
+function chartView(allPoints, days, fmtY = shortNum, emptyMsg = "No value history for this item yet — it fills in as values change.") {
+  if (allPoints.length < 1) return `<p class="dim">${emptyMsg}</p>`;
+  if (allPoints.length === 1) allPoints = [[allPoints[0][0] - 3600e3, allPoints[0][1]], allPoints[0]];
   let points = allPoints;
   if (days) {
     const cutoff = Date.now() - days * 864e5;
@@ -492,7 +508,7 @@ function chartView(allPoints, days) {
   const area = `${d}V${H - B}H${sx(xs[0])}Z`;
   const grid = [0, 0.5, 1].map((f) => {
     const v = y0 + (y1 - y0) * f, y = sy(v);
-    return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end">${shortNum(Math.round(v))}</text>`;
+    return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end">${fmtY(v)}</text>`;
   }).join("");
   const dfmt = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: days && days <= 90 ? undefined : "2-digit" });
   const first = ys[0], last = ys[ys.length - 1], pct = first ? (last - first) / first * 100 : 0;
@@ -504,13 +520,23 @@ function chartView(allPoints, days) {
       <text x="${L}" y="${H - 6}">${dfmt(x0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">Today</text>
       <line id="cursor" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
     </svg>
-    <div class="chart-foot tabular"><span id="hover-read">${shortNum(first)} → ${shortNum(last)}</span><span class="${cls(pct)}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</span></div>`;
+    <div class="chart-foot tabular"><span id="hover-read">${fmtY(first)} → ${fmtY(last)}</span><span class="${cls(pct)}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</span></div>`;
 }
 
-function mountChart(points) {
-  let days = 365;
+// Two charts in the item preview: the value (from the values site) and the cheapest Eldorado price
+// (tracked by us: a point every hour for the last 3 days, then one a day).
+const valueFmt = (v) => shortNum(Math.round(v));
+const priceFmt = (v) => (v >= 100 ? "$" + Math.round(v).toLocaleString() : "$" + v.toFixed(2));
+function mountChart(valuePoints, pricePoints = null) {
+  let days = 365, kind = valuePoints.length ? "value" : "price";
   const draw = () => {
-    $("hist").innerHTML = `<div class="range-row">${RANGES.map(([l, n]) => `<button class="range${n === days ? " on" : ""}" data-days="${n}">${l}</button>`).join("")}</div>${chartView(points, days)}`;
+    const pts = kind === "value" ? valuePoints : pricePoints;
+    const fmtY = kind === "value" ? valueFmt : priceFmt;
+    const tabs = pricePoints ? `<div class="kind-row"><button class="kind${kind === "value" ? " on" : ""}" data-kind="value">Value</button><button class="kind${kind === "price" ? " on" : ""}" data-kind="price">Eldorado price</button></div>` : "";
+    const note = kind === "price" && pricePoints.length && Date.now() - pricePoints[0][0] < 7 * 864e5
+      ? `<p class="dim" style="font-size:11px;margin:6px 0 0">Price tracking started ${new Date(pricePoints[0][0]).toLocaleDateString()} — the chart grows every hour.</p>` : "";
+    $("hist").innerHTML = `${tabs}<div class="range-row">${RANGES.map(([l, n]) => `<button class="range${n === days ? " on" : ""}" data-days="${n}">${l}</button>`).join("")}</div>${chartView(pts, days, fmtY, kind === "value" ? undefined : "No Eldorado price history yet.")}${note}`;
+    const points = pts;
     const svg = $("hist").querySelector("svg.chart"); if (!svg) return;
     const x0 = +svg.dataset.x0, x1 = +svg.dataset.x1, read = $("hover-read"), base = read.textContent, cursor = svg.querySelector("#cursor");
     svg.addEventListener("pointermove", (e) => {
@@ -518,11 +544,14 @@ function mountChart(points) {
       const t = x0 + Math.min(1, Math.max(0, (fx - 52) / (600 - 62))) * (x1 - x0);
       const p = points.filter((q) => q[0] <= t).pop() || points[0];
       cursor.setAttribute("x1", Math.max(52, fx)); cursor.setAttribute("x2", Math.max(52, fx)); cursor.setAttribute("visibility", "visible");
-      read.textContent = `${new Date(t).toLocaleDateString()} · ${p[1].toLocaleString()}`;
+      read.textContent = `${new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: kind === "price" ? "2-digit" : undefined })} · ${(kind === "value" ? valueFmt : priceFmt)(p[1])}`;
     });
     svg.addEventListener("pointerleave", () => { cursor.setAttribute("visibility", "hidden"); read.textContent = base; });
   };
-  $("hist").onclick = (e) => { const b = e.target.closest(".range"); if (b) { days = +b.dataset.days; draw(); } };
+  $("hist").onclick = (e) => {
+    const b = e.target.closest(".range"); if (b) { days = +b.dataset.days; draw(); }
+    const k = e.target.closest(".kind"); if (k) { kind = k.dataset.kind; draw(); }
+  };
   draw();
 }
 
@@ -543,9 +572,11 @@ $("grid").addEventListener("click", async (e) => {
     <div id="hist" class="dim">Loading history…</div>
     <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
   $("dlg").showModal();
-  if (i.valueText) { $("hist").innerHTML = ""; return; }
+  if (i.valueText && !i.usd) { $("hist").innerHTML = ""; return; }
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
-  mountChart(h.points);
+  // Eldorado price: stored points ([day number, usd]) plus the live price now
+  const pricePts = i.usd ? [...(h.pricePoints || []).map(([d, v]) => [d * 864e5, v]), [Date.now(), i.usd]] : null;
+  mountChart(h.points || [], pricePts);
 });
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
