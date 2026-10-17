@@ -8,6 +8,26 @@ import { listingsFor } from "./sniper.mjs";
 import { fetchAmEldoradoPrices } from "./am-values.mjs";
 import { scrapeBbValues } from "./bb-values.mjs";
 
+// GameBoost + Itemku in a hidden Chrome every 30 minutes (they block plain requests).
+const MARKETS_EVERY_MS = Number(process.env.BOOSTER_MARKETS_MIN || 30) * 60 * 1000;
+let marketsRunning = false, marketsAt = Date.now() - MARKETS_EVERY_MS + 2 * 60 * 1000; // first run ~2 min after start
+async function runMarkets() {
+  marketsRunning = true; marketsAt = Date.now();
+  try {
+    const { scanBrowserMarkets } = await import("./browser-markets.mjs");
+    const items = {};
+    for (const [g, path] of [["MM2", "/api/mm2"], ["Blade Ball", "/api/bladeball"], ["Adopt Me", "/api/adoptme"], ["Steal a Brainrot", "/api/stealabrainrot"]])
+      items[g] = (await (await fetch(SITE + path, { signal: AbortSignal.timeout(60000) })).json()).items || [];
+    console.log(`
+${new Date().toLocaleTimeString()}  Reading GameBoost and Itemku...`);
+    const result = await scanBrowserMarkets(items, (m) => console.log(`  ${m}`));
+    for (const [market, games] of Object.entries(result)) if (Object.keys(games).length) await api("/api/booster/market", { market, games });
+    console.log(`${new Date().toLocaleTimeString()}  GameBoost / Itemku prices sent.`);
+  } catch (e) { console.log(`
+GameBoost / Itemku scan failed: ${e.message}`); }
+  finally { marketsRunning = false; }
+}
+
 const FULL = {
   "Adopt Me": (items) => fetchAmEldoradoPrices(items),
   "Blade Ball values": async () => (await scrapeBbValues()).items, // when bbvalues.uk blocks the server
@@ -53,6 +73,7 @@ for (;;) {
   try { work = await api(`/api/booster/work?max=${PARALLEL * 6}`); }
   catch (e) { console.log(`Can't reach the site (${e.message}) - retrying in 15 s.`); await sleep(15000); continue; }
   if (work.full && !fullRunning) runFull();
+  if (!marketsRunning && Date.now() - marketsAt > MARKETS_EVERY_MS) runMarkets();
   if (!work.items?.length) { await sleep(3000); continue; }
 
   const queue = [...work.items], results = [];
