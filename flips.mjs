@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { sellerTrust, warmSellers } from "./sellers.mjs";
 import { undercutStats } from "./sniper.mjs";
+import { g2gPrice } from "./g2g.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GAMES = [
@@ -48,6 +49,15 @@ async function collect(port) {
         ladder: i.ladder || null, valuePerUsd: i.valuePerUsd ?? null, unit: "",
       });
     }
+  }
+  // Other marketplaces: buying there and relisting 1¢ under Eldorado's cheapest is a flip too.
+  for (const r of [...rows]) {
+    const code = r.game === "Adopt Me" ? (String(r.key).split(":")[1] || "fr") : "";
+    const g = g2gPrice(r.game, r.name, code);
+    if (!g) continue;
+    r.g2g = { usd: g.usd, offers: g.offers, url: g.url };
+    if (g.usd < r.usd - 0.01) rows.push({ ...r, key: `${r.key}@g2g`, market: "G2G → Eldorado", usd: g.usd, second: r.usd, listings: r.listings,
+      url: g.url, sellUrl: r.url, ladder: [g.usd, ...(r.ladder || [r.usd])].slice(0, 5), sellers: null, g2g: null });
   }
   return { pricesUpdatedAt, pricesByGame, count: rows.length, rows };
 }

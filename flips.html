@@ -94,6 +94,7 @@
   .item img { width:42px; height:42px; object-fit:contain; border-radius:10px; flex:none; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); transition:transform .3s var(--ease); }
   .row:hover .item img { transform:scale(1.08) rotate(-2deg); }
   .item .name { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip.mk { color:#f97316; border-color:#f9731655; }
   .trust { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; }
   .trust.trusted { color:#22c55e; background:#22c55e1a; } .trust.ok { color:var(--muted); background:var(--surface-2, #ffffff10); }
   .trust.new { color:#f5b400; background:#f5b4001f; } .trust.risky { color:#ef4444; background:#ef44441f; }
@@ -281,7 +282,7 @@ function render() {
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
           <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${trustChip(r.trust?.[0])}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on G2G, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.g2g ? `<span class="dim" style="font-size:10px;margin-left:4px" title="Cheapest on G2G">G2G ${money(r.g2g.usd)}</span>` : ""}</div>
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
@@ -292,7 +293,7 @@ function render() {
       <div class="num tabular dim" data-label="Listings">${r.listings ?? "?"}</div>
       <div class="num tabular ${r.sold7d ? "" : "dim"}" data-label="Sold 7d" title="${r.sold24h} in the last 24h${r.soldPrice ? ` · typical sale ${money(r.soldPrice)}` : ""}">${r.sold7d}${r.sold24h ? ` <span class="up" style="font-size:11px">+${r.sold24h}</span>` : ""}</div>
       <div class="num tabular ${r.perDay > 0 ? "up" : "dim"}" data-label="Profit / day">${r.perDay > 0 ? "+" + money(r.perDay) : "—"}</div>
-      <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on Eldorado</a>
+      <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? "Buy on G2G" : "Buy on Eldorado"}</a>
     </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
   $("t-count").textContent = list.length.toLocaleString();
   $("t-count-sub").textContent = `of ${(lastData?.total ?? rows.length).toLocaleString()} items with 2+ listings`;
@@ -381,7 +382,8 @@ function openCard(r) {
     </div>
     <div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cheapest listings on Eldorado</div>
     <div class="ladder">${rungs}</div>
-    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Check listings on Eldorado</a><a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
+    ${r.market ? `<div class="verdict warn">🔁 Buy on G2G, relist on Eldorado<small>G2G charges its own buyer fees and delivery can be slower — check the seller and the final price on G2G before buying.</small></div>` : ""}
+    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? "Buy on G2G" : "Check listings on Eldorado"}</a>${r.market ? `<a class="ghost-link" href="${esc(r.sellUrl)}" target="_blank" rel="noopener">Eldorado listings</a>` : ""}<a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
   $("card").showModal();
 }
 $("rows").addEventListener("click", (e) => {
