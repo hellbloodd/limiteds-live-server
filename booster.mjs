@@ -6,8 +6,12 @@
 // Needs: SITE (default https://agony-values.onrender.com) and OWNER_KEY (same as on Render).
 import { listingsFor } from "./sniper.mjs";
 import { fetchAmEldoradoPrices } from "./am-values.mjs";
+import { scrapeBbValues } from "./bb-values.mjs";
 
-const FULL = { "Adopt Me": (items) => fetchAmEldoradoPrices(items) };
+const FULL = {
+  "Adopt Me": (items) => fetchAmEldoradoPrices(items),
+  "Blade Ball values": async () => (await scrapeBbValues()).items, // when bbvalues.uk blocks the server
+};
 let fullRunning = false;
 // A whole game's price refresh handed over by the server (runs alongside the item checks).
 async function runFull() {
@@ -17,10 +21,10 @@ async function runFull() {
     if (!job.game || !FULL[job.game]) return;
     const t0 = Date.now();
     console.log(`
-${new Date().toLocaleTimeString()}  Refreshing all ${job.game} prices (${job.items.length} items)...`);
+${new Date().toLocaleTimeString()}  Fetching ${job.game} for the server...`);
     const prices = await FULL[job.game](job.items);
     const r = await api("/api/booster/full", { game: job.game, prices });
-    console.log(`${new Date().toLocaleTimeString()}  ${job.game}: ${r.priced ?? 0} prices sent in ${Math.round((Date.now() - t0) / 1000)} s.`);
+    console.log(`${new Date().toLocaleTimeString()}  ${job.game}: ${r.priced ?? 0} sent in ${Math.round((Date.now() - t0) / 1000)} s.`);
   } catch (e) { console.log(`
 Full refresh failed: ${e.message}`); }
   finally { fullRunning = false; }

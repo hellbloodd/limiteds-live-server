@@ -311,7 +311,7 @@ export function boosterTakeFull() {
 }
 export function boosterFinishFull(game, prices) {
   boosterSeenAt = Date.now();
-  if (!pendingFull || pendingFull.game !== game || !prices || typeof prices !== "object") return { ok: false };
+  if (!pendingFull || pendingFull.game !== game || !prices || typeof prices !== "object") return { ok: false }; // prices: a price map, or an item list (values)
   clearTimeout(pendingFull.timer);
   const job = pendingFull; pendingFull = null;
   job.resolve(prices);

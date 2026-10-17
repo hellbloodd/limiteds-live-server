@@ -213,9 +213,20 @@ async function flushLivePrices() {
   }
 }
 
+// bbvalues.uk's Cloudflare sometimes blocks Render's IPs (503) while it works from a home PC: then
+// the PC booster fetches the values and hands them over.
+async function bbValues() {
+  try { return (await scrapeBbValues()).items; }
+  catch (e) {
+    const fromPc = await delegateFull("Blade Ball values", []).catch(() => null);
+    if (Array.isArray(fromPc) && fromPc.length) { console.log(`[${stamp()}] Blade Ball values fetched by the PC booster (${e.message.slice(0, 60)}).`); return fromPc; }
+    throw e;
+  }
+}
+
 async function pushBladeBall() {
   try {
-    const { items } = await scrapeBbValues();
+    const items = await bbValues();
     lastItems[BB_PREFIX] = items;
     const state = await getState(BB_PREFIX);
     const { history, historyFetched, eldorado } = state;
