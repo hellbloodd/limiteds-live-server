@@ -73,7 +73,7 @@ for (;;) {
   try { work = await api(`/api/booster/work?max=${PARALLEL * 6}`); }
   catch (e) { console.log(`Can't reach the site (${e.message}) - retrying in 15 s.`); await sleep(15000); continue; }
   if (work.full && !fullRunning) runFull();
-  if (!marketsRunning && Date.now() - marketsAt > MARKETS_EVERY_MS) runMarkets();
+  if (!marketsRunning && (work.scanMarkets || Date.now() - marketsAt > MARKETS_EVERY_MS)) runMarkets(); // scanMarkets: "Refresh now" on the site
   if (!work.items?.length) { await sleep(3000); continue; }
 
   const queue = [...work.items], results = [];

@@ -44,6 +44,8 @@ export async function fetchG2gGame(game) {
   return out;
 }
 
+let g2gRunning = null;
+export function g2gRefreshNow() { return (g2gRunning ||= g2gRefresh().finally(() => { g2gRunning = null; })); }
 export async function g2gRefresh() {
   const games = { ...data.games };
   for (const game of Object.keys(GAME_IDS)) {
@@ -60,7 +62,7 @@ export function startG2g() {
     if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 3) data = saved; } // v2: exact listing links + MM2 names
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await g2gRefresh().catch(() => {});
   })();
-  setInterval(() => g2gRefresh().catch(() => {}), EVERY_MS).unref();
+  setInterval(() => g2gRefreshNow().catch(() => {}), EVERY_MS).unref();
 }
 
 // G2G's cheapest price for one of our items (code: Adopt Me version, e.g. "fr"), or null.

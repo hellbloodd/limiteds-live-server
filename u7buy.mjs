@@ -53,6 +53,8 @@ export async function fetchU7Game(game, items) {
   return out;
 }
 
+let u7Running = null;
+export function u7RefreshNow(port) { return (u7Running ||= u7Refresh(port).finally(() => { u7Running = null; })); }
 export async function u7Refresh(port) {
   const games = { ...data.games };
   for (const game of Object.keys(SHOPS)) {
@@ -87,6 +89,6 @@ export function startU7(port) {
     await new Promise((r) => setTimeout(r, 2 * 60 * 1000)); // let the game data load first
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await u7Refresh(port).catch(() => {});
   })();
-  setInterval(() => u7Refresh(port).catch(() => {}), EVERY_MS).unref();
+  setInterval(() => u7RefreshNow(port).catch(() => {}), EVERY_MS).unref();
 }
 export const u7Status = () => ({ updatedAt: data.updatedAt, items: Object.fromEntries(Object.entries(data.games).map(([g, m]) => [g, Object.keys(m).length])) });

@@ -200,6 +200,9 @@ export function sniperStatus() {
 // IP (Eldorado's request limit is per IP) and sends back what it saw (/api/booster/results). While
 // it's active it owns half the items; if it goes quiet for 90 s the server takes them all back.
 let boosterSeenAt = 0, boosterChecks = 0;
+let marketsScanRequested = false;
+// "Refresh now": ask the booster to re-read GameBoost / Itemku right away
+export function requestMarketsScan() { marketsScanRequested = true; return boosterActive(); }
 const boosterActive = () => Date.now() - boosterSeenAt < 90 * 1000;
 function boosterOwns(id) {
   if (id.startsWith("Blade Ball|")) return false; // matching needs the server's Blade Ball item list
@@ -215,7 +218,8 @@ export function boosterWork(max = 40) {
     .filter(({ sc }) => sc && sc.nextAt <= now && !(sc.boosterAt > now - 120 * 1000))
     .sort((a, b) => a.sc.nextAt - b.sc.nextAt).slice(0, max);
   for (const { j, sc } of jobs) { sc.boosterAt = now; out.push({ game: j.game, item: j.item }); }
-  return { items: out, mm2LeavesAt, full: pendingFull && !pendingFull.takenAt ? pendingFull.game : null };
+  const scanMarkets = marketsScanRequested; marketsScanRequested = false;
+  return { items: out, mm2LeavesAt, full: pendingFull && !pendingFull.takenAt ? pendingFull.game : null, scanMarkets };
 }
 export async function boosterResults(results) {
   boosterSeenAt = Date.now();

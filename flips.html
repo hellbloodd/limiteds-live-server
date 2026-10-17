@@ -430,17 +430,19 @@ setInterval(loadSnipes, 30 * 1000);
 // updates as each one arrives.
 $("refresh").addEventListener("click", async () => {
   const btn = $("refresh"), status = $("refresh-status");
-  const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 12000); };
+  const done = (text) => { status.textContent = text; btn.disabled = false; setTimeout(() => { if (!btn.disabled) status.textContent = ""; }, 20000); };
   const clickedAt = new Date().toISOString();
   btn.disabled = true;
-  status.textContent = "Re-checking every Eldorado offer for all four games…";
+  status.textContent = "Re-checking every offer: Eldorado, G2G, U7BUY, GameBoost and Itemku…";
   let r;
   try { r = await fetch("/api/refresh-values", { method: "POST" }).then((x) => x.json()); }
   catch { return done("Couldn't request a refresh — try again in a minute."); }
+  const others = r.markets ? ` Other marketplaces are refreshing (G2G, U7BUY${r.markets.browser ? ", GameBoost and Itemku via your PC" : "; GameBoost/Itemku need your PC booster on"}) — they land in a few minutes.` : "";
   if (!r.prices) {
     await load(true);
-    return done(r.running ? "A full refresh is already running — prices will update shortly." : "Every price was refreshed less than 5 minutes ago — showing the latest ✓");
+    return done((r.running ? "Eldorado is already refreshing — prices will update shortly." : "Eldorado was refreshed less than 5 minutes ago ✓") + others);
   }
+  status.textContent = "Re-checking every Eldorado offer…" + others;
   const games = ["Blade Ball", "Steal a Brainrot", "Adopt Me", "MM2"];
   const fresh = new Set();
   for (let i = 0; i < 100 && fresh.size < games.length; i++) { // up to ~10 min

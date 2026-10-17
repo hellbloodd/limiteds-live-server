@@ -6,11 +6,11 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
-import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem } from "./sniper.mjs";
+import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan } from "./sniper.mjs";
 import { isOwner } from "./tools.mjs";
 import { startHealthAlerts } from "./health.mjs";
-import { startG2g, g2gStatus } from "./g2g.mjs";
-import { startU7, u7Status } from "./u7buy.mjs";
+import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
+import { startU7, u7Status, u7RefreshNow } from "./u7buy.mjs";
 import { startRemoteMarkets, receiveMarket, remoteMarketStatus } from "./remote-markets.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
@@ -3722,7 +3722,15 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    if (parsedUrl.pathname === "/api/refresh-values") return sendJson(res, 200, requestRefresh(parsedUrl.searchParams.get("game")));
+    if (parsedUrl.pathname === "/api/refresh-values") {
+      // "Refresh now": Eldorado + every other marketplace (G2G, U7BUY here; GameBoost/Itemku on the PC booster)
+      const r = requestRefresh(parsedUrl.searchParams.get("game"));
+      if (process.env.SUPABASE_URL && !parsedUrl.searchParams.get("game")) {
+        g2gRefreshNow().catch(() => {}); u7RefreshNow(PORT).catch(() => {});
+        r.markets = { G2G: true, U7BUY: true, browser: requestMarketsScan() };
+      }
+      return sendJson(res, 200, r);
+    }
     if (parsedUrl.pathname === "/api/refresh-flips" && req.method === "POST") {
       let body = ""; for await (const c of req) { body += c; if (body.length > 50000) break; }
       let sel = []; try { sel = JSON.parse(body).items || []; } catch { /* bad body */ }
