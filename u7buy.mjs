@@ -19,9 +19,17 @@ export async function fetchU7Game(game, items) {
   const out = {};
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = `https://www.u7buy.com/prod-api/product/urlMapping/game-service/getOtherBusinessSpuInfoShowVo?pageNum=${page}&spuId=${SHOPS[game][0]}&sort=100&pageSize=${PAGE}&currency=USD`;
-    const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(25000) });
-    if (!r.ok) throw new Error(`U7BUY ${r.status}`);
-    const rows = (await r.json())?.data?.pageList?.rows || [];
+    // MM2's shop is big and its pages can be slow from the server: 60 s each, 3 tries, and a page
+    // that still fails is skipped instead of losing the whole game
+    let rows = null;
+    for (let attempt = 1; attempt <= 3 && !rows; attempt++) {
+      try {
+        const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(60000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        rows = (await r.json())?.data?.pageList?.rows || [];
+      } catch (e) { if (attempt === 3) console.warn(`U7BUY ${game} page ${page} skipped: ${e.message}`); else await new Promise((res) => setTimeout(res, 3000 * attempt)); }
+    }
+    if (!rows) continue;
     for (const o of rows) {
       const usd = Number(o.priceUsdDouble);
       const name = usd > 0 && matchTitle(o.offerName, index);
