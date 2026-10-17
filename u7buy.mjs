@@ -17,20 +17,20 @@ let data = { updatedAt: null, games: {} }; // games[game][words(name) or +"|code
 export async function fetchU7Game(game, items) {
   const index = nameIndex(items);
   const out = {};
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  // MM2's shop is big and its pages can be slow from the server: 60 s each, 3 tries, and a page that
+  // still fails is skipped instead of losing the whole game. Pages are read 4 at a time.
+  const getPage = async (page) => {
     const url = `https://www.u7buy.com/prod-api/product/urlMapping/game-service/getOtherBusinessSpuInfoShowVo?pageNum=${page}&spuId=${SHOPS[game][0]}&sort=100&pageSize=${PAGE}&currency=USD`;
-    // MM2's shop is big and its pages can be slow from the server: 60 s each, 3 tries, and a page
-    // that still fails is skipped instead of losing the whole game
-    let rows = null;
-    for (let attempt = 1; attempt <= 3 && !rows; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(60000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        rows = (await r.json())?.data?.pageList?.rows || [];
-      } catch (e) { if (attempt === 3) console.warn(`U7BUY ${game} page ${page} skipped: ${e.message}`); else await new Promise((res) => setTimeout(res, 3000 * attempt)); }
+        return (await r.json())?.data?.pageList || { rows: [], total: 0 };
+      } catch (e) { if (attempt === 3) { console.warn(`U7BUY ${game} page ${page} skipped: ${e.message}`); return null; } await new Promise((res) => setTimeout(res, 3000 * attempt)); }
     }
-    if (!rows) continue;
-    for (const o of rows) {
+  };
+  const take = (rows) => {
+    for (const o of rows || []) {
       const usd = Number(o.priceUsdDouble);
       const name = usd > 0 && matchTitle(o.offerName, index);
       if (!name) continue;
@@ -42,9 +42,13 @@ export async function fetchU7Game(game, items) {
       const link = `https://www.u7buy.com/offer/other-detail?spuId=${SHOPS[game][0]}&offerId=${o.offerId}&businessId=${o.businessId}&isEntrance=0`;
       (out[id] ||= { all: [] }).all.push([usd, rating, sold, link]);
     }
-    if (rows.length < PAGE) break;
-    await new Promise((res) => setTimeout(res, 300));
-  }
+  };
+  const first = await getPage(1);
+  if (!first) throw new Error("U7BUY unreachable");
+  take(first.rows);
+  const pages = Math.min(MAX_PAGES, Math.ceil((first.total || 0) / PAGE));
+  const rest = Array.from({ length: Math.max(0, pages - 1) }, (_, i) => i + 2);
+  await Promise.all(Array.from({ length: 4 }, async () => { for (let p; (p = rest.shift());) take((await getPage(p))?.rows); }));
   for (const [id, o] of Object.entries(out)) {
     const usd = robustMin(o.all.map((x) => x[0]));
     const best = o.all.find((x) => x[0] === usd);
@@ -57,7 +61,7 @@ let u7Running = null;
 export function u7RefreshNow(port) { return (u7Running ||= u7Refresh(port).finally(() => { u7Running = null; })); }
 export async function u7Refresh(port) {
   const games = { ...data.games };
-  for (const game of Object.keys(SHOPS)) {
+  await Promise.all(Object.keys(SHOPS).map(async (game) => { // all four games at once
     try {
       // right after a restart our own game data may still be loading: wait for it (up to ~3 min)
       let items = [];
@@ -68,7 +72,7 @@ export async function u7Refresh(port) {
       if (!items.length) console.warn(`U7BUY ${game}: no items from our own API yet - skipped this round`);
       if (items.length) { games[game] = await fetchU7Game(game, items); console.warn(`U7BUY ${game}: ${Object.keys(games[game]).length} items priced`); }
     } catch (e) { console.warn(`U7BUY ${game} prices failed: ${e.message}`); }
-  }
+  }));
   data = { v: 4, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("u7buy_prices", data).catch(() => {});
 }

@@ -2,7 +2,7 @@
 // items category, filtered by game, cheapest first, grouped per item). Refreshed every 15 minutes;
 // G2G has its own request budget, separate from Eldorado's. Kept in Supabase row "g2g_prices".
 import { readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
-import { registerMarket, listingHasFinisher, itemIsFinisher, finKey } from "./markets.mjs";
+import { registerMarket, listingHasFinisher, itemIsFinisher, finKey, pagesInParallel } from "./markets.mjs";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const GAME_IDS = { "MM2": "928871b7", "Blade Ball": "941f9c83", "Adopt Me": "150df5a4", "Steal a Brainrot": "7840f705" };
@@ -17,11 +17,14 @@ let data = { updatedAt: null, games: {} }; // games[game][normName or normName|c
 
 export async function fetchG2gGame(game) {
   const out = {};
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  const getPage = async (page) => {
     const url = `https://sls.g2g.com/offer/search?seo_term=rbl-item&country=US&currency=USD&sort=lowest_price&page_size=${PAGE}&page=${page}&filter_attr=b08c318c:${GAME_IDS[game]}`;
     const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(20000) });
-    if (!r.ok) { if (page > 1 && r.status === 400) break; throw new Error(`G2G ${r.status}`); } // G2G stops paging deep into long lists
-    const results = (await r.json())?.payload?.results || [];
+    if (!r.ok) { if (page > 1 && r.status === 400) return null; throw new Error(`G2G ${r.status}`); } // G2G stops paging deep into long lists
+    return (await r.json())?.payload?.results || [];
+  };
+  if (!(await getPage(1).catch(() => null))) throw new Error("G2G unreachable");
+  await pagesInParallel(getPage, { pageSize: PAGE, maxPages: MAX_PAGES, parallel: 4, onRows: (results) => {
     for (const x of results) {
       const usd = Number(x.converted_unit_price);
       const parts = String(x.title || "").split(">").map((p) => p.trim());
@@ -38,9 +41,7 @@ export async function fetchG2gGame(game) {
       if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + (x.total_offer || 1), url };
       else prev.offers += x.total_offer || 1;
     }
-    if (results.length < PAGE) break;
-    await new Promise((res) => setTimeout(res, 400));
-  }
+  } });
   return out;
 }
 
@@ -48,10 +49,10 @@ let g2gRunning = null;
 export function g2gRefreshNow() { return (g2gRunning ||= g2gRefresh().finally(() => { g2gRunning = null; })); }
 export async function g2gRefresh() {
   const games = { ...data.games };
-  for (const game of Object.keys(GAME_IDS)) {
+  await Promise.all(Object.keys(GAME_IDS).map(async (game) => { // all four games at once
     try { games[game] = await fetchG2gGame(game); }
     catch (e) { console.warn(`G2G ${game} prices failed: ${e.message}`); }
-  }
+  }));
   data = { v: 3, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("g2g_prices", data).catch(() => {});
 }

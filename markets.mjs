@@ -15,6 +15,22 @@ export function otherMarketPrices(game, name, code = "") {
 
 export const words = (s) => ` ${String(s || "").toLowerCase().normalize("NFKD").replace(/['’]/g, "").replace(/[^a-z0-9]+/g, " ").trim()} `;
 
+// Reads a paged list several pages at a time. getPage(p) -> rows (array), or null when the list
+// ends / the page is refused. Stops at the first short or missing page.
+export async function pagesInParallel(getPage, { pageSize, maxPages, parallel = 4, onRows }) {
+  for (let start = 1; start <= maxPages; start += parallel) {
+    const batch = Array.from({ length: Math.min(parallel, maxPages - start + 1) }, (_, i) => start + i);
+    const pages = await Promise.all(batch.map((p) => getPage(p).catch(() => null)));
+    let ended = false;
+    for (const rows of pages) {
+      if (!rows) { ended = true; break; }
+      onRows(rows);
+      if (rows.length < pageSize) { ended = true; break; }
+    }
+    if (ended) return;
+  }
+}
+
 // Index of our item names for one game, longest first (so "Chroma Luger" wins over "Luger").
 export function nameIndex(items) {
   const seen = new Map();
