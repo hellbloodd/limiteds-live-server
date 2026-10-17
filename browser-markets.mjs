@@ -41,7 +41,7 @@ async function gameboost(page, game, index, log) {
       if (!r.ok) return { error: r.status };
       const d = await r.json();
       const rate = d.props.exchange_rates?.eur_to_usd || 1.12;
-      return { last: d.props.items.last_page, rows: d.props.items.data.map((x) => [x.title, x.price?.currency?.code === "USD" ? x.price.value : x.price?.value * rate]) };
+      return { last: d.props.items.last_page, rows: d.props.items.data.map((x) => [x.title, x.price?.currency?.code === "USD" ? x.price.value : x.price?.value * rate, `${location.origin}${location.pathname}/${x.slug}`]) };
     }, p);
     if (j.error) {
       // Cloudflare slowing us down: wait, re-open the page (passes the check again), retry once
@@ -53,7 +53,7 @@ async function gameboost(page, game, index, log) {
       retried = true; p--; continue;
     }
     retried = false;
-    for (const [title, usd] of j.rows) add(out, game, title, usd, {}, index);
+    for (const [title, usd, url] of j.rows) add(out, game, title, usd, { url }, index); // url: that exact listing
     if (p >= j.last) break;
     await page.waitForTimeout(1500); // gentle: stays under GameBoost's rate limit
   }

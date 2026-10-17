@@ -30,7 +30,8 @@ export async function fetchU7Game(game, items) {
       if (game === "Adopt Me") { const code = amCode(o.offerName); if (!code) continue; id += `|${code}`; }
       if (game === "Steal a Brainrot" && /mutation|gold|diamond|rainbow|lava|galaxy|candy|bloodrot|radioactive/i.test(o.offerName) && !/no mutation/i.test(o.offerName)) continue;
       const rating = Number(o.remoteStoreDetail?.favorableRate) || null, sold = o.remoteStoreDetail?.completedNum || 0;
-      (out[id] ||= { all: [] }).all.push([usd, rating, sold]);
+      const link = `https://www.u7buy.com/offer/other-detail?spuId=${SHOPS[game][0]}&offerId=${o.offerId}&businessId=${o.businessId}&isEntrance=0`;
+      (out[id] ||= { all: [] }).all.push([usd, rating, sold, link]);
     }
     if (rows.length < PAGE) break;
     await new Promise((res) => setTimeout(res, 300));
@@ -38,7 +39,7 @@ export async function fetchU7Game(game, items) {
   for (const [id, o] of Object.entries(out)) {
     const usd = robustMin(o.all.map((x) => x[0]));
     const best = o.all.find((x) => x[0] === usd);
-    out[id] = { usd: Math.round(usd * 100) / 100, offers: o.all.length, rating: best?.[1] ?? null, sold: best?.[2] ?? 0 };
+    out[id] = { usd: Math.round(usd * 100) / 100, offers: o.all.length, rating: best?.[1] ?? null, sold: best?.[2] ?? 0, url: best?.[3] || null };
   }
   return out;
 }
@@ -62,7 +63,7 @@ export function u7Price(game, name, code = "") {
   const base = words(String(name).replace(/ \((No )?Finisher\)$/i, "").replace(/ \([^)]*\)$/, ""));
   const hit = game === "Adopt Me" ? g[`${base}|${code || "fr"}`] : g[base];
   if (!hit) return null;
-  return { ...hit, url: `${SHOPS[game][1]}?keyword=${encodeURIComponent(name.replace(/ \([^)]*\)$/, ""))}` };
+  return { ...hit, url: hit.url || `${SHOPS[game][1]}?keyword=${encodeURIComponent(name.replace(/ \([^)]*\)$/, ""))}` }; // the exact offer
 }
 
 export function startU7(port) {

@@ -26,11 +26,15 @@ export async function fetchG2gGame(game) {
       const usd = Number(x.converted_unit_price);
       const parts = String(x.title || "").split(">").map((p) => p.trim());
       if (!(usd > 0) || parts.length < 2) continue;
-      let id = norm(parts[1]);
+      // MM2 names on G2G carry the type and year ("Icepiercer Gun 2022"); ours don't
+      let id = norm(game === "MM2" ? parts[1].replace(/\b(19|20)\d{2}\b/g, "").replace(/\b(gun|knife)\s*$/i, "") : parts[1]);
       if (game === "Adopt Me" && parts[2]) { const code = AM_CODES[parts[2].toLowerCase()]; if (code) id += `|${code}`; }
       if (game === "Steal a Brainrot" && parts.length >= 4 && !/no mutation/i.test(parts[3])) continue; // mutated brainrots are priced differently
+      // the item's G2G page with all its sellers, cheapest first
+      const fa = String(x.offer_group || "").split("/").filter(Boolean).map((g) => g.replace("#", ":")).join("|");
+      const url = fa ? `https://www.g2g.com/categories/rbl-item/offer/group?fa=${encodeURIComponent(fa)}&sort=lowest_price` : null;
       const prev = out[id];
-      if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + (x.total_offer || 1) };
+      if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + (x.total_offer || 1), url };
       else prev.offers += x.total_offer || 1;
     }
     if (results.length < PAGE) break;
@@ -65,6 +69,6 @@ export function g2gPrice(game, name, code = "") {
   const base = norm(String(name).replace(/ \((No )?Finisher\)$/i, ""));
   const hit = (code && g[`${base}|${code}`]) || (!code || code === "fr" ? g[base] : null);
   if (!hit) return null;
-  return { ...hit, url: `https://www.g2g.com/search?q=${encodeURIComponent(name.replace(/ \([^)]*\)$/, ""))}` };
+  return { ...hit, url: hit.url || `https://www.g2g.com/search?q=${encodeURIComponent(name.replace(/ \([^)]*\)$/, ""))}` };
 }
 export const g2gStatus = () => ({ updatedAt: data.updatedAt, items: Object.fromEntries(Object.entries(data.games).map(([g, m]) => [g, Object.keys(m).length])) });

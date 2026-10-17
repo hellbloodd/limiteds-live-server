@@ -94,6 +94,8 @@
   .item img { width:42px; height:42px; object-fit:contain; border-radius:10px; flex:none; background:radial-gradient(circle at 50% 40%, var(--accent-soft), var(--surface-2) 70%); transition:transform .3s var(--ease); }
   .row:hover .item img { transform:scale(1.08) rotate(-2deg); }
   .item .name { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mk-link { font-size:10px; margin-left:5px; color:var(--muted); text-decoration:none; border-bottom:1px dotted currentColor; }
+  .mk-link:hover { color:var(--accent); }
   .chip.mk { color:#f97316; border-color:#f9731655; }
   .trust { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; }
   .trust.trusted { color:#22c55e; background:#22c55e1a; } .trust.ok { color:var(--muted); background:var(--surface-2, #ffffff10); }
@@ -282,7 +284,7 @@ function render() {
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
           <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.others?.length ? r.others.map((o) => `<span class="dim" style="font-size:10px;margin-left:4px" title="Cheapest on ${esc(o.market)}">${esc(o.market)} ${money(o.usd)}</span>`).join("") : ""}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.others?.length ? r.others.map((o) => `<a class="mk-link" href="${esc(o.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open this listing on ${esc(o.market)}${o.rating ? ` · seller ${o.rating}%` : ""}">${esc(o.market)} ${money(o.usd)}</a>`).join("") : ""}</div>
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
@@ -378,6 +380,7 @@ function openCard(r) {
       <div><span>Fee (${settings.fee}%)</span><b>−${money(r.feeAmt)}</b></div>
       <div><span>Sells about every</span><b>${r.sellsEveryH ? hours(r.sellsEveryH) : "—"}</b></div>
       <div><span>Undercut about every</span><b>${r.undercut ? (r.undercut.everyMin != null ? hours(r.undercut.everyMin / 60) : "rarely") : "—"}</b></div>
+      ${r.others?.length ? `<div style="grid-column:1/-1"><span>Other marketplaces</span><b style="font-size:13px">${r.others.map((o) => `<a class="mk-link" style="font-size:13px" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.market)} ${money(o.usd)}</a>`).join(" ")}</b></div>` : ""}
       <div><span>Seller (buy)</span><b>${r.trust?.[0] ? `${TRUST[r.trust[0].level][0]} ${r.trust[0].score}% (${r.trust[0].ratings})` : "checking…"}</b></div>
     </div>
     <div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cheapest listings on Eldorado</div>
