@@ -1,0 +1,21 @@
+{
+  "name": "Agony Values",
+  "short_name": "Agony Values",
+  "description": "Roblox item values, Eldorado prices, flips and snipe alerts for MM2, Blade Ball, Adopt Me and Steal a Brainrot.",
+  "start_url": "/flips",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0a14",
+  "theme_color": "#0b0a14",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Flip Finder", "url": "/flips", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Portfolio", "url": "/portfolio", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "My Listings", "url": "/watch", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

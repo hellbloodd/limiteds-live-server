@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js" defer></script>
 <title>Flip Finder · Agony Values</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
@@ -92,6 +96,8 @@
   .trust { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; }
   .trust.trusted { color:#22c55e; background:#22c55e1a; } .trust.ok { color:var(--muted); background:var(--surface-2, #ffffff10); }
   .trust.new { color:#f5b400; background:#f5b4001f; } .trust.risky { color:#ef4444; background:#ef44441f; }
+  .alerts-btn { margin-left:auto; font:800 11px Manrope, sans-serif; padding:5px 11px; border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--text); cursor:pointer; }
+  .alerts-btn:hover { border-color:var(--accent); }
   .chip { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); margin-right:4px; }
   .num { text-align:right; }
   .profit { font-weight:800; }
@@ -206,7 +212,8 @@
   </div>
 
   <section class="snipes" id="snipes" hidden>
-    <div class="snipes-head"><b>🎯 Recent snipes</b><span class="dim" id="snipes-sub"></span></div>
+    <div class="snipes-head"><b>🎯 Recent snipes</b><span class="dim" id="snipes-sub"></span><button class="alerts-btn" id="phone-alerts" type="button" title="Get snipe notifications on this phone or computer">🔔 Phone alerts</button></div>
+    <div class="dim" id="alerts-msg" style="font-size:12px;margin:-4px 0 6px" hidden></div>
     <div class="snipe-row" id="snipe-list"></div>
   </section>
 
@@ -400,6 +407,11 @@ async function loadSnipes() {
   } catch { /* server waking up */ }
 }
 
+$("phone-alerts").addEventListener("click", async () => {
+  const m = $("alerts-msg"); m.hidden = false; m.textContent = "Turning on alerts…";
+  try { m.textContent = window.avEnableAlerts ? await window.avEnableAlerts() : "Still loading — try again in a second."; }
+  catch (e) { m.textContent = `Couldn't turn alerts on: ${e.message}`; }
+});
 load();
 loadSnipes();
 setInterval(() => load(), 5 * 60 * 1000);

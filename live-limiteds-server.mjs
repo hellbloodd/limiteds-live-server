@@ -8,6 +8,8 @@ import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull } from "./sniper.mjs";
 import { isOwner } from "./tools.mjs";
+import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
+import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
 const recentErrors = [];
 for (const level of ["error", "warn"]) {
@@ -53,6 +55,11 @@ const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "rolimons-source-v3";
 
 const DASHBOARD_HTML = `<title>Agony Values</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js" defer></script>
 <style>
   :root {
     --bg: #0b0e14;
@@ -3645,6 +3652,26 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
+    // Phone app: installable (manifest + service worker + icons) with push notifications
+    const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
+    const icon = /^\/icons\/([a-z0-9-]+\.png)$/.exec(parsedUrl.pathname);
+    if (STATIC[parsedUrl.pathname] || icon) {
+      const [file, type] = STATIC[parsedUrl.pathname] || [`icons/${icon[1]}`, "image/png"];
+      try {
+        const body = await readStatic(new URL(file, import.meta.url));
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": icon ? "public, max-age=604800" : "no-cache", ...(file === "sw.js" ? { "Service-Worker-Allowed": "/" } : {}) });
+        return res.end(body);
+      } catch { res.writeHead(404); return res.end(); }
+    }
+    if (parsedUrl.pathname === "/api/push/key") return sendJson(res, 200, { publicKey: await pushPublicKey() });
+    if (parsedUrl.pathname === "/api/push/latest") return sendJson(res, 200, latestNotification());
+    if ((parsedUrl.pathname === "/api/push/subscribe" || parsedUrl.pathname === "/api/push/test") && req.method === "POST") {
+      if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong or missing owner key." });
+      if (parsedUrl.pathname === "/api/push/test") return sendJson(res, 200, { sent: await notifyPhones({ title: "🔔 Agony Values alerts are on", body: "You'll get snipes here as they happen.", url: "/flips", tag: "av-test" }) });
+      let body = ""; for await (const c of req) { body += c; if (body.length > 10000) break; }
+      try { return sendJson(res, 200, { ok: true, phones: await addSubscription(JSON.parse(body)) }); }
+      catch (e) { return sendJson(res, 400, { error: e.message }); }
+    }
     // PC booster (booster.mjs): owner only
     if (parsedUrl.pathname.startsWith("/api/booster/")) {
       if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong or missing owner key." });

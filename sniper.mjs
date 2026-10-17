@@ -8,6 +8,7 @@ import { fetchAmEldoradoPrices } from "./am-values.mjs";
 import { fetchSabEldoradoPrices } from "./sab-values.mjs";
 import { GAMES, gameItems, post, SITE, fmt } from "./deals.mjs";
 import { getSellerTrust } from "./sellers.mjs";
+import { notifyPhones } from "./push.mjs";
 import { fetchBbItemListings } from "./bb-values.mjs";
 import { readRow as readStateRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
 
@@ -132,6 +133,8 @@ async function processListings(game, item, p) {
         timestamp: new Date().toISOString(),
       }],
     }).catch(() => {});
+    notifyPhones({ title: `🎯 ${item.name} — ${snipe.discount}% under`, body: `$${fmt(price)} (usually $${fmt(usual)}) · +$${fmt(profit)} flip${trust ? ` · seller ${trust.score}%` : ""}${suspicious ? " · ⚠️ check carefully" : ""}`,
+      url: snipe.url, image: item.image, tag: `snipe-${offerId}` }).catch(() => {});
   }
   return changed;
 }
