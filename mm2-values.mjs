@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // MM2 weapon values tracker.
 //
 // Values come from mm2values.com (one page per rarity). Values sites block datacenter IPs like
@@ -398,17 +399,44 @@ const ELDORADO_RARITIES = { godlies: ["Godly"], ancients: ["Ancient"], uniques: 
 // (Kept as a pass-through so callers don't change.)
 export function eldoradoExclusive(fn) { return fn(); }
 
-const ELDORADO_CONCURRENCY = Number(process.env.ELDORADO_CONCURRENCY || 4); // more than ~4 at once gets 429s
-let eldoradoActive = 0;
-const eldoradoWaiting = [];
+// Adaptive request budget. Up to ELDORADO_CONCURRENCY requests at once; every 429 ("too many
+// requests") lowers that by one and pauses everyone briefly, and each quiet minute raises it back.
+// Low-priority requests (the sniper, see lowPriority) always leave one slot for price refreshes and
+// wait while refreshes are queued, so refreshes stay fast when Eldorado is strict.
+const ELDORADO_CONCURRENCY = Number(process.env.ELDORADO_CONCURRENCY || 4);
+let limit = ELDORADO_CONCURRENCY, active = 0, coolUntil = 0;
+const waitHigh = [], waitLow = [];
+const hits429 = []; // timestamps
+const lowCtx = new AsyncLocalStorage();
+export const lowPriority = (fn) => lowCtx.run(true, fn);
+const isLow = () => lowCtx.getStore() === true;
 async function eldoradoSlot() {
-  if (eldoradoActive < ELDORADO_CONCURRENCY) { eldoradoActive++; return; }
-  await new Promise((res) => eldoradoWaiting.push(res)); // the finishing request hands its slot over
+  const low = isLow();
+  for (let wait; (wait = coolUntil - Date.now()) > 0;) await new Promise((r) => setTimeout(r, wait));
+  const cap = low ? Math.max(1, limit - 1) : limit;
+  if (active < cap && (!low || !waitHigh.length)) { active++; return; }
+  await new Promise((res) => (low ? waitLow : waitHigh).push(res)); // a finishing request hands its slot over
 }
-function eldoradoRelease() {
-  const next = eldoradoWaiting.shift();
-  if (next) next(); else eldoradoActive--;
+function wake() {
+  while (waitHigh.length && active < limit) { active++; waitHigh.shift()(); }
+  while (!waitHigh.length && waitLow.length && active < Math.max(1, limit - 1)) { active++; waitLow.shift()(); }
 }
+function eldoradoRelease() { active--; wake(); }
+function onTooMany() {
+  const now = Date.now();
+  hits429.push(now);
+  while (hits429.length && hits429[0] < now - 10 * 60 * 1000) hits429.shift();
+  const recent = hits429.filter((t) => t > now - 60 * 1000).length;
+  limit = Math.max(1, limit - 1);
+  coolUntil = Math.max(coolUntil, now + Math.min(30000, 4000 * recent)); // everyone pauses a moment
+}
+setInterval(() => {
+  if (limit < ELDORADO_CONCURRENCY && !hits429.some((t) => t > Date.now() - 90 * 1000)) { limit++; wake(); }
+}, 60 * 1000).unref();
+export const eldoradoBudget = () => ({ limit, max: ELDORADO_CONCURRENCY, active, waiting: { refresh: waitHigh.length, sniper: waitLow.length },
+  tooMany10min: hits429.filter((t) => t > Date.now() - 10 * 60 * 1000).length, pausedFor: Math.max(0, coolUntil - Date.now()) });
+// True while Eldorado has been refusing requests recently (the sniper slows down).
+export const eldoradoStrained = () => limit < ELDORADO_CONCURRENCY || coolUntil > Date.now();
 
 // Eldorado's item lists (/api/library/...) barely change, so they're cached for an hour.
 const libraryCache = new Map(); // path -> { at, data }
@@ -440,6 +468,7 @@ async function eldoradoJsonUncached(path) {
       if (attempt >= 3) throw new Error(`Eldorado request failed: ${e.message}`);
       continue;
     } finally { eldoradoRelease(); }
+    if (res.status === 429) onTooMany();
     if (res.status !== 429 || attempt >= 6) throw new Error(`Eldorado ${res.status}`);
     await new Promise((r) => setTimeout(r, attempt * 2500 + Math.random() * 1000)); // back off, spread out retries
   }

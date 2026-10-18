@@ -7,7 +7,7 @@ import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan, resetSniperLists } from "./sniper.mjs";
-import { clearLibraryCache } from "./mm2-values.mjs";
+import { clearLibraryCache, eldoradoBudget } from "./mm2-values.mjs";
 import { isOwner } from "./tools.mjs";
 import { startHealthAlerts } from "./health.mjs";
 import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
@@ -3696,7 +3696,7 @@ const server = http.createServer(async (req, res) => {
       let results = []; try { results = JSON.parse(body).results || []; } catch { /* bad body */ }
       return sendJson(res, 200, await boosterResults(results));
     }
-    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
+    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

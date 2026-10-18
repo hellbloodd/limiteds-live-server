@@ -1,6 +1,6 @@
 // Seller trust: Eldorado's public review summary per seller (feedback % and number of ratings),
 // cached for a day and kept in Supabase (row "sellers") so restarts don't refetch everything.
-import { eldoradoJson, readRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
+import { eldoradoJson, readRow, writeMm2Row, supabaseConfig, lowPriority } from "./mm2-values.mjs";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const cache = new Map(); // sellerId -> { s: score %, n: ratings, at: ms }
@@ -29,7 +29,7 @@ export function sellerTrust(id) {
 }
 
 async function fetchSeller(id) {
-  const j = await eldoradoJson(`/api/orders/reviews/${encodeURIComponent(id)}?pageIndex=1&pageSize=1`);
+  const j = await lowPriority(() => eldoradoJson(`/api/orders/reviews/${encodeURIComponent(id)}?pageIndex=1&pageSize=1`)); // after refreshes
   const u = j?.userOrderInfo || {};
   const info = { s: Math.round((u.feedbackScore ?? 0) * 10) / 10, n: u.ratingCount || 0, at: Date.now() };
   cache.set(id, info);

@@ -10,7 +10,7 @@ import { GAMES, gameItems, post, SITE, fmt, valueField } from "./deals.mjs";
 import { getSellerTrust } from "./sellers.mjs";
 import { notifyPhones } from "./push.mjs";
 import { fetchBbItemListings } from "./bb-values.mjs";
-import { readRow as readStateRow, writeMm2Row, supabaseConfig } from "./mm2-values.mjs";
+import { readRow as readStateRow, writeMm2Row, supabaseConfig, lowPriority, eldoradoStrained } from "./mm2-values.mjs";
 
 // Runs continuously, SNIPE_PARALLEL items at a time. Each item has its own check interval: when its
 // listings change it's re-checked within CHECK_MIN_S, and every quiet check doubles the wait (up to
@@ -172,11 +172,12 @@ async function loop(port, busy) {
       try {
         if (w === 0 && (!hot.length || Date.now() - hotBuiltAt > 15 * 60 * 1000)) await buildHotList(port);
         if (w === 0 && Date.now() - mm2LeavesAt > 60 * 60 * 1000) { mm2Leaves = null; mm2LeavesAt = Date.now(); } // MM2's item list hourly
-        while (w >= 2 && busy()) await new Promise((r) => setTimeout(r, 5000));
+        // refreshes running or Eldorado refusing requests: only 2 sniper workers keep going
+        while (w >= 2 && (busy() || eldoradoStrained())) await new Promise((r) => setTimeout(r, 5000));
         const next = due();
         if (!next) { await new Promise((r) => setTimeout(r, 1000)); continue; }
         next.sc.taken = true;
-        const changed = await checkOne(next.job.game, next.job.item).catch(() => false);
+        const changed = await lowPriority(() => checkOne(next.job.game, next.job.item)).catch(() => false); // never ahead of price refreshes
         next.sc.interval = changed ? CHECK_MIN_MS : Math.min(next.sc.interval * 2, CHECK_MAX_MS);
         next.sc.nextAt = Date.now() + next.sc.interval;
         next.sc.taken = false;
