@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:type" content="website"><meta property="og:title" content="Agony Values"><meta property="og:description" content="Roblox item values and Eldorado.gg prices for MM2, Blade Ball, Adopt Me and Steal a Brainrot — flips, snipes and alerts."><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png"><meta name="twitter:card" content="summary"><meta name="description" content="Roblox item values and Eldorado.gg prices for MM2, Blade Ball, Adopt Me and Steal a Brainrot — flips, snipes and alerts.">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js" defer></script>
+<title>Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#a78bfa; --accent-2:#22d3ee; --accent-soft:#a78bfa22; --glow:#a78bfa55; }
+  .grid-home { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; margin:8px 0 26px; }
+  .tile-link { display:flex; flex-direction:column; gap:6px; padding:16px; border-radius:16px; border:1px solid var(--border); background:var(--surface); color:var(--text); text-decoration:none; transition:transform .25s, border-color .25s, box-shadow .25s; }
+  .tile-link:hover { transform:translateY(-3px); border-color:var(--accent); box-shadow:0 16px 36px -22px var(--glow); }
+  .tile-link b { font:700 16px "Unbounded", sans-serif; }
+  .tile-link span { color:var(--muted); font-size:13px; }
+  .tile-link .em { font-size:26px; }
+  h2 { font:700 16px "Unbounded", sans-serif; margin:22px 0 8px; }
+  .live { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:13px; color:var(--muted); margin-top:6px; }
+  .live b { color:var(--text); }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab active" href="/">🏠 Home</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>Agony Values</h1>
+      <p class="dim">Roblox item values with live Eldorado, G2G, U7BUY, GameBoost and Itemku prices — find flips, catch snipes and track your trades.</p>
+      <div class="live" id="live"></div>
+    </div>
+  </section>
+
+  <h2>Values</h2>
+  <div class="grid-home">
+    <a class="tile-link" href="/mm2"><span class="em">🔪</span><b>MM2</b><span>Godlies, chromas and ancients from mm2values.com</span></a>
+    <a class="tile-link" href="/bladeball"><span class="em">⚔️</span><b>Blade Ball</b><span>Swords, explosions and emotes from bbvalues.uk</span></a>
+    <a class="tile-link" href="/adoptme"><span class="em">🐉</span><b>Adopt Me</b><span>Pets in every version from adoptmevalues.app</span></a>
+    <a class="tile-link" href="/stealabrainrot"><span class="em">🧠</span><b>Steal a Brainrot</b><span>Secret and OG brainrots from sabrvalues.com</span></a>
+  </div>
+
+  <h2>Tools</h2>
+  <div class="grid-home">
+    <a class="tile-link" href="/flips"><span class="em">💸</span><b>Flip Finder</b><span>Buy cheap, relist under the next seller — across five marketplaces, with snipes</span></a>
+    <a class="tile-link" href="/watch"><span class="em">🏷️</span><b>My Listings</b><span>Undercut alerts and the price to set for your Eldorado shop</span></a>
+    <a class="tile-link" href="/profits"><span class="em">📒</span><b>Profits</b><span>Log buys and sales, see real profit after fees</span></a>
+    <a class="tile-link" href="/portfolio"><span class="em">💼</span><b>Portfolio</b><span>What you hold, priced live</span></a>
+  </div>
+</div>
+<script>
+// A few live numbers (best effort - the page works without them)
+(async () => {
+  try {
+    const s = await (await fetch("/api/snipes")).json();
+    const parts = [`🎯 Sniper watching <b>${(s.hotItems || 0).toLocaleString()}</b> items`];
+    const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    if (s.recent?.length) parts.push(`last snipe <b>${esc(s.recent[0].name)}</b>`);
+    if (s.booster?.active) parts.push("PC booster <b>on</b>");
+    document.getElementById("live").innerHTML = parts.map((p) => `<span>${p}</span>`).join("");
+  } catch { /* offline */ }
+})();
+</script>
+</body>
+</html>
