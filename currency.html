@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:type" content="website"><meta property="og:title" content="Currency · Agony Values"><meta property="og:description" content="Blade Ball tokens and Robux: price per 1,000 on Eldorado, G2G, U7BUY, GameBoost and Itemku."><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png"><meta name="twitter:card" content="summary"><meta name="description" content="Blade Ball tokens and Robux: price per 1,000 on Eldorado, G2G, U7BUY, GameBoost and Itemku.">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js" defer></script>
+<title>Currency · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#f5b400; --accent-2:#22d3ee; --accent-soft:#f5b40022; --glow:#f5b40055; }
+  h2 { font:700 16px "Unbounded", sans-serif; margin:24px 0 8px; display:flex; align-items:baseline; gap:10px; }
+  h2 small { font:600 12px Manrope, sans-serif; color:var(--muted); }
+  .tbl { --cols:minmax(120px,1.1fr) minmax(110px,1fr) minmax(90px,.8fr) minmax(160px,1.6fr) 110px; }
+  .best { color:#22c55e; font-size:10px; font-weight:800; margin-left:6px; }
+  .per { font:700 16px "JetBrains Mono", monospace; }
+  .note { color:var(--muted); font-size:12px; }
+  .buy { display:inline-block; text-align:center; padding:6px 10px; border-radius:999px; background:var(--accent); color:#1a1300; font-weight:800; font-size:12px; text-decoration:none; }
+  .foot { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab active" href="/currency">💱 Currency</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>Currency</h1>
+      <p class="dim">Blade Ball tokens and Robux — what 1,000 costs on each marketplace right now, cheapest first. Prices refresh every 15–30 minutes (and with Refresh now in the Flip Finder).</p>
+    </div>
+  </section>
+  <div id="out"><div class="empty">Loading…</div></div>
+  <p class="foot">Robux are compared per 1,000 <b>received</b>: gamepass offers that don't cover Roblox's 30% tax deliver 700 per 1,000 bought, so their price is shown for 1,000 actually received.
+    Eldorado shows its recommended offer, not the cheapest (the cheapest there is often a scam). Marketplaces add their own fees at checkout.
+    U7BUY, GameBoost and Itemku are read by your PC booster — they're shown while it's been on in the last 6 hours.</p>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+async function load() {
+  try {
+    const d = await (await fetch("/api/currency")).json();
+    const order = ["tokens", "robux"];
+    document.getElementById("out").innerHTML = order.map((c) => {
+      const rows = d.prices[c] || [];
+      const cheapest = rows[0]?.per1k;
+      return `<h2>${c === "tokens" ? "🪙" : "💎"} ${esc(d.currencies[c])} <small>per 1,000${c === "robux" ? " received" : ""}</small></h2>
+        <div class="tbl"><div class="head"><span>Marketplace</span><span class="num">$ / 1,000</span><span class="num">vs cheapest</span><span>Details</span><span></span></div>
+        ${rows.length ? rows.map((r, i) => `<div class="row">
+          <div class="name">${esc(r.market)}${i === 0 ? '<span class="best">CHEAPEST</span>' : ""}</div>
+          <div class="num per tabular" data-label="$ / 1,000">$${r.per1k.toFixed(2)}</div>
+          <div class="num tabular ${i ? "down" : "up"}" data-label="vs cheapest">${i ? "+" + Math.round((r.per1k / cheapest - 1) * 100) + "%" : "—"}</div>
+          <div class="note" data-label="Details">${[r.note, r.seller && `seller ${r.seller}${r.rating ? ` (${r.rating}%)` : ""}`, ago(r.at)].filter(Boolean).map(esc).join(" · ")}</div>
+          <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on ${esc(r.market)}</a></div>`).join("") : `<div class="empty">No prices yet — they appear after the next refresh.</div>`}</div>`;
+    }).join("");
+  } catch (e) { document.getElementById("out").innerHTML = `<div class="empty">Couldn't load prices: ${esc(e.message)}</div>`; }
+}
+load(); setInterval(load, 60 * 1000);
+</script>
+</body>
+</html>

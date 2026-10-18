@@ -22,6 +22,9 @@ async function runMarkets() {
 ${new Date().toLocaleTimeString()}  Reading GameBoost and Itemku...`);
     const result = await scanBrowserMarkets(items, (m) => console.log(`  ${m}`));
     for (const [market, games] of Object.entries(result)) if (Object.keys(games).length) await api("/api/booster/market", { market, games });
+    // Blade Ball tokens + Robux on U7BUY / GameBoost / Itemku
+    const { scanCurrency } = await import("./browser-markets.mjs");
+    await api("/api/booster/currency", { markets: await scanCurrency((m) => console.log(`  ${m}`)) }).catch((e) => console.log(`  currency failed: ${e.message}`));
     console.log(`${new Date().toLocaleTimeString()}  GameBoost / Itemku prices sent.`);
   } catch (e) { console.log(`
 GameBoost / Itemku scan failed: ${e.message}`); }

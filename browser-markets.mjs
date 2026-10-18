@@ -128,3 +128,73 @@ export async function scanBrowserMarkets(items, log = console.log) {
   } finally { await browser.close().catch(() => {}); }
   return result;
 }
+
+// ---------- Currency (Blade Ball tokens, Robux) ----------
+// Per 1,000, in USD. Robux per 1,000 RECEIVED: gamepass offers that don't cover Roblox's 30% tax
+// deliver 700 per 1,000 bought. Returns { U7BUY: { robux }, GameBoost: { tokens, robux }, Itemku: { tokens, robux } }.
+const EUR_USD = 1.12; // Itemku / U7BUY show EUR; GameBoost gives its own rate
+export async function scanCurrency(log = console.log) {
+  const { chromium } = await import("playwright-core");
+  const exe = BROWSERS.find((p) => existsSync(p));
+  if (!exe) throw new Error("Google Chrome or Microsoft Edge is needed");
+  const browser = await chromium.launch({ executablePath: exe, headless: false, args: ["--window-position=-32000,-32000", "--disable-blink-features=AutomationControlled", "--mute-audio"] });
+  const out = { U7BUY: {}, GameBoost: {}, Itemku: {} };
+  const best = (list, extra = {}) => {
+    const v = robustMin(list.map((x) => x.per1k));
+    return v ? { ...list.find((x) => x.per1k === v), ...extra, per1k: v } : null;
+  };
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1200, height: 900 } })).newPage();
+    // GameBoost: every seller's offer, priced per unit
+    for (const [cur, path] of [["robux", "roblox/robux"], ["tokens", "blade-ball/tokens"]]) {
+      try {
+        await page.context().clearCookies().catch(() => {});
+        await page.goto(`https://gameboost.com/${path}`, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.waitForTimeout(4000);
+        const offers = await page.evaluate((cur) => {
+          const p = JSON.parse(document.querySelector("script[data-page]").textContent).props;
+          const rate = p.exchange_rates?.eur_to_usd || 1.12;
+          return [p.selectedCurrencyOffer, ...(p.otherSellerOffers || [])].filter(Boolean).map((o) => {
+            const unit = (o.price?.currency === "USD" ? o.price.value : o.price?.value * rate);
+            const noTax = cur === "robux" && /(not|n't|no)\s+(cover|covered|covering)[^.\n]{0,20}tax|tax[^.\n]{0,25}not\s+covered/i.test(o.description || "");
+            return { per1k: unit * 1000 / (noTax ? 0.7 : 1), url: o.store_url, note: noTax ? "tax not covered (price shown per 1,000 received)" : undefined };
+          }).filter((x) => x.per1k > 0);
+        }, cur);
+        out.GameBoost[cur] = best(offers);
+        log(`GameBoost ${cur}: ${offers.length} offers`);
+      } catch (e) { log(`GameBoost ${cur} failed: ${e.message.slice(0, 80)}`); }
+    }
+    // Itemku: the package list ("1.000 Token EUR 2.75", "1000 Robux EUR 7.66")
+    for (const [cur, path, word] of [["tokens", "blade-ball-roblox/token", "Token"], ["robux", "roblox/robux-via-username", "Robux"]]) {
+      try {
+        await page.goto(`https://www.itemku.com/en/g/${path}`, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.waitForTimeout(4000);
+        const text = await page.evaluate(() => document.body.innerText.replace(/\s+/g, " "));
+        const packs = [...text.matchAll(new RegExp(String.raw`([\d.,]+)\s*${word}s?\s+(EUR|USD)\s*([\d.,]+)`, "gi"))].map((m) => {
+          const qty = Number(m[1].replace(/[.,](?=\d{3}\b)/g, ""));
+          const price = Number(m[3].replace(/,(?=\d{3}\b)/g, "").replace(",", "."));
+          return { qty, per1k: price * (m[2] === "USD" ? 1 : EUR_USD) / qty * 1000 };
+        }).filter((x) => x.qty >= 100 && x.per1k > 0);
+        const pick = packs.filter((x) => x.qty >= 1000).length ? packs.filter((x) => x.qty >= 1000) : packs;
+        const v = pick.length ? Math.min(...pick.map((x) => x.per1k)) : null;
+        if (v) out.Itemku[cur] = { per1k: v, url: page.url(), note: cur === "robux" ? "gift via username" : `${pick.find((x) => x.per1k === v).qty} pack` };
+        log(`Itemku ${cur}: ${packs.length} packages`);
+      } catch (e) { log(`Itemku ${cur} failed: ${e.message.slice(0, 80)}`); }
+    }
+    // U7BUY: Robux packages (bought vs received after tax)
+    try {
+      await page.goto("https://www.u7buy.com/roblox/roblox-robux", { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(4000);
+      const packs = await page.evaluate(() => {
+        const find = (o, d = 0) => { if (!o || typeof o !== "object" || d > 7) return null; if (Array.isArray(o) && o.some((x) => x?.faceValue && x?.price)) return o; for (const v of Object.values(o)) { const r = find(v, d + 1); if (r) return r; } return null; };
+        return (find(useNuxtApp().payload.data) || []).map((x) => ({ price: Number(x.price), received: Number(x.receiveCounts) || Number(x.buyCounts), bought: Number(x.buyCounts) }));
+      });
+      const list = packs.filter((x) => x.price > 0 && x.received > 0).map((x) => ({ per1k: x.price * EUR_USD / x.received * 1000, url: "https://www.u7buy.com/roblox/roblox-robux",
+        note: x.received < x.bought ? "gamepass, tax not covered (per 1,000 received)" : "tax covered" }));
+      out.U7BUY.robux = list.length ? list.reduce((a, b) => (b.per1k < a.per1k ? b : a)) : null;
+      log(`U7BUY robux: ${packs.length} packages`);
+    } catch (e) { log(`U7BUY robux failed: ${e.message.slice(0, 80)}`); }
+  } finally { await browser.close().catch(() => {}); }
+  for (const m of Object.keys(out)) for (const c of Object.keys(out[m])) if (out[m][c]) out[m][c].per1k = Math.round(out[m][c].per1k * 100) / 100;
+  return out;
+}

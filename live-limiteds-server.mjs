@@ -13,6 +13,7 @@ import { startHealthAlerts } from "./health.mjs";
 import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
 import { startU7, u7Status, u7RefreshNow } from "./u7buy.mjs";
 import { startRemoteMarkets, receiveMarket, remoteMarketStatus } from "./remote-markets.mjs";
+import { startCurrency, refreshCurrency, receiveCurrency, currencyPrices } from "./currency.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -94,6 +95,7 @@ const server = http.createServer(async (req, res) => {
       if (parsedUrl.pathname === "/api/booster/work") return sendJson(res, 200, boosterWork(Number(parsedUrl.searchParams.get("max")) || 40));
       if (parsedUrl.pathname === "/api/booster/full" && req.method === "GET") return sendJson(res, 200, boosterTakeFull() || { game: null });
       let body = ""; for await (const c of req) { body += c; if (body.length > 30e6) break; }
+      if (parsedUrl.pathname === "/api/booster/currency") { let b = {}; try { b = JSON.parse(body); } catch { /* bad body */ } return sendJson(res, 200, await receiveCurrency(b.markets)); }
       if (parsedUrl.pathname === "/api/booster/market") { let b = {}; try { b = JSON.parse(body); } catch { /* bad body */ } return sendJson(res, 200, await receiveMarket(b.market, b.games)); }
       if (parsedUrl.pathname === "/api/booster/full") { let b = {}; try { b = JSON.parse(body); } catch { /* bad body */ } return sendJson(res, 200, boosterFinishFull(b.game, b.prices)); }
       let results = []; try { results = JSON.parse(body).results || []; } catch { /* bad body */ }
@@ -101,6 +103,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
+    if (parsedUrl.pathname === "/api/currency") return sendJson(res, 200, currencyPrices());
+    if (parsedUrl.pathname === "/currency" || parsedUrl.pathname === "/currency/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(await readStatic(new URL("currency.html", import.meta.url)));
+    }
     if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/app") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(await readStatic(new URL("home.html", import.meta.url)));
@@ -111,7 +118,7 @@ const server = http.createServer(async (req, res) => {
       clearLibraryCache(); resetSniperLists();
       const r = requestRefresh(parsedUrl.searchParams.get("game"));
       if (process.env.SUPABASE_URL && !parsedUrl.searchParams.get("game")) {
-        g2gRefreshNow().catch(() => {}); u7RefreshNow(PORT).catch(() => {});
+        g2gRefreshNow().catch(() => {}); u7RefreshNow(PORT).catch(() => {}); refreshCurrency().catch(() => {});
         r.markets = { G2G: true, U7BUY: true, browser: requestMarketsScan() };
       }
       return sendJson(res, 200, r);
@@ -154,6 +161,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startG2g(); // other marketplaces' prices for the Flip Finder (cross-market flips)
   startU7(PORT);
   startRemoteMarkets(); // GameBoost / Itemku, sent by the PC booster
+  startCurrency(); // Blade Ball tokens and Robux on every marketplace
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }
