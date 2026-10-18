@@ -45,6 +45,7 @@
     U7BUY, GameBoost and Itemku are read by your PC booster — they're shown while it's been on in the last 6 hours.</p>
 </div>
 <script>
+const FEE = 0.05; // typical checkout fee G2G / U7BUY / GameBoost / Itemku add (varies by payment method)
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 async function load() {
@@ -58,7 +59,7 @@ async function load() {
         <div class="tbl"><div class="head"><span>Marketplace</span><span class="num">$ / 1,000</span><span class="num">vs cheapest</span><span>Details</span><span></span></div>
         ${rows.length ? rows.map((r, i) => `<div class="row">
           <div class="name">${esc(r.market)}${i === 0 ? '<span class="best">CHEAPEST</span>' : ""}</div>
-          <div class="num per tabular" data-label="$ / 1,000">$${r.per1k.toFixed(2)}</div>
+          <div class="num per tabular" data-label="$ / 1,000">$${r.per1k.toFixed(2)}${r.market !== "Eldorado" ? `<div class="note" style="font-size:10px">≈ $${(r.per1k * (1 + FEE)).toFixed(2)} with ~${Math.round(FEE * 100)}% checkout fee</div>` : ""}</div>
           <div class="num tabular ${i ? "down" : "up"}" data-label="vs cheapest">${i ? "+" + Math.round((r.per1k / cheapest - 1) * 100) + "%" : "—"}</div>
           <div class="note" data-label="Details">${[r.note, r.seller && `seller ${r.seller}${r.rating ? ` (${r.rating}%)` : ""}`, ago(r.at)].filter(Boolean).map(esc).join(" · ")}</div>
           <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">Buy on ${esc(r.market)}</a></div>`).join("") : `<div class="empty">No prices yet — they appear after the next refresh.</div>`}</div>`;
