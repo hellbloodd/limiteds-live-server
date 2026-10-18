@@ -190,6 +190,10 @@ async function loop(port, busy) {
 let mm2LeavesAt = Date.now();
 
 let onPrice = () => {};
+// "Refresh now": rebuild the watched-item list and MM2's Eldorado item list on the next check, so
+// newly added items are watched right away (known items keep their check schedule).
+export function resetSniperLists() { hotBuiltAt = 0; mm2Leaves = null; mm2LeavesAt = Date.now(); }
+
 export function startSniper(port, busy, priceSink) {
   if (priceSink) onPrice = priceSink;
   setTimeout(() => loop(port, busy), 60 * 1000).unref();

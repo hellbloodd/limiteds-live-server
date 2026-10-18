@@ -6,7 +6,8 @@ import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
-import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan } from "./sniper.mjs";
+import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan, resetSniperLists } from "./sniper.mjs";
+import { clearLibraryCache } from "./mm2-values.mjs";
 import { isOwner } from "./tools.mjs";
 import { startHealthAlerts } from "./health.mjs";
 import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
@@ -3724,6 +3725,8 @@ const server = http.createServer(async (req, res) => {
 
     if (parsedUrl.pathname === "/api/refresh-values") {
       // "Refresh now": Eldorado + every other marketplace (G2G, U7BUY here; GameBoost/Itemku on the PC booster)
+      // new items: reload Eldorado's item lists and the sniper's watch list too
+      clearLibraryCache(); resetSniperLists();
       const r = requestRefresh(parsedUrl.searchParams.get("game"));
       if (process.env.SUPABASE_URL && !parsedUrl.searchParams.get("game")) {
         g2gRefreshNow().catch(() => {}); u7RefreshNow(PORT).catch(() => {});
