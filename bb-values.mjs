@@ -2,6 +2,7 @@
 //
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
+import { currencyPrices } from "./currency.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
 } from "./mm2-values.mjs";
@@ -307,6 +308,15 @@ async function getTokenRate() {
   return tokenRate;
 }
 
+// Token price for the page: the cheapest marketplace on the Currency page (G2G, GameBoost, Itemku,
+// Eldorado...), falling back to Eldorado's recommended rate.
+async function bestTokenRate() {
+  const eld = await getTokenRate();
+  const cheapest = currencyPrices().prices.tokens?.[0];
+  if (!cheapest) return eld && { ...eld, market: "Eldorado", eldoradoPer1k: eld.per1k };
+  return { per1k: cheapest.per1k, perUsd: Math.round(1000 / cheapest.per1k), market: cheapest.market, url: cheapest.url, eldoradoPer1k: eld?.per1k ?? null };
+}
+
 // Returns true if the request was handled.
 export async function handleBbRequest(url, res, sendJson) {
   if (url.pathname === "/bladeball" || url.pathname === "/bladeball/") {
@@ -331,7 +341,7 @@ export async function handleBbRequest(url, res, sendJson) {
     sendJson(res, 200, {
       updatedAt: bbUpdatedAt ? new Date(bbUpdatedAt).toISOString() : null,
       pricesUpdatedAt: bbEldorado.updatedAt,
-      source: "bbvalues.uk", count: items.length, categories: BB_CATEGORIES, items, tokenRate: await getTokenRate(),
+      source: "bbvalues.uk", count: items.length, categories: BB_CATEGORIES, items, tokenRate: await bestTokenRate(),
       ...(bbItems.length ? {} : { error: bbLastError || "Blade Ball values are still loading." }),
     });
     return true;

@@ -405,7 +405,7 @@ async function load() {
     medianVpd = vpds.length ? vpds[vpds.length >> 1] : 0;
     const cat = $("cat");
     if (cat.options.length === 3) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
-    $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}${data.tokenRate ? `<span title="Median of the first ${data.tokenRate.offers.length} token offers in Eldorado's Recommended order (${data.tokenRate.offers.map((o) => `${o.seller} $${o.per1k}`).join(", ")})">🪙 Tokens: <b>$${data.tokenRate.per1k.toFixed(2)}</b> / 1k · <b>${data.tokenRate.perUsd}</b> per $</span>` : ""}`;
+    $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}${data.tokenRate ? `<span title="Cheapest of all marketplaces on the Currency page${data.tokenRate.eldoradoPer1k ? ` (Eldorado recommended: $${data.tokenRate.eldoradoPer1k.toFixed(2)} / 1k)` : ""}">🪙 Tokens: <b>$${data.tokenRate.per1k.toFixed(2)}</b> / 1k on <a href="${esc(data.tokenRate.url || "/currency")}" target="_blank" rel="noopener">${esc(data.tokenRate.market || "Eldorado")}</a> · <b>${data.tokenRate.perUsd}</b> per $ · <a href="/currency">compare</a></span>` : ""}`;
     tokenPerUsd = data.tokenRate?.perUsd || 0;
     if (tokenPerUsd && !$("cat").querySelector('option[value="tokens"]')) $("cat").querySelector('option[value="rising"]').insertAdjacentHTML("afterend", '<option value="tokens">🪙 Cheaper than tokens</option>');
     computeDeals();
@@ -468,7 +468,7 @@ function tags(i) {
   if (isDeal(i)) out.push(`<span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>`);
   if (beatsTokens(i)) {
     const per1k = i.usd / i.value * 1000, market = 1000 / tokenPerUsd;
-    out.push(`<span class="badge token" title="This item costs $${per1k.toFixed(2)} per 1k tokens of value — buying 1k tokens costs $${market.toFixed(2)} (${(market / per1k).toFixed(1)}× more)">🪙 $${per1k < 1 ? per1k.toFixed(2) : per1k.toFixed(per1k < 10 ? 2 : 1)}/1k</span>`);
+    out.push(`<span class="badge token" title="This item costs $${per1k.toFixed(2)} per 1k tokens of value — 1k tokens cost $${market.toFixed(2)} on the cheapest marketplace (${(market / per1k).toFixed(1)}× more)">🪙 $${per1k < 1 ? per1k.toFixed(2) : per1k.toFixed(per1k < 10 ? 2 : 1)}/1k</span>`);
   }
   return out.length ? `<div class="tags">${out.join("")}</div>` : "";
 }

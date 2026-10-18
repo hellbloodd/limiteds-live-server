@@ -162,11 +162,18 @@
   /* phones: each row becomes a small card */
   @media (max-width:820px) {
     .head { display:none; }
-    .row { grid-template-columns:1fr 1fr; }
+    .row { grid-template-columns:repeat(3, 1fr); gap:10px 8px; margin:0 0 10px; padding:12px; border:1px solid var(--border); border-radius:14px; background:var(--surface); }
     .row .item { grid-column:1 / -1; }
-    .row .num { text-align:left; }
-    .row .num::before { content:attr(data-label); display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
-    .row .buy { grid-column:1 / -1; }
+    .row .item img { width:44px; height:44px; }
+    .row .item .name { white-space:normal; }
+    .row .num { text-align:left; font-size:13px; }
+    .row .num::before { content:attr(data-label); display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:1px; }
+    .row .num.profit { font-size:16px; }
+    .row .roi-bar { display:none; }
+    .row .buy { grid-column:1 / -1; padding:11px; font-size:14px; text-align:center; }
+    .panel { gap:8px; }
+    .panel .field { flex:1 1 140px; }
+    .panel .field input, .panel .field select { width:100%; }
   }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .roi-bar i { width:var(--w); } }
 </style>
@@ -206,6 +213,10 @@
     <div class="field grow"><label for="q">Search</label><input id="q" type="search" placeholder="Search items…" autocomplete="off"></div>
     <div class="field"><label for="game">Game</label>
       <select id="game"><option value="">All games</option><option>MM2</option><option>Blade Ball</option><option>Adopt Me</option><option>Steal a Brainrot</option></select></div>
+    <div class="field"><label for="market">Buy on</label>
+      <select id="market"><option value="">All marketplaces</option><option value="eldorado">Eldorado only</option><option value="G2G">G2G → Eldorado</option><option value="U7BUY">U7BUY → Eldorado</option><option value="GameBoost">GameBoost → Eldorado</option><option value="Itemku">Itemku → Eldorado</option><option value="other">Any other site → Eldorado</option></select></div>
+    <div class="field"><label for="minRating" title="Seller rating of the listing you'd buy (Eldorado or the other site). Unknown ratings are hidden when this is set.">Min seller %</label><input id="minRating" type="number" min="0" max="100" step="1"></div>
+    <div class="field"><label for="buyFee" title="Checkout fee G2G / U7BUY / GameBoost / Itemku add on top of the listed price (it varies by payment method)">Buyer fee % (other sites)</label><input id="buyFee" type="number" min="0" max="30" step="0.5"></div>
     <div class="field"><label for="fee">Seller fee %</label><input id="fee" type="number" min="0" max="60" step="0.5"></div>
     <div class="field"><label for="minProfit">Min profit $</label><input id="minProfit" type="number" min="0" step="0.5"></div>
     <div class="field"><label for="minRoi">Min ROI %</label><input id="minRoi" type="number" min="0" step="1"></div>
@@ -248,10 +259,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(Math.abs(n) >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 // Settings are remembered in this browser.
-const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, minSold: 0, minStock: 0, game: "" };
+const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, minSold: 0, minStock: 0, game: "", market: "", minRating: 0, buyFee: 5 };
+const TEXT_SETTINGS = new Set(["game", "market"]);
 let settings = DEFAULTS;
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem("flipSettings") || "{}") }; } catch { /* private mode */ }
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game"]) $(k).value = settings[k];
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game", "market", "minRating", "buyFee"]) $(k).value = settings[k];
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
@@ -264,13 +276,16 @@ function compute(r) {
   const fee = settings.fee / 100;
   const relist = Math.max(0, r.second - 0.01);
   const feeAmt = relist * fee;
-  const profit = relist - feeAmt - r.usd;
+  // other marketplaces add a checkout fee on top of the listed price
+  const buyCost = r.market ? r.usd * (1 + settings.buyFee / 100) : r.usd;
+  const profit = relist - feeAmt - buyCost;
+  const rating = r.market ? r.buyRating : r.trust?.[0]?.score;
   // sellsEveryH: how long one sale takes on average (from 7-day sales); profit/day assumes you can
   // keep one relisted at the front, so it's capped at one flip per sale.
   const sellsEveryH = r.sold7d ? 168 / r.sold7d : null;
   // bulk: the cheapest seller has `stock` units; buy about a week of sales (at least 1), relist one by one
   const bulkUnits = r.stock > 1 ? Math.max(1, Math.min(r.stock, r.sold7d || 1)) : 1;
-  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH,
+  return { ...r, relist, feeAmt, profit, buyCost, rating, roi: profit / buyCost * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH,
     bulkUnits, bulkProfit: Math.max(0, profit) * bulkUnits };
 }
 
@@ -279,7 +294,9 @@ function render() {
   const list = rows.map(compute).filter((r) => (!settings.game || r.game === settings.game)
     && (!q || r.name.toLowerCase().includes(q))
     && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings
-    && r.sold7d >= settings.minSold && (r.stock || 1) >= settings.minStock);
+    && r.sold7d >= settings.minSold && (r.stock || 1) >= settings.minStock
+    && (!settings.market || (settings.market === "eldorado" ? !r.market : settings.market === "other" ? !!r.market : r.buyMarket === settings.market))
+    && (!settings.minRating || (r.rating != null && r.rating >= settings.minRating)));
   list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
   document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
   const maxRoi = Math.max(...list.map((r) => r.roi), 1);
@@ -293,7 +310,7 @@ function render() {
           <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${r.stock > 1 ? `<span class="stock-chip" title="Units in the cheapest listing">×${r.stock} in stock</span>` : ""}${!r.market && r.others?.length ? r.others.map((o) => `<a class="mk-link" href="${esc(o.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open this listing on ${esc(o.market)}${o.rating ? ` · seller ${o.rating}%` : ""}">${esc(o.market)} ${money(o.usd)}</a>`).join("") : ""}</div>
         </div>
       </div>
-      <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
+      <div class="num tabular" data-label="Buy at">${money(r.usd)}${r.market && settings.buyFee ? `<div class="dim" style="font-size:10px">${money(r.buyCost)} with fee</div>` : ""}</div>
       <div class="num tabular" data-label="Relist at">${money(r.relist)}</div>
       <div class="num tabular dim" data-label="Fee">−${money(r.feeAmt)}</div>
       <div class="num tabular profit ${r.profit >= 0 ? "up" : "down"}" data-label="Profit">${r.profit >= 0 ? "+" : ""}${money(r.profit)}</div>
@@ -326,9 +343,9 @@ async function load(fresh = false) {
   }
 }
 
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game"]) {
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game", "market", "minRating", "buyFee"]) {
   $(k).addEventListener("input", () => {
-    settings[k] = k === "game" ? $(k).value : Math.max(0, Number($(k).value) || 0);
+    settings[k] = TEXT_SETTINGS.has(k) ? $(k).value : Math.max(0, Number($(k).value) || 0);
     save(); render();
     clearTimeout(refetchTimer); refetchTimer = setTimeout(() => load(), 400); // fetch rows for the new filters
   });
