@@ -52,10 +52,45 @@ async function supabaseFetch(path, options = {}) {
 // (latest, history, ...); other games use a prefix, e.g. "bb_latest" for Blade Ball.
 const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "eldorado_history", "sales", "heartbeat"];
 
+// ---------- Sharded rows ----------
+// Big maps (prices, price history, sales, value history) are stored in 16 parts so a save only
+// rewrites the parts that changed: row "<id>" holds { __shards, __field?, __v, ...small fields } and
+// rows "<id>#0".."<id>#15" hold the map's entries split by key. Plain (old) rows still read fine.
+const SHARDS = 16;
+const SHARDED = { eldorado: "prices", eldorado_history: null, sales: null, history: null }; // id -> field holding the map (null: the row is the map)
+const shardOf = (key) => { let h = 0; for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0; return Math.abs(h) % SHARDS; };
+function splitRow(id, d) {
+  const field = SHARDED[id];
+  const map = field ? d?.[field] : d;
+  if (!map || typeof map !== "object" || Array.isArray(map)) return null;
+  const parts = Array.from({ length: SHARDS }, () => ({}));
+  for (const [k, v] of Object.entries(map)) parts[shardOf(k)][k] = v;
+  const base = field ? { ...d, [field]: undefined, __field: field } : {};
+  delete base[field];
+  return { base: { ...base, __shards: SHARDS }, parts };
+}
+function joinRow(base, partRows) {
+  const map = {};
+  for (const p of partRows) Object.assign(map, p || {});
+  const { __shards, __field, __v, ...rest } = base;
+  return __field ? { ...rest, [__field]: map } : map;
+}
+async function readShards(rowId) {
+  const rows = await supabaseFetch(`mm2_state?select=id,data,updated_at&id=like.${encodeURIComponent(rowId + "#")}*`);
+  return rows;
+}
+
 export async function readMm2State(prefix = "", only = STATE_IDS) {
   const rows = [];
   for (const id of only) rows.push(...await supabaseFetch(`mm2_state?select=id,data&id=eq.${prefix + id}`));
   const byId = Object.fromEntries(rows.map((r) => [r.id.slice(prefix.length), r.data]));
+  for (const [id, d] of Object.entries(byId)) {
+    if (!d?.__shards) continue;
+    const parts = await readShards(prefix + id);
+    byId[id] = joinRow(d, parts.map((r) => r.data));
+    rememberRows(prefix, { [id]: byId[id] }); // so the next save only writes changed parts
+    for (const r of parts) lastWritten[r.id] = JSON.stringify(r.data);
+  }
   return { latest: byId.latest || null, history: byId.history || {}, historyFetched: byId.history_fetched || {}, eldorado: byId.eldorado || null,
     priceHistory: byId.eldorado_history || {}, sales: byId.sales || {}, heartbeat: byId.heartbeat || null };
 }
@@ -64,6 +99,7 @@ export async function readMm2State(prefix = "", only = STATE_IDS) {
 // that changed since last time - Supabase's free tier slows to a crawl if we pull megabytes every poll.
 export function createStateReader(prefix = "") {
   const seen = {};
+  const shardData = {}; // base row id -> { part id: { at, data } }
   const data = {};
   return async () => {
     const ids = STATE_IDS.map((id) => prefix + id).join(",");
@@ -71,7 +107,17 @@ export function createStateReader(prefix = "") {
     const changed = meta.filter((m) => seen[m.id] !== m.updated_at).map((m) => m.id);
     if (changed.length) {
       const rows = await supabaseFetch(`mm2_state?select=id,data,updated_at&id=in.(${changed.join(",")})`);
-      for (const r of rows) { data[r.id.slice(prefix.length)] = r.data; seen[r.id] = r.updated_at; }
+      for (const r of rows) {
+        const id = r.id.slice(prefix.length);
+        seen[r.id] = r.updated_at;
+        if (!r.data?.__shards) { data[id] = r.data; delete shardData[r.id]; continue; }
+        // sharded: re-download only the parts that changed
+        const meta = await supabaseFetch(`mm2_state?select=id,updated_at&id=like.${encodeURIComponent(r.id + "#")}*`);
+        const parts = (shardData[r.id] ||= {});
+        const stale = meta.filter((m) => parts[m.id]?.at !== m.updated_at).map((m) => m.id);
+        if (stale.length) for (const p of await supabaseFetch(`mm2_state?select=id,data,updated_at&id=in.(${stale.map(encodeURIComponent).join(",")})`)) parts[p.id] = { at: p.updated_at, data: p.data };
+        data[id] = joinRow(r.data, Object.values(parts).map((p) => p.data));
+      }
     }
     return { latest: data.latest || null, history: data.history || {}, eldorado: data.eldorado || null,
       priceHistory: data.eldorado_history || {}, sales: data.sales || {}, heartbeat: data.heartbeat || null };
@@ -89,8 +135,18 @@ export async function writeChangedRows(prefix, rows) {
   for (const [id, d] of Object.entries(rows)) {
     const json = JSON.stringify(d);
     if (lastWritten[prefix + id] === json) continue;
-    out.push({ id: prefix + id, data: d, updated_at: now });
     lastWritten[prefix + id] = json;
+    const split = id in SHARDED ? splitRow(id, d) : null;
+    if (!split) { out.push({ id: prefix + id, data: d, updated_at: now }); continue; }
+    // only the parts that changed, plus the small base row (its __v tells readers to look)
+    let changedParts = 0;
+    split.parts.forEach((part, k) => {
+      const pid = `${prefix + id}#${k}`, pj = JSON.stringify(part);
+      if (lastWritten[pid] === pj) return;
+      lastWritten[pid] = pj; changedParts++;
+      out.push({ id: pid, data: part, updated_at: now });
+    });
+    out.push({ id: prefix + id, data: { ...split.base, __v: Date.now() }, updated_at: now });
   }
   if (out.length) {
     await supabaseFetch("mm2_state?on_conflict=id", {
@@ -111,7 +167,8 @@ export async function reloadAllTrackers() {
 // One row's data (or null).
 export async function readRow(id) {
   const rows = await supabaseFetch(`mm2_state?select=data&id=eq.${id}`);
-  return rows[0]?.data ?? null;
+  const d = rows[0]?.data ?? null;
+  return d?.__shards ? joinRow(d, (await readShards(id)).map((r) => r.data)) : d;
 }
 
 export async function writeMm2Row(id, data, prefix = "") {
