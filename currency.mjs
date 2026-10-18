@@ -58,7 +58,7 @@ async function g2g() {
       if (!per1k) continue;
       const fa = String(x.offer_group || "").split("/").filter(Boolean).map((g) => g.replace("#", ":")).join("|");
       // single offers have their own page; grouped ones a page listing all sellers
-      const url = fa.includes(":") ? `https://www.g2g.com/categories/rbl-item/offer/group?fa=${encodeURIComponent(fa)}&sort=lowest_price` : `https://www.g2g.com/offer/${x.offer_id}`;
+      const url = fa.includes(":") ? `https://www.g2g.com/categories/rbl-item/offer/group?fa=${encodeURIComponent(fa)}&sort=lowest_price` : `https://www.g2g.com/categories/rbl-item/offer/${x.offer_id}`;
       prices.push({ per1k, url });
     }
     if (rows.length < 100) break;

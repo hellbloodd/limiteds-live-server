@@ -36,7 +36,9 @@ export async function fetchG2gGame(game) {
       if (game === "Steal a Brainrot" && parts.length >= 4 && !/no mutation/i.test(parts[3])) continue; // mutated brainrots are priced differently
       // the item's G2G page with all its sellers, cheapest first
       const fa = String(x.offer_group || "").split("/").filter(Boolean).map((g) => g.replace("#", ":")).join("|");
-      const url = fa ? `https://www.g2g.com/categories/rbl-item/offer/group?fa=${encodeURIComponent(fa)}&sort=lowest_price` : null;
+      // grouped items: the page listing all their sellers; single offers: the offer's own page
+      const url = fa.includes(":") ? `https://www.g2g.com/categories/rbl-item/offer/group?fa=${encodeURIComponent(fa)}&sort=lowest_price`
+        : x.offer_id ? `https://www.g2g.com/categories/rbl-item/offer/${x.offer_id}` : null;
       const prev = out[id];
       if (!prev || usd < prev.usd) out[id] = { usd: Math.round(usd * 100) / 100, offers: (prev?.offers || 0) + (x.total_offer || 1), url };
       else prev.offers += x.total_offer || 1;
@@ -53,14 +55,14 @@ export async function g2gRefresh() {
     try { games[game] = await fetchG2gGame(game); }
     catch (e) { console.warn(`G2G ${game} prices failed: ${e.message}`); }
   }));
-  data = { v: 3, updatedAt: new Date().toISOString(), games };
+  data = { v: 4, updatedAt: new Date().toISOString(), games };
   if (supabaseConfig()) await writeMm2Row("g2g_prices", data).catch(() => {});
 }
 
 export function startG2g() {
   registerMarket("G2G", g2gPrice);
   (async () => {
-    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 3) data = saved; } // v2: exact listing links + MM2 names
+    if (supabaseConfig()) { const saved = await readRow("g2g_prices").catch(() => null); if (saved?.games && saved.v === 4) data = saved; } // v2: exact listing links + MM2 names
     if (Date.now() - (Date.parse(data.updatedAt) || 0) > EVERY_MS) await g2gRefresh().catch(() => {});
   })();
   setInterval(() => g2gRefreshNow().catch(() => {}), EVERY_MS).unref();
