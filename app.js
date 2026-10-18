@@ -1,6 +1,8 @@
 // Shared by every page: registers the service worker (installable app + notifications) and adds
 // window.avEnableAlerts() for the "Phone alerts" button.
 (() => {
+  // phones: the menu scrolls sideways - start with the current page's tab in view
+  addEventListener("DOMContentLoaded", () => document.querySelector(".tabs .tab.active")?.scrollIntoView({ inline: "center", block: "nearest" }));
   if (!("serviceWorker" in navigator)) return;
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 

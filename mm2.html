@@ -35,6 +35,12 @@
   .brand-text { font:600 16px "Unbounded", sans-serif; }
   .dim { color:var(--muted); }
   .tabs { display:flex; gap:8px; padding:14px 0 4px; flex-wrap:wrap; }
+  /* phones: the menu is one row you swipe sideways */
+  @media (max-width:640px) {
+    .tabs { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch; margin:0 -16px; padding:12px 16px 6px; scroll-padding:0 16px; }
+    .tabs::-webkit-scrollbar { display:none; }
+    .tabs .tab { flex:none; white-space:nowrap; }
+  }
   .tab { padding:7px 14px; border-radius:999px; border:1px solid var(--border); color:var(--muted); text-decoration:none; font-weight:700; font-size:13px; }
   .tab:hover { color:var(--text); border-color:var(--muted-2); }
   .tab.active { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
@@ -42,6 +48,14 @@
   .ranges { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:0 0 10px; font-size:12px; color:var(--muted); }
   .ranges label { display:flex; align-items:center; gap:6px; white-space:nowrap; }
   .ranges input { width:84px; padding:6px 8px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text); font:inherit; font-size:12px; }
+  @media (max-width:640px) {
+    .controls #q { flex:1 1 100%; }
+    .controls select { flex:1 1 calc(50% - 4px); min-width:0; }
+    .ranges { display:grid; grid-template-columns:1fr; gap:8px; }
+    .ranges label { display:grid; grid-template-columns:64px 1fr auto 1fr; gap:6px; }
+    .ranges input { width:100%; box-sizing:border-box; }
+    .ranges-clear { justify-self:start; }
+  }
   .ranges-clear { font:800 11px Manrope, sans-serif; padding:5px 10px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; }
   input, select { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:9px 12px; font:inherit; }
   input { flex:1 1 220px; }
