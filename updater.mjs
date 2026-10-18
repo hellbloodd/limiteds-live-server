@@ -123,6 +123,7 @@ async function savePrices(prefix, state, allPrices, { partial = false, live = fa
       const sorted = offers.filter((o) => o[1] > 0).sort((a, b) => a[1] - b[1]);
       keep.ladder = sorted.slice(0, 5).map((o) => Math.round(o[1] * 100) / 100);
       keep.sellers = sorted.slice(0, 2).map((o) => o[4] || null); // who sells the cheapest and the 2nd (seller trust)
+      keep.stock = sorted[0]?.[2] ?? null; // units in the cheapest listing (bulk flips)
     }
     // partial: keep what the fresh check didn't fetch (Adopt Me versions, listing counts...)
     prices[k] = partial ? { ...(prices[k] || {}), ...keep } : keep;

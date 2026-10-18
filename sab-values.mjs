@@ -183,7 +183,7 @@ function eldoradoFields(it) {
   const p = sbEldorado.prices[it.key];
   if (!p?.usd) return {};
   // Values are in Dragons, often far below 1, so keep 3 significant digits.
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd), ...salesStats(sbSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: "no mutation", valuePerUsd: Number((it.value / p.usd).toPrecision(3)), priceChanges: priceChangesFrom(sbPriceHistory[it.key], p.usd), ...salesStats(sbSales[it.key]) };
 }
 
 // Returns true if the request was handled.

@@ -84,7 +84,7 @@
   #refresh-status { color:var(--text); }
 
   .table { display:flex; flex-direction:column; gap:8px; padding-bottom:40px; }
-  .head, .row { display:grid; grid-template-columns:minmax(200px, 2fr) repeat(5, minmax(72px, 1fr)) minmax(64px, .8fr) minmax(70px, .9fr) minmax(80px, 1fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
+  .head, .row { display:grid; grid-template-columns:minmax(200px, 2fr) repeat(5, minmax(72px, 1fr)) minmax(64px, .8fr) minmax(70px, .9fr) minmax(80px, 1fr) minmax(86px, 1fr) 104px; gap:10px; align-items:center; padding:10px 14px; }
   .head { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
   .head button { all:unset; cursor:pointer; } .head button:hover, .head button.on { color:var(--accent); }
   .row { background:linear-gradient(160deg, color-mix(in srgb, var(--surface) 92%, var(--accent) 8%), var(--surface)); border:1px solid var(--border); border-radius:14px;
@@ -97,6 +97,7 @@
   .mk-link { font-size:10px; margin-left:5px; color:var(--muted); text-decoration:none; border-bottom:1px dotted currentColor; }
   .mk-link:hover { color:var(--accent); }
   .chip.mk { color:#f97316; border-color:#f9731655; }
+  .stock-chip { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; color:#38bdf8; background:#38bdf81f; }
   .trust { display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px; margin-left:4px; }
   .trust.trusted { color:#22c55e; background:#22c55e1a; } .trust.ok { color:var(--muted); background:var(--surface-2, #ffffff10); }
   .trust.new { color:#f5b400; background:#f5b4001f; } .trust.risky { color:#ef4444; background:#ef44441f; }
@@ -210,6 +211,7 @@
     <div class="field"><label for="minRoi">Min ROI %</label><input id="minRoi" type="number" min="0" step="1"></div>
     <div class="field"><label for="minListings">Min listings</label><input id="minListings" type="number" min="2" step="1"></div>
     <div class="field"><label for="minSold">Min sold (7d)</label><input id="minSold" type="number" min="0" step="1"></div>
+    <div class="field"><label for="minStock" title="Units in the cheapest listing - 2 or more = bulk flips">Min stock</label><input id="minStock" type="number" min="0" step="1"></div>
     <div class="field"><label>&nbsp;</label><button class="refresh" id="refresh" type="button"><span class="ico">↻</span> Refresh now</button></div>
     <div class="msg" id="refresh-status" style="flex-basis:100%;font-size:12px"></div>
     <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. "Sold" counts sales the site has seen on Eldorado (stock going down or listings disappearing) — tracking started recently, so it grows over the first days. "Profit / day" = profit × average sales per day: the best guess of what a flip earns. Check the listings before buying.</div>
@@ -232,6 +234,7 @@
       <button data-sort="listings" class="num">Listings</button>
       <button data-sort="sold7d" class="num">Sold 7d</button>
       <button data-sort="perDay" class="num">Profit / day</button>
+      <button data-sort="bulkProfit" class="num" title="Buying several units from a seller with stock, then relisting them one by one">Bulk profit</button>
       <span></span>
     </div>
     <div id="rows"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
@@ -245,10 +248,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(Math.abs(n) >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 // Settings are remembered in this browser.
-const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, minSold: 0, game: "" };
+const DEFAULTS = { fee: 10, minProfit: 1, minRoi: 10, minListings: 3, minSold: 0, minStock: 0, game: "" };
 let settings = DEFAULTS;
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem("flipSettings") || "{}") }; } catch { /* private mode */ }
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]) $(k).value = settings[k];
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game"]) $(k).value = settings[k];
 const save = () => { try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let rows = [];
@@ -265,7 +268,10 @@ function compute(r) {
   // sellsEveryH: how long one sale takes on average (from 7-day sales); profit/day assumes you can
   // keep one relisted at the front, so it's capped at one flip per sale.
   const sellsEveryH = r.sold7d ? 168 / r.sold7d : null;
-  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH };
+  // bulk: the cheapest seller has `stock` units; buy about a week of sales (at least 1), relist one by one
+  const bulkUnits = r.stock > 1 ? Math.max(1, Math.min(r.stock, r.sold7d || 1)) : 1;
+  return { ...r, relist, feeAmt, profit, roi: profit / r.usd * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH,
+    bulkUnits, bulkProfit: Math.max(0, profit) * bulkUnits };
 }
 
 function render() {
@@ -273,7 +279,7 @@ function render() {
   const list = rows.map(compute).filter((r) => (!settings.game || r.game === settings.game)
     && (!q || r.name.toLowerCase().includes(q))
     && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings
-    && r.sold7d >= settings.minSold);
+    && r.sold7d >= settings.minSold && (r.stock || 1) >= settings.minStock);
   list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
   document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
   const maxRoi = Math.max(...list.map((r) => r.roi), 1);
@@ -284,7 +290,7 @@ function render() {
         <img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div style="min-width:0">
           <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${!r.market && r.others?.length ? r.others.map((o) => `<a class="mk-link" href="${esc(o.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open this listing on ${esc(o.market)}${o.rating ? ` · seller ${o.rating}%` : ""}">${esc(o.market)} ${money(o.usd)}</a>`).join("") : ""}</div>
+          <div><span class="chip">${esc(r.game)}</span>${r.variant ? `<span class="dim" style="font-size:11px">${esc(r.variant)}</span>` : ""}${r.market ? `<span class="chip mk" title="Buy on ${esc(r.buyMarket)}, sell on Eldorado">${esc(r.market)}</span>` : ""}${trustChip(r.trust?.[0])}${r.stock > 1 ? `<span class="stock-chip" title="Units in the cheapest listing">×${r.stock} in stock</span>` : ""}${!r.market && r.others?.length ? r.others.map((o) => `<a class="mk-link" href="${esc(o.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open this listing on ${esc(o.market)}${o.rating ? ` · seller ${o.rating}%` : ""}">${esc(o.market)} ${money(o.usd)}</a>`).join("") : ""}</div>
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}</div>
@@ -295,6 +301,7 @@ function render() {
       <div class="num tabular dim" data-label="Listings">${r.listings ?? "?"}</div>
       <div class="num tabular ${r.sold7d ? "" : "dim"}" data-label="Sold 7d" title="${r.sold24h} in the last 24h${r.soldPrice ? ` · typical sale ${money(r.soldPrice)}` : ""}">${r.sold7d}${r.sold24h ? ` <span class="up" style="font-size:11px">+${r.sold24h}</span>` : ""}</div>
       <div class="num tabular ${r.perDay > 0 ? "up" : "dim"}" data-label="Profit / day">${r.perDay > 0 ? "+" + money(r.perDay) : "—"}</div>
+      <div class="num tabular ${r.bulkUnits > 1 ? "up" : "dim"}" data-label="Bulk profit" title="${r.stock > 1 ? `Seller has ${r.stock} in stock · buy ${r.bulkUnits} (about a week of sales)` : "Single unit"}">${r.bulkUnits > 1 ? `+${money(r.bulkProfit)}<div class="dim" style="font-size:10px">×${r.bulkUnits}</div>` : "—"}</div>
       <a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? `Buy on ${esc(r.buyMarket)}` : "Buy on Eldorado"}</a>
     </div>`).join("") : `<div class="empty">No flips match these filters. Try a lower minimum profit or ROI.</div>`;
   $("t-count").textContent = list.length.toLocaleString();
@@ -319,7 +326,7 @@ async function load(fresh = false) {
   }
 }
 
-for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "game"]) {
+for (const k of ["fee", "minProfit", "minRoi", "minListings", "minSold", "minStock", "game"]) {
   $(k).addEventListener("input", () => {
     settings[k] = k === "game" ? $(k).value : Math.max(0, Number($(k).value) || 0);
     save(); render();
@@ -378,6 +385,7 @@ function openCard(r) {
       <div><span>Value</span><b>${Number(r.value).toLocaleString()}</b></div>
       <div><span>Listings</span><b>${r.listings ?? "?"}</b></div>
       <div><span>Fee (${settings.fee}%)</span><b>−${money(r.feeAmt)}</b></div>
+      ${r.stock > 1 ? `<div style="grid-column:1/-1"><span>Bulk flip</span><b style="font-size:13px">Seller has ${r.stock} in stock · buy ${r.bulkUnits} (≈ a week of sales) → <span class="${r.bulkProfit > 0 ? "up" : "down"}">+${money(r.bulkProfit)}</span> total, relisting one by one under ${money(r.second)}${r.stock > r.bulkUnits ? `<div class="dim" style="font-size:11px;font-weight:600">Buying all ${r.stock}: +${money(Math.max(0, r.profit) * r.stock)} if they all sell at that price — they'd take ~${r.sold7d ? Math.ceil(r.stock / r.sold7d) : "?"} weeks</div>` : ""}</b></div>` : ""}
       <div><span>Sells about every</span><b>${r.sellsEveryH ? hours(r.sellsEveryH) : "—"}</b></div>
       <div><span>Undercut about every</span><b>${r.undercut ? (r.undercut.everyMin != null ? hours(r.undercut.everyMin / 60) : "rarely") : "—"}</b></div>
       ${r.others?.length ? `<div style="grid-column:1/-1"><span>Other marketplaces</span><b style="font-size:13px">${r.others.map((o) => `<a class="mk-link" style="font-size:13px" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.market)} ${money(o.usd)}</a>`).join(" ")}</b></div>` : ""}
