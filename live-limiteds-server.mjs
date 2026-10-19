@@ -8,7 +8,7 @@ import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
 import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan, resetSniperLists } from "./sniper.mjs";
 import { clearLibraryCache, eldoradoBudget } from "./mm2-values.mjs";
-import { isOwner } from "./tools.mjs";
+import { isOwner, warmItems } from "./tools.mjs";
 import { startHealthAlerts } from "./health.mjs";
 import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
 import { startU7, u7Status, u7RefreshNow } from "./u7buy.mjs";
@@ -181,6 +181,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startRemoteMarkets(); // GameBoost / Itemku, sent by the PC booster
   startCurrency(); // Blade Ball tokens and Robux on every marketplace
   startAlerts(PORT); // the owner's price alerts
+  warmItems(PORT); // item search / alerts / portfolio list, always ready
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }

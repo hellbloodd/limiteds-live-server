@@ -31,17 +31,23 @@ const money = (n) => Math.round(Math.max(0, Number(n) || 0) * 100) / 100;
 
 // ---------- item search (for picking items on the owner pages) ----------
 let searchCache = { at: 0, items: [] };
+// Every game's items in one list (search, alerts, portfolio). Building it reads all four games
+// (~9,000 items, a few seconds), so callers get the last list at once and it's rebuilt in the
+// background when it's over a minute old; only the very first call waits.
+let building = null;
+async function buildAllItems(port) {
+  const lists = await Promise.all(Object.entries(GAMES).map(async ([game, g]) => (await gameItems(g, port).catch(() => [])).map((i) => ({
+    game, key: i.key, name: i.name, image: i.image, usd: i.usd ?? null, second: i.second ?? null, url: i.eldoradoUrl || "",
+    value: i.value ?? null, soldPrice: i.soldPrice ?? null, sold7d: i.sold7d || 0, change7d: i.priceChanges?.["7d"]?.pct ?? null, sellers: i.sellers || null }))));
+  const items = lists.flat();
+  if (items.length) searchCache = { at: Date.now(), items };
+  return searchCache.items;
+}
 async function allItems(port) {
-  if (Date.now() - searchCache.at < 60 * 1000) return searchCache.items;
-  const items = [];
-  for (const [game, g] of Object.entries(GAMES)) {
-    for (const i of await gameItems(g, port).catch(() => [])) {
-      items.push({ game, key: i.key, name: i.name, image: i.image, usd: i.usd ?? null, second: i.second ?? null, url: i.eldoradoUrl || "",
-        value: i.value ?? null, soldPrice: i.soldPrice ?? null, sold7d: i.sold7d || 0, change7d: i.priceChanges?.["7d"]?.pct ?? null, sellers: i.sellers || null });
-    }
-  }
-  searchCache = { at: Date.now(), items };
-  return items;
+  const stale = Date.now() - searchCache.at > 60 * 1000;
+  if (stale && !building) building = buildAllItems(port).finally(() => { building = null; });
+  if (searchCache.items?.length) return searchCache.items; // the last list, right away
+  return building || searchCache.items;
 }
 
 // ---------- syncing "My Listings" from the owner's public Eldorado shop ----------
@@ -333,4 +339,10 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
   }
   sendJson(res, 405, { error: "Method not allowed" });
   return true;
+}
+
+// Keep the all-items list warm so searches never wait for it.
+export function warmItems(port) {
+  setTimeout(() => allItems(port).catch(() => {}), 60 * 1000).unref?.();
+  setInterval(() => allItems(port).catch(() => {}), 60 * 1000).unref();
 }
