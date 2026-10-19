@@ -164,9 +164,9 @@
     </section>
 
     <section class="panel c-trend">
-      <div class="ph"><h3 id="trend-title">Price index · 30 days</h3><div class="seg-t" id="trend-games"></div></div>
+      <div class="ph"><h3 id="trend-title">Price change · 30 days</h3><div class="seg-t" id="trend-games"></div></div>
       <div class="trend" id="trend"><svg viewBox="0 0 640 240" preserveAspectRatio="none"></svg><div class="tip" id="tip"></div></div>
-      <div class="note">Median Eldorado price of listed items vs the start of the period (100 = unchanged). Above 100: items got pricier.</div>
+      <div class="note"><span id="trend-note">How much Eldorado prices moved since the start of the period: the median change of the same items, each compared with its own starting price (items listed under $0.50 left out).</span> Above 0%: items got pricier (good to sell). Below 0%: cheaper (good to buy).</div>
     </section>
 
     <section class="panel c-flips">
@@ -301,7 +301,7 @@ getJson("/api/dashboard").then((d) => {
   // trend chart
   const on = new Set(G.filter(([, g]) => g.index.length > 1).map(([n]) => n));
   const btns = document.getElementById("trend-games");
-  btns.innerHTML = G.map(([n, g]) => `<button type="button" data-g="${esc(n)}" style="--sc:${GC[n]}" class="${on.has(n) ? "on" : ""}" ${g.index.length > 1 ? "" : "disabled title='not enough price history yet'"}>${esc(n === "Steal a Brainrot" ? "SAB" : n)}</button>`).join("");
+  btns.innerHTML = G.map(([n, g]) => `<button type="button" data-g="${esc(n)}" style="--sc:${GC[n]}" class="${on.has(n) ? "on" : ""}" ${g.index.length > 1 ? `title="median of ${g.basket} items"` : "disabled title='not enough price history yet'"}>${esc(n === "Steal a Brainrot" ? "SAB" : n)}${g.index.length > 1 ? ` <b>${g.index.at(-1)[1] > 0 ? "+" : ""}${g.index.at(-1)[1].toFixed(1)}%</b>` : ""}</button>`).join("");
   btns.onclick = (e) => { const b = e.target.closest("button"); if (!b || b.disabled) return; on.has(b.dataset.g) ? on.delete(b.dataset.g) : on.add(b.dataset.g); b.classList.toggle("on"); drawTrend(d, on); };
   drawTrend(d, on);
 });
@@ -312,18 +312,18 @@ function drawTrend(d, on) {
   const lines = Object.entries(d.games).filter(([n, g]) => on.has(n) && g.index.length > 1);
   if (!lines.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="ax" style="font-size:13px">Price history is still being collected</text>`; return; }
   const days = [...new Set(lines.flatMap(([, g]) => g.index.map((p) => p[0])))].sort((a, b) => a - b);
-  document.getElementById("trend-title").textContent = `Price index · ${days.length >= 30 ? "30" : days.length} days`;
+  document.getElementById("trend-title").textContent = `Price change · ${days.length >= 30 ? "30" : days.length} days`;
   const vals = lines.flatMap(([, g]) => g.index.map((p) => p[1]));
-  let lo = Math.min(100, ...vals), hi = Math.max(100, ...vals); const pad = (hi - lo) * .15 || 2; lo -= pad; hi += pad;
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals); const pad = (hi - lo) * .15 || 1; lo -= pad; hi += pad;
   const x = (day) => L + (day - days[0]) / Math.max(1, days.at(-1) - days[0]) * (W - L - Rr);
   const y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
   const ticks = 4, grid = [];
-  for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks; grid.push(`<line x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${v.toFixed(0)}</text>`); }
+  for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks; grid.push(`<line x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${v > 0 ? "+" : ""}${v.toFixed(Math.abs(hi - lo) < 6 ? 1 : 0)}%</text>`); }
   const xl = [days[0], days[Math.floor(days.length / 2)], days.at(-1)].map((dd, i) => `<text class="ax" x="${x(dd)}" y="${H - 6}" text-anchor="${["start", "middle", "end"][i]}">${new Date(dd * 864e5).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>`);
   const smooth = (pts) => pts.map((p, i) => { if (!i) return `M${p[0]},${p[1]}`; const q = pts[i - 1], cx = (q[0] + p[0]) / 2; return `C${cx},${q[1]} ${cx},${p[1]} ${p[0]},${p[1]}`; }).join("");
   svg.innerHTML = `<defs>${lines.map(([n], i) => `<linearGradient id="tg${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${GC[n]}" stop-opacity=".35"/><stop offset="1" stop-color="${GC[n]}" stop-opacity="0"/></linearGradient>`).join("")}</defs>
     <g class="grid">${grid.join("")}</g>${xl.join("")}
-    <line x1="${L}" x2="${W - Rr}" y1="${y(100)}" y2="${y(100)}" stroke="rgba(255,255,255,.22)" stroke-dasharray="4 5"/>
+    <line x1="${L}" x2="${W - Rr}" y1="${y(0)}" y2="${y(0)}" stroke="rgba(255,255,255,.22)" stroke-dasharray="4 5"/>
     ${lines.map(([n, g], i) => { const pts = g.index.map((p) => [+x(p[0]).toFixed(1), +y(p[1]).toFixed(1)]); const dd = smooth(pts);
       return `<path d="${dd}L${pts.at(-1)[0]},${H - B}L${pts[0][0]},${H - B}Z" fill="url(#tg${i})" opacity=".9"/><path class="ln" d="${dd}" stroke="${GC[n]}" style="filter:drop-shadow(0 0 6px ${GC[n]})"/>`; }).join("")}
     <line class="vline" x1="0" x2="0" y1="${T}" y2="${H - B}"/>`;
@@ -334,7 +334,7 @@ function drawTrend(d, on) {
     const day = days.reduce((a, b) => Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a);
     vline.setAttribute("x1", x(day)); vline.setAttribute("x2", x(day)); vline.style.opacity = 1;
     tip.innerHTML = `<div style="color:var(--muted);margin-bottom:4px">${new Date(day * 864e5).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>` +
-      lines.map(([n, g]) => { const p = g.index.find((q) => q[0] === day); return p ? `<div style="--sc:${GC[n]}"><i></i>${esc(n)} <b>${p[1].toFixed(1)}</b></div>` : ""; }).join("");
+      lines.map(([n, g]) => { const p = g.index.find((q) => q[0] === day); return p ? `<div style="--sc:${GC[n]}"><i></i>${esc(n)} <b class="${p[1] > 0 ? "up" : p[1] < 0 ? "down" : ""}">${p[1] > 0 ? "+" : ""}${p[1].toFixed(1)}%</b></div>` : ""; }).join("");
     tip.style.opacity = 1;
     const tx = x(day) / W * r.width;
     tip.style.left = `${Math.min(r.width - tip.offsetWidth, Math.max(0, tx + 12 - (tx > r.width * .6 ? tip.offsetWidth + 24 : 0)))}px`; tip.style.top = "8px";
