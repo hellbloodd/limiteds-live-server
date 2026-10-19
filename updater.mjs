@@ -4,7 +4,7 @@
 // can still run it by hand from a PC.
 import {
   scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
-  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
+  fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, fetchMm2BySearch, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
   detectSales, mergeSales, confirmVanished,
   readRow,
 } from "./mm2-values.mjs";
@@ -72,13 +72,19 @@ async function refreshHistories(allItems, history, historyFetched, now, opts) {
 async function refreshEldorado(items, previous, { save = true } = {}) {
   const leaves = await fetchEldoradoItems();
   const prices = {};
-  const queue = items.filter((i) => !i.valueText).map((it) => [it, matchEldorado(it, leaves)]).filter(([, m]) => m);
+  const queue = items.map((it) => [it, matchEldorado(it, leaves)]).filter(([, m]) => m);
+  // not in Eldorado's item list yet (new items) or no clear match: search listings by name instead -
+  // new unvalued items always, others only when they're worth something
+  const { nameIndex } = await import("./markets.mjs");
+  const index = nameIndex(items);
+  const searched = new Set(queue.map(([it]) => it.key));
+  for (const it of items) if (!searched.has(it.key) && (it.valueText || it.value >= 50)) queue.push([it, null]);
   const matched = queue.length;
   await Promise.all(Array.from({ length: ELDORADO_WORKERS }, async () => {
     for (let job; (job = queue.shift());) {
       const [it, m] = job;
       try {
-        const p = await fetchEldoradoPrice(m);
+        const p = m ? await fetchEldoradoPrice(m) : await fetchMm2BySearch(it, index);
         if (p) prices[it.key] = p; // may be listings-only ({ offers: [] }) when nothing is listed
       } catch {
         if (previous?.prices?.[it.key]) prices[it.key] = previous.prices[it.key]; // keep the last known price

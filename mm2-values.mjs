@@ -597,6 +597,20 @@ export async function fetchEldoradoPrice(m) {
   };
 }
 
+// Items Eldorado hasn't put in its item list yet (a new event set): sellers already list them under
+// "Other", with the name only in the title. Search by name and keep listings whose title is exactly
+// this item (strict matching against every MM2 name: "Immortal" never counts as "Mortal").
+export async function fetchMm2BySearch(item, index) {
+  const { matchTitle } = await import("./markets.mjs");
+  const j = await eldoradoJson("/api/v1/item-management/offers?gameId=204&category=CustomItem&pageIndex=1&pageSize=40"
+    + `&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&searchQuery=${encodeURIComponent(item.name)}`);
+  const offers = (j.results || []).filter((r) => matchTitle(r.offer?.offerTitle || "", index) === item.name).map(offerTuple).filter((o) => o[1] > 0);
+  const prices = offers.map((o) => o[1]).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const { usd, second } = pickPrices(prices);
+  return { usd, second, listings: prices.length, ...listingWindow(offers, false), url: `${ELDORADO_SHOP}?searchQuery=${encodeURIComponent(item.name)}` };
+}
+
 // ---------- Server ----------
 
 let readMm2Rows;

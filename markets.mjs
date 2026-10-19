@@ -50,7 +50,7 @@ const NOISE = new Set(("fr nfr mfr n m f r np neon mega fly ride potion no pet p
   + "fast instant delivery cheap cheapest best safe 100 24 7 online in stock stock real new hot sale deal offer buy x1 1x 1 x the for with and of "
   + "trade trading face to by from only all platform pc mobile mutation normal default sale weapon weapons wholesale super speedy quick legit trusted "
   + "seller shop store price premium ready cheapest good guaranteed delivered auto automatic gift instantly fastest low lowest top quality 2021 2022 2023 2024 2025 2026 "
-  + "set_ value values ms m/s per second secret og brainrots").split(" "));
+  + "set_ value values ms m/s per second secret og brainrots halloween xmas christmas event box robux rbx new2026 limitedtime cheap").split(" "));
 export function matchTitle(title, index) {
   const t = words(title);
   if (/ (random|mystery box|set|bundle|pack|lot|account|accounts|any|giveaway) /.test(t) || (String(title).match(/[,+&]/g) || []).length >= 2) return null;
@@ -59,7 +59,7 @@ export function matchTitle(title, index) {
     if (at < 0) continue;
     const before = t.slice(0, at).trim().split(" ").pop() || "";
     const after = t.slice(at + w.length).trim().split(" ")[0] || "";
-    if ((before && !NOISE.has(before) && !/^\d+$/.test(before)) || (after && !NOISE.has(after) && !/^\d+$/.test(after))) continue; // part of a longer name
+    if ((before && !NOISE.has(before) && !/^\d+r?$/.test(before)) || (after && !NOISE.has(after) && !/^\d+r?$/.test(after))) continue; // part of a longer name
     return base;
   }
   return null;
