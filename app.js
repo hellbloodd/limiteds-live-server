@@ -30,3 +30,99 @@
     return "Phone alerts are on ✓ — a test notification is on its way.";
   };
 })();
+
+// ---------- Favourites (★) ----------
+// Synced through the site when the owner key is set (phone + PC share them), else kept in this browser.
+(() => {
+  const ownerKey = () => { try { return localStorage.getItem("ownerKey") || ""; } catch { return ""; } };
+  const local = () => { try { return JSON.parse(localStorage.getItem("favs") || "[]"); } catch { return []; } };
+  let list = local();
+  window.avFavs = new Set(list.map((f) => `${f.game}|${f.key}`));
+  const persist = async () => {
+    try { localStorage.setItem("favs", JSON.stringify(list)); } catch { /* ignore */ }
+    if (ownerKey()) await fetch("/api/favourites", { method: "POST", headers: { "Content-Type": "application/json", "x-owner-key": ownerKey() }, body: JSON.stringify({ favourites: list }) }).catch(() => {});
+  };
+  window.avFavsReady = (async () => {
+    if (!ownerKey()) return list;
+    try {
+      const r = await fetch("/api/favourites", { headers: { "x-owner-key": ownerKey() } });
+      if (r.ok) {
+        const remote = (await r.json()).favourites || [];
+        const merged = [...remote, ...list.filter((f) => !remote.some((x) => x.game === f.game && x.key === f.key))];
+        if (merged.length !== remote.length) { list = merged; persist(); } else list = remote;
+        window.avFavs = new Set(list.map((f) => `${f.game}|${f.key}`));
+      }
+    } catch { /* offline */ }
+    return list;
+  })();
+  window.avToggleFav = async (id, item) => {
+    if (window.avFavs.has(id)) { list = list.filter((f) => `${f.game}|${f.key}` !== id); window.avFavs.delete(id); }
+    else { list.push({ game: item.game, key: String(item.key), name: item.name, image: item.image || "", at: Date.now() }); window.avFavs.add(id); }
+    await persist();
+    return window.avFavs.has(id);
+  };
+  window.avFavList = () => list;
+})();
+
+// ---------- Global search (🔍 in the header, or press "/") ----------
+(() => {
+  const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme", "Steal a Brainrot": "/stealabrainrot" };
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const css = `
+    .gs-btn { margin-left:auto; display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border-radius:999px; border:1px solid var(--border, #2a2a3a); background:var(--surface, #12121c); color:var(--muted, #9aa); font:600 13px Manrope, sans-serif; cursor:pointer; }
+    .gs-btn:hover { color:var(--text, #fff); border-color:var(--accent, #a78bfa); }
+    .gs-btn kbd { font:700 10px "JetBrains Mono", monospace; border:1px solid var(--border, #333); border-radius:5px; padding:1px 5px; }
+    .gs-wrap { position:fixed; inset:0; z-index:9999; background:#05040acc; backdrop-filter:blur(6px); display:flex; justify-content:center; align-items:flex-start; padding:10vh 16px 16px; }
+    .gs-box { width:min(620px, 100%); background:var(--surface, #12121c); border:1px solid var(--border, #2a2a3a); border-radius:18px; box-shadow:0 30px 80px -30px #000; overflow:hidden; }
+    .gs-box input { width:100%; box-sizing:border-box; border:none; outline:none; padding:16px 18px; font:600 16px Manrope, sans-serif; background:transparent; color:var(--text, #fff); border-bottom:1px solid var(--border, #2a2a3a); }
+    .gs-res { max-height:60vh; overflow:auto; }
+    .gs-res a { display:grid; grid-template-columns:40px 1fr auto; gap:12px; align-items:center; padding:9px 16px; color:var(--text, #fff); text-decoration:none; }
+    .gs-res a:hover, .gs-res a.sel { background:var(--surface-2, #1b1b28); }
+    .gs-res img { width:40px; height:40px; object-fit:contain; border-radius:8px; background:var(--surface-2, #1b1b28); }
+    .gs-res .g { font-size:11px; color:var(--muted, #9aa); }
+    .gs-res .p { font:700 13px "JetBrains Mono", monospace; }
+    .gs-empty { padding:16px; color:var(--muted, #9aa); font-size:13px; }
+    @media (max-width:640px) { .gs-btn span { display:none; } .gs-btn kbd { display:none; } }`;
+  function open() {
+    if (document.querySelector(".gs-wrap")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "gs-wrap";
+    wrap.innerHTML = `<div class="gs-box" role="dialog" aria-label="Search items"><input type="search" placeholder="Search any item — MM2, Blade Ball, Adopt Me, Steal a Brainrot…" autocomplete="off"><div class="gs-res"><div class="gs-empty">Type at least 2 letters.</div></div></div>`;
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector("input"), res = wrap.querySelector(".gs-res");
+    let timer, sel = -1;
+    const close = () => wrap.remove();
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+    input.addEventListener("keydown", (e) => {
+      const links = [...res.querySelectorAll("a")];
+      if (e.key === "Escape") close();
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, Math.min(links.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1))); links.forEach((l, n) => l.classList.toggle("sel", n === sel)); }
+      if (e.key === "Enter" && links[Math.max(sel, 0)]) location.href = links[Math.max(sel, 0)].href;
+    });
+    input.addEventListener("input", () => {
+      clearTimeout(timer); sel = -1;
+      const q = input.value.trim();
+      if (q.length < 2) { res.innerHTML = `<div class="gs-empty">Type at least 2 letters.</div>`; return; }
+      timer = setTimeout(async () => {
+        const { items } = await fetch(`/api/item-search?q=${encodeURIComponent(q)}`).then((r) => r.json()).catch(() => ({ items: [] }));
+        res.innerHTML = items.length ? items.map((i) => `<a href="${PAGE[i.game]}?item=${encodeURIComponent(i.key)}"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+          <div><div>${esc(i.name)}${window.avFavs?.has(`${i.game}|${i.key}`) ? " ★" : ""}</div><div class="g">${esc(i.game)}${i.value ? ` · value ${Number(i.value).toLocaleString()}` : ""}</div></div>
+          <div class="p">${i.usd ? "$" + Number(i.usd).toFixed(2) : ""}</div></a>`).join("") : `<div class="gs-empty">No item matches “${esc(q)}”.</div>`;
+      }, 120);
+    });
+    input.focus();
+  }
+  window.avOpenSearch = open;
+  addEventListener("DOMContentLoaded", () => {
+    const top = document.querySelector("header .top");
+    if (!top) return;
+    const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
+    const b = document.createElement("button");
+    b.className = "gs-btn"; b.type = "button"; b.innerHTML = `🔍 <span>Search items</span> <kbd>/</kbd>`;
+    b.addEventListener("click", open);
+    top.appendChild(b);
+  });
+  addEventListener("keydown", (e) => {
+    if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) { e.preventDefault(); open(); }
+  });
+})();

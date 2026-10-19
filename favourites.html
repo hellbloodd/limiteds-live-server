@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:title" content="Favourites · Agony Values"><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js"></script>
+<title>Favourites · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#f5b400; --accent-2:#a78bfa; --accent-soft:#f5b40022; --glow:#f5b40055; }
+  .grid-f { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; }
+  .fc { display:flex; flex-direction:column; gap:8px; padding:14px; border-radius:16px; border:1px solid var(--border); background:var(--surface); color:var(--text); text-decoration:none; position:relative; }
+  .fc:hover { border-color:var(--accent); }
+  .fc .t { display:flex; gap:10px; align-items:center; min-width:0; }
+  .fc img { width:48px; height:48px; object-fit:contain; border-radius:10px; background:var(--surface-2); flex:none; }
+  .fc .n { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fc .g { font-size:11px; color:var(--muted); }
+  .fc .nums { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; font-size:11px; color:var(--muted); }
+  .fc .nums b { display:block; font:700 14px "JetBrains Mono", monospace; color:var(--text); }
+  .unstar { position:absolute; top:10px; right:10px; border:none; background:none; color:#f5b400; font-size:20px; cursor:pointer; }
+  .up { color:#22c55e !important; } .down { color:#ef4444 !important; }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab active" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+  </nav>
+  <section class="hero"><div><h1>Favourites</h1><p class="dim">Items you starred (☆ in any item's preview, or from 🔍 search). Synced between your devices once your owner key is set.</p></div></section>
+  <div class="grid-f" id="grid"><div class="empty">Loading…</div></div>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme", "Steal a Brainrot": "/stealabrainrot" };
+async function load() {
+  const favs = await window.avFavsReady;
+  if (!favs.length) { document.getElementById("grid").innerHTML = `<div class="empty">No favourites yet — open any item and tap ☆, or use 🔍 search.</div>`; return; }
+  const all = (await (await fetch("/api/trade-items")).json()).items || [];
+  const byId = new Map(all.map((i) => [`${i.game}|${i.key}`, i]));
+  document.getElementById("grid").innerHTML = favs.map((f) => {
+    const i = byId.get(`${f.game}|${f.key}`) || f;
+    const ch = i.change7d;
+    return `<a class="fc" href="${PAGE[f.game]}?item=${encodeURIComponent(f.key)}">
+      <button class="unstar" data-id="${esc(f.game)}|${esc(f.key)}" title="Remove from favourites" type="button">★</button>
+      <div class="t"><img src="${esc(i.image || f.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><div style="min-width:0"><div class="n">${esc(i.name || f.name)}</div><div class="g">${esc(f.game)}</div></div></div>
+      <div class="nums"><div>Value<b>${i.valueText ? "new" : i.value ? Number(i.value).toLocaleString() : "—"}</b></div><div>Price<b>${i.usd ? "$" + Number(i.usd).toFixed(2) : "—"}</b></div>
+        <div>7d price<b class="${ch > 0 ? "down" : ch < 0 ? "up" : ""}">${ch == null ? "—" : (ch > 0 ? "+" : "") + ch + "%"}</b></div></div></a>`;
+  }).join("");
+}
+document.getElementById("grid").addEventListener("click", async (e) => {
+  const b = e.target.closest(".unstar"); if (!b) return;
+  e.preventDefault();
+  await window.avToggleFav(b.dataset.id, {});
+  load();
+});
+load();
+</script>
+</body>
+</html>

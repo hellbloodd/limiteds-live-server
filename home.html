@@ -7,7 +7,7 @@
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
-<script src="/app.js" defer></script>
+<script src="/app.js"></script>
 <title>Agony Values</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
@@ -23,6 +23,18 @@
   h2 { font:700 16px "Unbounded", sans-serif; margin:22px 0 8px; }
   .live { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:13px; color:var(--muted); margin-top:6px; }
   .live b { color:var(--text); }
+  /* dashboard */
+  .dash { display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:12px; margin:6px 0 4px; }
+  .dc { padding:14px 16px; border-radius:16px; border:1px solid var(--border); background:var(--surface); display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .dc .h { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); display:flex; justify-content:space-between; }
+  .dc .h a { color:var(--muted); text-transform:none; letter-spacing:0; }
+  .dc .big { font:700 22px "JetBrains Mono", monospace; }
+  .dc .sub { font-size:12px; color:var(--muted); }
+  .dc .li { display:flex; gap:8px; align-items:center; font-size:13px; min-width:0; color:var(--text); text-decoration:none; }
+  .dc .li img { width:26px; height:26px; object-fit:contain; border-radius:6px; background:var(--surface-2); flex:none; }
+  .dc .li span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+  .dc .li b { font:700 12px "JetBrains Mono", monospace; }
+  .up { color:#22c55e; } .down { color:#ef4444; }
 </style>
 </head>
 <body>
@@ -30,9 +42,9 @@
 <header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
 <div class="wrap">
   <nav class="tabs">
-    <a class="tab active" href="/">🏠 Home</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab active" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
   </nav>
   <section class="hero">
     <div>
@@ -41,6 +53,9 @@
       <div class="live" id="live"></div>
     </div>
   </section>
+
+  <h2>Today</h2>
+  <div class="dash" id="dash"><div class="dc"><div class="sub">Loading your dashboard…</div></div></div>
 
   <h2>Values</h2>
   <div class="grid-home">
@@ -52,6 +67,8 @@
 
   <h2>Tools</h2>
   <div class="grid-home">
+    <a class="tile-link" href="/favourites"><span class="em">★</span><b>Favourites</b><span>The items you starred, with live prices</span></a>
+    <a class="tile-link" href="/seasons"><span class="em">🎃</span><b>Seasons</b><span>Halloween & Christmas items: when to buy and sell</span></a>
     <a class="tile-link" href="/trade"><span class="em">⚖️</span><b>Trade calculator</b><span>Is it a win? Value and real price of both sides</span></a>
     <a class="tile-link" href="/gaps"><span class="em">📊</span><b>Value vs price gaps</b><span>Items priced far under or over their value, ranked</span></a>
     <a class="tile-link" href="/flips"><span class="em">💸</span><b>Flip Finder</b><span>Buy cheap, relist under the next seller — across five marketplaces, with snipes</span></a>
@@ -73,6 +90,47 @@
     if (s.booster?.active) parts.push("PC booster <b>on</b>");
     document.getElementById("live").innerHTML = parts.map((p) => `<span>${p}</span>`).join("");
   } catch { /* offline */ }
+})();
+// ---------- dashboard: one card per source, each loads on its own ----------
+const esc2 = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const $m = (n) => n == null ? "—" : "$" + Number(n).toFixed(n >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme", "Steal a Brainrot": "/stealabrainrot" };
+const ownerKey = (() => { try { return localStorage.getItem("ownerKey") || ""; } catch { return ""; } })();
+const owner = (path) => fetch(path, { headers: { "x-owner-key": ownerKey } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const cards = {};
+function card(id, html) { cards[id] = html; document.getElementById("dash").innerHTML = ["portfolio", "flip", "currency", "alerts", "favs", "season"].filter((k) => cards[k]).map((k) => `<div class="dc">${cards[k]}</div>`).join(""); }
+(async () => {
+  if (ownerKey) owner("/api/holdings").then((d) => d && card("portfolio", `<div class="h">💼 Portfolio <a href="/portfolio">open</a></div><div class="big">${$m(d.totals.sellNow)}</div>
+    <div class="sub">if sold now · <span class="${d.totals.unrealised >= 0 ? "up" : "down"}">${d.totals.unrealised >= 0 ? "+" : ""}${$m(d.totals.unrealised)}</span> unrealised · ${d.totals.items} items</div>`));
+  fetch("/api/flips?fee=10&minProfit=1&minRoi=10&minListings=3&minSold=1").then((r) => r.json()).then((d) => {
+    const best = (d.rows || []).filter((r) => !r.market).map((r) => ({ ...r, p: (r.second - 0.01) * 0.9 - r.usd })).sort((a, b) => b.p * Math.max(1, b.sold7d) - a.p * Math.max(1, a.sold7d)).slice(0, 3);
+    if (best.length) card("flip", `<div class="h">💸 Best flips today <a href="/flips">all</a></div>${best.map((r) => `<a class="li" href="${PAGE[r.game]}?item=${encodeURIComponent(String(r.key).split(":")[0])}"><img src="${esc2(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc2(r.name)}</span><b class="up">+${$m(r.p)}</b></a>`).join("")}<div class="sub">buy cheapest, relist under the next · 10% fee · selling items</div>`);
+  }).catch(() => {});
+  fetch("/api/currency").then((r) => r.json()).then((d) => {
+    const t = d.prices?.tokens?.[0], rb = d.prices?.robux?.[0];
+    if (t || rb) card("currency", `<div class="h">💱 Cheapest currency <a href="/currency">compare</a></div>
+      ${t ? `<a class="li" href="${esc2(t.url)}" target="_blank" rel="noopener"><span>🪙 Blade Ball tokens · ${esc2(t.market)}</span><b>${$m(t.per1k)}/1k</b></a>` : ""}
+      ${rb ? `<a class="li" href="${esc2(rb.url)}" target="_blank" rel="noopener"><span>💎 Robux · ${esc2(rb.market)}</span><b>${$m(rb.per1k)}/1k</b></a>` : ""}`);
+  }).catch(() => {});
+  if (ownerKey) owner("/api/alerts").then((d) => {
+    if (!d) return;
+    const hits = d.alerts.filter((a) => a.now != null && a.now <= a.target), close = d.alerts.filter((a) => a.now != null && a.now > a.target).sort((a, b) => a.now / a.target - b.now / b.target).slice(0, 3);
+    card("alerts", `<div class="h">🔔 Price alerts <a href="/alerts">manage</a></div><div class="big">${hits.length} <span class="sub">at your price · ${d.alerts.length} set</span></div>
+      ${[...hits, ...close].slice(0, 3).map((a) => `<a class="li" href="${esc2(a.nowUrl || "/alerts")}"${a.nowUrl ? ' target="_blank" rel="noopener"' : ""}><span>${esc2(a.name)} · ≤${$m(a.target)}</span><b class="${a.now <= a.target ? "up" : ""}">${$m(a.now)}</b></a>`).join("") || `<div class="sub">No alerts yet — set one from any item.</div>`}`);
+  });
+  if (window.avFavsReady) window.avFavsReady.then(async (favs) => {
+    if (!favs?.length) return card("favs", `<div class="h">★ Favourites <a href="/favourites">open</a></div><div class="sub">Star items (☆ in any preview) to see them here.</div>`);
+    const all = (await (await fetch("/api/trade-items")).json()).items || [];
+    const by = new Map(all.map((i) => [`${i.game}|${i.key}`, i]));
+    card("favs", `<div class="h">★ Favourites <a href="/favourites">all ${favs.length}</a></div>${favs.slice(0, 4).map((f) => { const i = by.get(`${f.game}|${f.key}`) || f;
+      return `<a class="li" href="${PAGE[f.game]}?item=${encodeURIComponent(f.key)}"><img src="${esc2(i.image || f.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc2(i.name || f.name)}</span><b>${i.usd ? $m(i.usd) : "—"}</b></a>`; }).join("")}`);
+  });
+  fetch("/api/seasons").then((r) => r.json()).then((d) => {
+    const e = d.events?.[0];
+    if (e) card("season", `<div class="h">${e.event === "Halloween" ? "🎃" : "🎄"} Next event <a href="/seasons">details</a></div><div class="big">${e.event}</div>
+      <div class="sub">${e.daysAway <= 0 ? "happening now" : `in ${e.daysAway} days`} · ${e.count} MM2 items · avg value 30d <span class="${(e.avg.v30 || 0) >= 0 ? "up" : "down"}">${e.avg.v30 == null ? "—" : (e.avg.v30 > 0 ? "+" : "") + e.avg.v30 + "%"}</span></div>`);
+  }).catch(() => {});
+  if (!ownerKey) card("portfolio", `<div class="h">💼 Your numbers</div><div class="sub">Unlock any private page (Portfolio, Alerts…) with your owner key once, and your portfolio and alerts show here.</div>`);
 })();
 </script>
 </body>

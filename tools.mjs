@@ -46,7 +46,7 @@ async function buildAllItems(port) {
   if (items.length) searchCache = { at: Date.now(), items };
   return searchCache.items;
 }
-async function allItems(port) {
+export async function allItems(port) {
   const stale = Date.now() - searchCache.at > 60 * 1000;
   if (stale && !building) building = buildAllItems(port).finally(() => { building = null; });
   if (searchCache.items?.length) return searchCache.items; // the last list, right away
@@ -240,7 +240,7 @@ async function portfolio(port) {
 
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));
@@ -249,6 +249,18 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
   if (url.pathname === "/tools.css") {
     res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "max-age=300" });
     res.end(await readFile(join(HERE, "tools.css"), "utf8"));
+    return true;
+  }
+  // favourites (owner): [{ game, key, name, image, at }]
+  if (url.pathname === "/api/favourites") {
+    if (!OWNER_KEY) { sendJson(res, 503, { error: "Set OWNER_KEY in Render first." }); return true; }
+    if (!isOwner(req)) { sendJson(res, 401, { error: "Wrong owner key." }); return true; }
+    if (req.method === "POST") {
+      const b = await readBody(req).catch(() => null);
+      const list = (Array.isArray(b?.favourites) ? b.favourites : []).slice(0, 500).map((f) => ({ game: clean(f.game, 40), key: clean(String(f.key), 200), name: clean(f.name, 80), image: clean(f.image || "", 400), at: Number(f.at) || Date.now() }));
+      await writeMm2Row("favourites", list);
+      sendJson(res, 200, { ok: true, count: list.length });
+    } else sendJson(res, 200, { favourites: (await readRow("favourites").catch(() => null)) || [] });
     return true;
   }
   // every item (public), so a shared trade link can be rebuilt

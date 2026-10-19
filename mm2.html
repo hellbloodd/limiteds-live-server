@@ -93,8 +93,12 @@
   svg.chart text { fill:var(--muted); font:11px "JetBrains Mono", monospace; }
   .chart-foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
   .range-row { display:flex; gap:6px; margin-bottom:8px; }
+  .fav-btn { font-size:22px; line-height:1; background:none; border:1px solid var(--border); border-radius:12px; padding:6px 10px; color:var(--muted); cursor:pointer; }
+  .fav-btn.on { color:#f5b400; border-color:#f5b40088; }
   .d-actions { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
   .alert-btn { display:inline-block; padding:8px 14px; border-radius:999px; background:var(--accent); color:#120c22; font-weight:800; font-size:13px; text-decoration:none; }
+  .mk-legend { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; margin-top:6px; }
+  .mk-legend i { display:inline-block; width:10px; height:3px; border-radius:2px; margin-right:5px; vertical-align:middle; }
   .kind-row { display:flex; gap:6px; margin:4px 0 8px; }
   .kind { font:800 12px Manrope, sans-serif; padding:6px 12px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; }
   .kind.on { color:var(--text); border-color:var(--accent); background:var(--accent-soft); }
@@ -251,12 +255,12 @@
 </header>
 <div class="wrap">
   <nav class="tabs">
-    <a class="tab" href="/">🏠 Home</a>
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a>
     <a class="tab" data-tab="mm2" href="/mm2">MM2 Values</a>
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
     <a class="tab" href="/watch">🏷️ My Listings</a>
     <a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
   </nav>
@@ -544,12 +548,36 @@ function chartView(allPoints, days, fmtY = shortNum, emptyMsg = "No value histor
 // (tracked by us: a point every hour for the last 3 days, then one a day).
 const valueFmt = (v) => shortNum(Math.round(v));
 const priceFmt = (v) => (v >= 100 ? "$" + Math.round(v).toLocaleString() : "$" + v.toFixed(2));
-function mountChart(valuePoints, pricePoints = null) {
+// several marketplaces' prices as lines on one chart
+const MARKET_COLORS = { Eldorado: "#f5b400", G2G: "#ef4444", U7BUY: "#f97316", GameBoost: "#a78bfa", Itemku: "#22d3ee" };
+function marketsChartView(series, days) {
+  const cutoff = days ? Date.now() - days * 864e5 : 0;
+  const lines = series.map((s) => ({ ...s, points: [...s.points.filter((p) => p[0] >= cutoff), [Date.now(), s.points[s.points.length - 1][1]]] })).filter((s) => s.points.length);
+  const all = lines.flatMap((s) => s.points);
+  if (!all.length) return `<p class="dim">No marketplace history yet.</p>`;
+  const W = 600, H = 220, L = 52, R = 10, T = 10, B = 26;
+  const x0 = Math.min(...all.map((p) => p[0])), x1 = Date.now();
+  let y0 = Math.min(...all.map((p) => p[1])), y1 = Math.max(...all.map((p) => p[1]));
+  if (y0 === y1) { y0 *= 0.9; y1 = y1 * 1.1 || 1; }
+  const sx = (x) => L + (x - x0) / (x1 - x0 || 1) * (W - L - R), sy = (y) => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
+  const grid = [0, 0.5, 1].map((f) => { const v = y0 + (y1 - y0) * f, y = sy(v); return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end">${priceFmt(v)}</text>`; }).join("");
+  const paths = lines.map((s) => { let d = `M${sx(s.points[0][0])},${sy(s.points[0][1])}`; for (let k = 1; k < s.points.length; k++) d += `H${sx(s.points[k][0])}V${sy(s.points[k][1])}`;
+    return `<path d="${d}" fill="none" stroke="${MARKET_COLORS[s.name] || "#888"}" stroke-width="2" vector-effect="non-scaling-stroke"/>`; }).join("");
+  const legend = lines.map((s) => `<span><i style="background:${MARKET_COLORS[s.name] || "#888"}"></i>${esc(s.name)} ${priceFmt(s.points[s.points.length - 1][1])}</span>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}">${grid}${paths}<text x="${L}" y="${H - 6}">${new Date(x0).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">Today</text></svg>
+    <div class="mk-legend">${legend}</div>`;
+}
+
+function mountChart(valuePoints, pricePoints = null, marketSeries = null) {
   let days = 365, kind = valuePoints.length ? "value" : "price";
   const draw = () => {
     const pts = kind === "value" ? valuePoints : pricePoints;
     const fmtY = kind === "value" ? valueFmt : priceFmt;
-    const tabs = pricePoints ? `<div class="kind-row"><button class="kind${kind === "value" ? " on" : ""}" data-kind="value">Value</button><button class="kind${kind === "price" ? " on" : ""}" data-kind="price">Eldorado price</button></div>` : "";
+    const tabs = pricePoints ? `<div class="kind-row"><button class="kind${kind === "value" ? " on" : ""}" data-kind="value">Value</button><button class="kind${kind === "price" ? " on" : ""}" data-kind="price">Eldorado price</button>${marketSeries ? `<button class="kind${kind === "markets" ? " on" : ""}" data-kind="markets">All marketplaces</button>` : ""}</div>` : "";
+    if (kind === "markets") {
+      $("hist").innerHTML = `${tabs}<div class="range-row">${RANGES.map(([l, n]) => `<button class="range${n === days ? " on" : ""}" data-days="${n}">${l}</button>`).join("")}</div>${marketsChartView(marketSeries, days)}`;
+      return;
+    }
     const note = kind === "price" && pricePoints.length && Date.now() - pricePoints[0][0] < 7 * 864e5
       ? `<p class="dim" style="font-size:11px;margin:6px 0 0">Price tracking started ${new Date(pricePoints[0][0]).toLocaleDateString()} — the chart grows every hour.</p>` : "";
     $("hist").innerHTML = `${tabs}<div class="range-row">${RANGES.map(([l, n]) => `<button class="range${n === days ? " on" : ""}" data-days="${n}">${l}</button>`).join("")}</div>${chartView(pts, days, fmtY, kind === "value" ? undefined : "No Eldorado price history yet.")}${note}`;
@@ -572,10 +600,17 @@ function mountChart(valuePoints, pricePoints = null) {
   draw();
 }
 
-$("grid").addEventListener("click", async (e) => {
+$("grid").addEventListener("click", (e) => {
   const card = e.target.closest(".card"); if (!card) return;
-  const i = items.find((x) => x.key === card.dataset.key);
-  $("detail").innerHTML = `<div class="d-head">${i.image ? `<img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<div><h2>${esc(i.name)}</h2><div class="cat">${esc(catLabel(i.category))}</div></div></div>
+  openItem(card.dataset.key);
+});
+// The item preview; also opened from a link (?item=<key>) - global search, favourites, home page.
+async function openItem(key) {
+  const i = items.find((x) => x.key === key);
+  if (!i) return;
+  const favKey = `${GAME_NAME[GAME.tab]}|${i.key}`;
+  $("detail").innerHTML = `<div class="d-head">${i.image ? `<img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<div style="flex:1"><h2>${esc(i.name)}</h2><div class="cat">${esc(catLabel(i.category))}</div></div>
+    <button class="fav-btn${window.avFavs?.has(favKey) ? " on" : ""}" id="fav-btn" type="button" title="Favourite">${window.avFavs?.has(favKey) ? "★" : "☆"}</button></div>
     <dl class="dl"><dt>Value</dt><dd class="tabular">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unitName ? ` ${esc(GAME.unitName)}` : ""}</dd>${row("Range", i.range && i.range !== "[N/A]" ? esc(i.range) : "")}
     ${row("Stability", esc(i.stability))}${row("Demand", i.demand != null ? fmt(i.demand) : "")}
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
@@ -594,8 +629,16 @@ $("grid").addEventListener("click", async (e) => {
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
   // Eldorado price: stored points ([day number, usd]) plus the live price now
   const pricePts = i.usd ? [...(h.pricePoints || []).map(([d, v]) => [d * 864e5, v]), [Date.now(), i.usd]] : null;
-  mountChart(h.points || [], pricePts);
-});
+  // other marketplaces' price history, drawn with Eldorado's on one chart
+  const mh = await fetch(`/api/market-history?game=${encodeURIComponent(GAME_NAME[GAME.tab])}&key=${encodeURIComponent(i.key)}`).then((r) => r.json()).catch(() => ({ markets: {} }));
+  const series = pricePts ? [{ name: "Eldorado", points: pricePts }] : [];
+  for (const [m, pts] of Object.entries(mh.markets || {})) series.push({ name: m, points: pts.map(([d, v]) => [d * 864e5, v]) });
+  mountChart(h.points || [], pricePts, series.length > 1 ? series : null);
+  $("fav-btn").onclick = async () => {
+    const on = await window.avToggleFav?.(favKey, { game: GAME_NAME[GAME.tab], key: i.key, name: i.name, image: i.image });
+    $("fav-btn").classList.toggle("on", !!on); $("fav-btn").textContent = on ? "★" : "☆";
+  };
+}
 
 ["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
 // ranges are remembered per game in this browser
@@ -618,7 +661,7 @@ $("periods").addEventListener("click", (e) => {
   $("periods").querySelectorAll("button[data-p]").forEach((x) => x.classList.toggle("on", x === b));
   render();
 });
-load();
+load().then(() => { const want = new URLSearchParams(location.search).get("item"); if (want) openItem(want); });
 setInterval(load, 5 * 60 * 1000);
 
 // "Refresh now": values first (~15-30s), then Eldorado prices (this game's first, ~1 min; MM2 longer).

@@ -57,7 +57,7 @@ const STATE_IDS = ["latest", "history", "history_fetched", "eldorado", "eldorado
 // rewrites the parts that changed: row "<id>" holds { __shards, __field?, __v, ...small fields } and
 // rows "<id>#0".."<id>#15" hold the map's entries split by key. Plain (old) rows still read fine.
 const SHARDS = 16;
-const SHARDED = { eldorado: "prices", eldorado_history: null, sales: null, history: null }; // id -> field holding the map (null: the row is the map)
+const SHARDED = { eldorado: "prices", eldorado_history: null, sales: null, history: null, market_history: null }; // id -> field holding the map (null: the row is the map)
 const shardOf = (key) => { let h = 0; for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0; return Math.abs(h) % SHARDS; };
 function splitRow(id, d) {
   const field = SHARDED[id];

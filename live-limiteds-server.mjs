@@ -15,6 +15,8 @@ import { startU7, u7Status, u7RefreshNow } from "./u7buy.mjs";
 import { startRemoteMarkets, receiveMarket, remoteMarketStatus } from "./remote-markets.mjs";
 import { startCurrency, refreshCurrency, receiveCurrency, currencyPrices } from "./currency.mjs";
 import { startAlerts, listAlerts, addAlert, removeAlert } from "./alerts.mjs";
+import { startMarketHistory, marketHistory } from "./market-history.mjs";
+import { startSeasons, seasonsReport } from "./seasons.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -105,6 +107,11 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/api/currency") return sendJson(res, 200, currencyPrices());
+    if (parsedUrl.pathname === "/api/seasons") {
+      const items = (await (await fetch(`http://127.0.0.1:${PORT}/api/mm2`)).json().catch(() => ({ items: [] }))).items || [];
+      return sendJson(res, 200, seasonsReport(items));
+    }
+    if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)
     if (parsedUrl.pathname === "/api/alerts") {
       if (!process.env.OWNER_KEY) return sendJson(res, 503, { error: "Set OWNER_KEY (a password of 6+ characters) in Render's Environment first." });
@@ -182,6 +189,8 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startCurrency(); // Blade Ball tokens and Robux on every marketplace
   startAlerts(PORT); // the owner's price alerts
   warmItems(PORT); // item search / alerts / portfolio list, always ready
+  startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku
+  startSeasons(); // Halloween / Christmas item lists from mm2values
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }
