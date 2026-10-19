@@ -7,6 +7,7 @@
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline,
   eldoradoJson, sendGamePage,
+  pageSize,
 } from "./mm2-values.mjs";
 
 const SB_ORIGIN = "https://sabrvalues.com";
@@ -112,7 +113,7 @@ export async function fetchSabEldoradoPrices(items) {
       const filter = `tradeEnvironmentValue0=${encodeURIComponent(type)}&tradeEnvironmentValue1=${encodeURIComponent(rarity)}`
         + `&tradeEnvironmentValue2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=none`;
       try {
-        const j = await eldoradoJson("/api/v1/item-management/offers?gameId=259&category=CustomItem&pageIndex=1&pageSize=5"
+        const j = await eldoradoJson(`/api/v1/item-management/offers?gameId=259&category=CustomItem&pageIndex=1&pageSize=${pageSize(5)}`
           + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
         const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
         const list = offers.map((o) => o[1]).sort((a, b) => a - b);

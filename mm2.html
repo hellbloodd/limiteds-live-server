@@ -653,7 +653,7 @@ async function loadDepth(i) {
   // cost of buying the cheapest 1 / 3 / 5 units
   const costOf = (n) => { let left = n, cost = 0; for (const [p, u] of offers) { const t = Math.min(u, left); cost += t * p; left -= t; if (!left) break; } return left ? null : cost; };
   const buys = [1, 3, 5, 10].map((n) => [n, costOf(n)]).filter(([, c]) => c != null);
-  el.innerHTML = `<div class="depth"><div class="depth-h"><b>Market depth</b><span class="dim">${fmt(units)} units in ${fmt(offers.length)} listings${d.complete ? "" : " (cheapest page)"}</span></div>
+  el.innerHTML = `<div class="depth"><div class="depth-h"><b>Market depth</b><span class="dim">${fmt(units)} units in ${fmt(offers.length)} listings${d.complete ? "" : d.listings > offers.length ? ` (cheapest ${fmt(offers.length)} of ${fmt(d.listings)})` : " (cheapest page)"}</span></div>
     ${rows.map((r) => { cum += r.units; return `<div class="depth-row"><span class="tabular">${r.lo === r.hi ? usd(r.lo) : `${usd(r.lo)}–${usd(r.hi)}`}</span><div class="depth-bar"><i style="width:${Math.max(3, r.units / max * 100)}%"></i></div><span class="tabular">${fmt(r.units)}<span class="dim"> · ${fmt(cum)}</span></span></div>`; }).join("")}
     <div class="depth-buy">${buys.map(([n, c]) => `<span>Buy ${n}: <b class="tabular">${usd(c)}</b><span class="dim"> (avg ${usd(c / n)})</span></span>`).join("")}</div></div>`;
 }

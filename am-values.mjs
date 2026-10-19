@@ -6,6 +6,7 @@
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
+  pageSize,
 } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
@@ -184,14 +185,14 @@ export async function fetchAmEldoradoPrices(items, { frOnly = false } = {}) {
       const shopUrl = (code) => `${AM_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}${code ? `&adopt-me-traits=${code}` : ""}`;
       try {
         if (!pet) { // eggs: no traits
-          const j = await eldoradoJson(OFFERS + "pageSize=5&" + filter);
+          const j = await eldoradoJson(OFFERS + `pageSize=${pageSize(5)}&` + filter);
           const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
           if (!offers.length) { prices[it.key] = { offers: [], windowMax: Infinity }; continue; }
           prices[it.key] = { ...priceOf(offers, j.recordCount || offers.length, shopUrl("")), ...listingWindow(offers, (j.recordCount || 0) > offers.length), variant: "" };
           continue;
         }
         if (frOnly) {
-          const j = await eldoradoJson(OFFERS + "pageSize=5&" + filter + "&adopt-me-traits=fr");
+          const j = await eldoradoJson(OFFERS + `pageSize=${pageSize(5)}&` + filter + "&adopt-me-traits=fr");
           const offers = (j.results || []).filter((r) => traitOf(r) === "fr").map(offerTuple).filter((o) => o[1] > 0);
           if (offers.length) prices[it.key] = { ...priceOf(offers, j.recordCount || offers.length, shopUrl("fr")), ...listingWindow(offers, (j.recordCount || 0) > offers.length), variant: "Fly Ride" };
           continue;

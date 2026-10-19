@@ -6,7 +6,7 @@ import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
 import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
-import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus, listingDepth } from "./updater.mjs";
+import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan, resetSniperLists } from "./sniper.mjs";
 import { clearLibraryCache, eldoradoBudget } from "./mm2-values.mjs";
 import { isOwner, warmItems } from "./tools.mjs";
@@ -34,6 +34,7 @@ import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest, warmFlips, preloadFlips } from "./flips.mjs";
 import { handleToolsRequest, preloadItems } from "./tools.mjs";
 import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
+import { depthFor } from "./depth.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -140,7 +141,7 @@ const server = http.createServer(async (req, res) => {
       const items = (await (await fetch(`http://127.0.0.1:${PORT}/api/mm2`)).json().catch(() => ({ items: [] }))).items || [];
       return sendJson(res, 200, seasonsReport(items));
     }
-    if (parsedUrl.pathname === "/api/depth") return sendJson(res, 200, listingDepth(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") || { offers: [] });
+    if (parsedUrl.pathname === "/api/depth") return sendJson(res, 200, await depthFor(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "", PORT));
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)

@@ -468,6 +468,11 @@ const waitHigh = [], waitLow = [];
 const hits429 = []; // timestamps
 const lowCtx = new AsyncLocalStorage();
 export const lowPriority = (fn) => lowCtx.run(true, fn);
+// Listings per price check: the regular scans read only the cheapest 5; the market-depth view asks
+// for more for one item at a time (withPageSize(50, ...)).
+const pageCtx = new AsyncLocalStorage();
+export const withPageSize = (n, fn) => pageCtx.run(n, fn);
+export const pageSize = (d) => pageCtx.getStore() || d;
 const isLow = () => lowCtx.getStore() === true;
 async function eldoradoSlot() {
   const low = isLow();
@@ -583,7 +588,7 @@ function eldoradoFilter(m) {
 
 // Cheapest listing (USD) and number of listings for one matched item.
 export async function fetchEldoradoPrice(m) {
-  const j = await eldoradoJson("/api/v1/item-management/offers?gameId=204&category=CustomItem&pageIndex=1&pageSize=5"
+  const j = await eldoradoJson(`/api/v1/item-management/offers?gameId=204&category=CustomItem&pageIndex=1&pageSize=${pageSize(5)}`
     + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&"
     + eldoradoFilter(m));
   const offers = (j.results || []).map(offerTuple).filter((o) => o[1] > 0);
