@@ -220,7 +220,9 @@ export function parseCategoryPage(html, category) {
     const block = chunk.split("<input")[0];
     const name = pick(block, /<b>([\s\S]*?)<\/b>/);
     const value = parseNumber(pick(block, /Value:\s*([\d,.]+)/));
-    if (!name || !(value > 0)) continue;
+    if (!name || value == null) continue;
+    // value 0 = just released, not valued yet (e.g. a new event set): listed so its Eldorado price shows
+    const unvalued = !(value > 0);
     const range = pick(block, /Range:\s*([^<]*)/);
     const image = pick(block, /<img src='([^']+)'/);
     items.push({
@@ -228,7 +230,7 @@ export function parseCategoryPage(html, category) {
       name,
       category,
       value,
-      valueText: "",
+      valueText: unvalued ? "New · not valued yet" : "",
       range: range && !/^n\/a$/i.test(range) ? range : "",
       stability: pick(block, /Stability:\s*([^<]*)/),
       demand: parseNumber(pick(block, /Demand:\s*([\d.]+)/)),
