@@ -634,8 +634,10 @@ function mountChart(valuePoints, pricePoints = null, marketSeries = null) {
 
 // Market depth: how many units are listed at each price (from the last Eldorado check).
 async function loadDepth(i) {
+  if ($("depth")) $("depth").innerHTML = `<div class="depth dim" style="font-size:12px">Reading every listing for market depth…</div>`;
   const d = await fetch(`/api/depth?game=${encodeURIComponent(GAME_NAME[GAME.tab])}&key=${encodeURIComponent(i.key)}`).then((r) => r.json()).catch(() => null);
-  const el = $("depth"); if (!el || !d?.offers?.length) return;
+  const el = $("depth"); if (!el) return;
+  if (!d?.offers?.length) { el.innerHTML = ""; return; }
   const offers = d.offers; // [usd, units], cheapest first
   // group into price steps: each distinct price, or 10 ranges when there are many
   const distinct = [...new Set(offers.map((o) => o[0]))];
