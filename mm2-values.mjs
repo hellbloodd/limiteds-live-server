@@ -726,7 +726,8 @@ export async function handleMm2Request(url, res, sendJson) {
     const items = mm2Items
       .filter((it) => (!q || it.name.toLowerCase().includes(q)) && (!category || it.category === category))
       // Ratio-valued items ("x2 T1 Commons") have no real number to chart or compare.
-      .map((it) => (it.valueText ? { ...it, spark: [], changes: {} }
+      // (unvalued new items still get their Eldorado price)
+      .map((it) => (it.valueText ? { ...it, spark: [], changes: {}, ...eldoradoFields(it), valuePerUsd: null }
         : { ...it, spark: sparkline(numericHistory(it.key)), changes: periodChanges(numericHistory(it.key), it.value), ...eldoradoFields(it) }));
     sendJson(res, 200, {
       updatedAt: mm2UpdatedAt ? new Date(mm2UpdatedAt).toISOString() : null,
