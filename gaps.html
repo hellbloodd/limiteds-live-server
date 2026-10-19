@@ -77,6 +77,7 @@ async function load() {
   }));
   rows = all.flat();
   render();
+  if (!rows.length) { $("rows").innerHTML = `<div class="empty">Prices are still loading on the server — retrying…</div>`; setTimeout(load, 15000); }
 }
 
 function render() {
