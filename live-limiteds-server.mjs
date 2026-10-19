@@ -30,7 +30,7 @@ for (const level of ["error", "warn"]) {
   };
 }
 import { sendTestAlert } from "./deals.mjs";
-import { handleFlipsRequest } from "./flips.mjs";
+import { handleFlipsRequest, warmFlips } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
 
 
@@ -191,6 +191,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   warmItems(PORT); // item search / alerts / portfolio list, always ready
   startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku
   startSeasons(); // Halloween / Christmas item lists from mm2values
+  warmFlips(PORT); // Flip Finder data always ready
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }
