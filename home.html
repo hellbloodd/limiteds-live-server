@@ -379,7 +379,7 @@ getJson("/api/currency").then((d) => {
 });
 if (window.avFavsReady) window.avFavsReady.then(async (favs) => {
   if (!favs?.length) return mini("favs", `<div class="ph"><h3>★ Favourites</h3><a href="/favourites">open →</a></div><div class="sub">Star items (☆ in any preview) to see them here.</div>`);
-  const all = (await getJson("/api/trade-items"))?.items || [];
+  const all = (await getJson("/api/trade-items?" + favs.map((f) => "id=" + encodeURIComponent(`${f.game}|${f.key}`)).join("&")))?.items || [];
   const by = new Map(all.map((i) => [`${i.game}|${i.key}`, i]));
   mini("favs", `<div class="ph"><h3>★ Favourites</h3><a href="/favourites">all ${favs.length} →</a></div>${favs.slice(0, 4).map((f) => { const i = by.get(`${f.game}|${f.key}`) || f;
     return `<a class="li" href="${PAGE[f.game]}?item=${encodeURIComponent(f.key)}"><img src="${esc(i.image || f.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(i.name || f.name)}</span><b>${i.usd ? $m(i.usd) : "—"}</b></a>`; }).join("")}`);

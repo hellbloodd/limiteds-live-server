@@ -143,7 +143,7 @@
   const reveal = (root = document) => {
     if (!io) return;
     root.querySelectorAll?.(`${GLASS}, .hero, h2`).forEach((el) => {
-      if (el.classList.contains("reveal") || el.closest("dialog")) return;
+      if (el.classList.contains("reveal") || el.closest("dialog, #grid, .tbl, .feed, .bars")) return; // long lists: no per-item animation
       el.classList.add("reveal"); el.style.transitionDelay = `${Math.min(n++ % 12, 11) * 45}ms`;
       io.observe(el);
     });
@@ -152,7 +152,7 @@
     for (const c of ["a", "b"]) { const o = document.createElement("div"); o.className = `neon-orb ${c}`; document.body.prepend(o); }
     reveal();
     // content drawn later (lists, cards) animates in too
-    new MutationObserver((ms) => { n = 0; ms.forEach((m) => m.addedNodes.forEach((x) => x.nodeType === 1 && (x.matches?.(GLASS) ? reveal(x.parentNode) : reveal(x)))); })
+    new MutationObserver((ms) => { n = 0; ms.forEach((m) => { if (m.target.closest?.("#grid, .tbl")) return; m.addedNodes.forEach((x) => x.nodeType === 1 && (x.matches?.(GLASS) ? reveal(x.parentNode) : reveal(x))); }); })
       .observe(document.body, { childList: true, subtree: true });
   });
 })();

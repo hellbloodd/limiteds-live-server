@@ -461,7 +461,7 @@ function render() {
   };
   const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
   list.sort((deals || c === "rising") && s === "value" ? byDeal : sorters[s]);
-  $("grid").innerHTML = list.length ? list.map((i, n) => `
+  const cardHtml = (i, n) => `
     <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
       <div class="c-top">
         <img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.visibility='hidden'">
@@ -479,7 +479,31 @@ function render() {
         ${spark(i.spark)}
       </div>
       ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b>${i.valuePerUsd > 0 ? `<span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>` : ""}${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
-    </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
+    </div>`;
+  showChunks(list, cardHtml);
+}
+
+// Draw the first cards right away and the rest as you scroll (thousands of cards at once froze phones).
+const CHUNK = 60;
+let chunkObs = null;
+function showChunks(list, cardHtml) {
+  const grid = $("grid");
+  chunkObs?.disconnect();
+  if (!list.length) { grid.innerHTML = `<div class="empty">Nothing matches.</div>`; return; }
+  let shown = Math.min(CHUNK, list.length);
+  grid.innerHTML = list.slice(0, shown).map(cardHtml).join("");
+  if (shown >= list.length) return;
+  const more = document.createElement("div");
+  more.className = "more-sentinel"; more.style.cssText = "grid-column:1/-1;height:1px";
+  grid.appendChild(more);
+  chunkObs = new IntersectionObserver((es) => {
+    if (!es[0].isIntersecting) return;
+    const next = list.slice(shown, shown + CHUNK * 2);
+    more.insertAdjacentHTML("beforebegin", next.map((i, n) => cardHtml(i, n)).join(""));
+    shown += next.length;
+    if (shown >= list.length) { chunkObs.disconnect(); more.remove(); }
+  }, { rootMargin: "1200px 0px" });
+  chunkObs.observe(more);
 }
 
 // Mini 90-day trend line on each card, coloured by direction.
@@ -641,7 +665,9 @@ async function openItem(key) {
   };
 }
 
-["q", "cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+let typing;
+$("q").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(render, 140); });
+["cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
 // ranges are remembered per game in this browser
 const RANGE_KEY = `ranges:${GAME.tab}`;
 try { const r = JSON.parse(localStorage.getItem(RANGE_KEY) || "{}"); for (const k of ["vmin", "vmax", "pmin", "pmax", "lmin", "lmax"]) if (r[k] != null) $(k).value = r[k]; } catch { /* private mode */ }

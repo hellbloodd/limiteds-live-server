@@ -1,4 +1,5 @@
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import http from "http";
 import { URL } from "url";
 import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
@@ -41,20 +42,46 @@ import { dashboard, warmDashboard } from "./dashboard.mjs";
 const PORT = Number(process.env.PORT || 8787);
 const SERVER_VERSION = "agony-values-2";
 
+// Public answers that are the same for everyone are kept (already compressed) for a short while, so
+// a page load doesn't rebuild and re-gzip several MB each time. Owner-only routes are never cached.
+const SHARED_TTL = { "/api/mm2": 30e3, "/api/bladeball": 30e3, "/api/adoptme": 30e3, "/api/stealabrainrot": 30e3, "/api/trade-items": 60e3,
+  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3 };
+const shared = new Map(); // url -> { t, ttl, status, text, gz, etag }
+const BASE_HEADERS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
+
+function writeCached(req, res, c) {
+  const headers = { ...BASE_HEADERS, "Cache-Control": "no-cache", ETag: c.etag, Vary: "Accept-Encoding" };
+  if (req.headers["if-none-match"] === c.etag) { res.writeHead(304, headers); return res.end(); }
+  if (c.gz && /gzip/.test(req.headers["accept-encoding"] || "")) { res.writeHead(c.status, { ...headers, "Content-Encoding": "gzip" }); return res.end(c.gz); }
+  res.writeHead(c.status, headers); res.end(c.text);
+}
+
+// Serves a fresh cached copy if there is one; returns true when it did.
+function serveShared(req, res, pathname) {
+  if (req.method !== "GET" || !SHARED_TTL[pathname]) return false;
+  const c = shared.get(req.url);
+  if (!c || Date.now() - c.t > c.ttl) return false;
+  writeCached(req, res, c);
+  return true;
+}
+
 function sendJson(res, status, body) {
-  // Big answers (the Flip Finder's is several MB) go out gzipped when the browser accepts it.
   const text = JSON.stringify(body);
-  if (text.length > 20000 && /gzip/.test(res.req?.headers?.["accept-encoding"] || "")) {
-    res.writeHead(status, { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
+  const req = res.req;
+  const pathname = req ? req.url.split("?")[0] : "";
+  if (req?.method === "GET" && SHARED_TTL[pathname] && status === 200) {
+    const gz = text.length > 20000 ? gzipSync(text, { level: 6 }) : null;
+    const c = { t: Date.now(), ttl: SHARED_TTL[pathname], status, text, gz, etag: `"${createHash("sha1").update(text).digest("base64url").slice(0, 20)}"` };
+    shared.set(req.url, c);
+    if (shared.size > 300) shared.delete(shared.keys().next().value);
+    return writeCached(req, res, c);
+  }
+  // Big answers go out gzipped when the browser accepts it.
+  if (text.length > 20000 && /gzip/.test(req?.headers?.["accept-encoding"] || "")) {
+    res.writeHead(status, { ...BASE_HEADERS, "Cache-Control": "no-store", "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
     return res.end(gzipSync(text, { level: 6 }));
   }
-  res.writeHead(status, {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
-  });
+  res.writeHead(status, { ...BASE_HEADERS, "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Cache-Control": "no-store" });
   res.end(text);
 }
 
@@ -66,6 +93,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   try {
+    if (serveShared(req, res, parsedUrl.pathname)) return;
     // Phone app: installable (manifest + service worker + icons) with push notifications
     const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/glass.css": ["glass.css", "text/css"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
     const icon = /^\/icons\/([a-z0-9-]+\.png)$/.exec(parsedUrl.pathname);
@@ -73,7 +101,7 @@ const server = http.createServer(async (req, res) => {
       const [file, type] = STATIC[parsedUrl.pathname] || [`icons/${icon[1]}`, "image/png"];
       try {
         const body = await readStatic(new URL(file, import.meta.url));
-        res.writeHead(200, { "Content-Type": type, "Cache-Control": icon ? "public, max-age=604800" : "no-cache", ...(file === "sw.js" ? { "Service-Worker-Allowed": "/" } : {}) });
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": icon ? "public, max-age=604800" : file === "sw.js" || file.endsWith(".webmanifest") ? "no-cache" : "public, max-age=600, stale-while-revalidate=86400", ...(file === "sw.js" ? { "Service-Worker-Allowed": "/" } : {}) });
         return res.end(body);
       } catch { res.writeHead(404); return res.end(); }
     }

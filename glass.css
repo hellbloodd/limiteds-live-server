@@ -123,3 +123,22 @@ svg.chart path.line { stroke:url(#neonLine) #a78bfa !important; }
 /* scrollbars */
 ::-webkit-scrollbar { width:10px; height:10px; } ::-webkit-scrollbar-thumb { background:linear-gradient(#8b5cf6, #3b82f6); border-radius:10px; border:2px solid #05060f; }
 ::-webkit-scrollbar-track { background:transparent; }
+
+/* ---------- performance: real blur only on a few big surfaces ----------
+   Blurring behind every card in a long grid made scrolling and typing slow, especially on phones.
+   Repeated items get a slightly more solid glass instead (looks the same over the dark background). */
+.card, .dc, .tile-link, .fc, .tbl, .tbl .row, .tiles4 > div, .c-stats > div, .ptable > div, .controls {
+  backdrop-filter:none !important; -webkit-backdrop-filter:none !important;
+  background:
+    radial-gradient(420px circle at var(--mx) var(--my), rgba(255,255,255,.075), transparent 45%),
+    linear-gradient(160deg, rgba(255,255,255,.07), rgba(255,255,255,.015) 38%, rgba(255,255,255,0) 60%),
+    rgba(18,20,50,.82) !important;
+}
+#grid .card { content-visibility:auto; contain-intrinsic-size:auto 170px; }
+.neon-orb { mix-blend-mode:normal; opacity:.22; will-change:transform; filter:blur(60px); }
+body::before, body::after { will-change:transform; }
+@media (max-width:760px) {
+  .neon-orb { display:none; }
+  .panel, .tile, .verdict, .side, .snipes, .chart-panel, nav.tabs .tab { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+  header { backdrop-filter:blur(12px) !important; -webkit-backdrop-filter:blur(12px) !important; }
+}

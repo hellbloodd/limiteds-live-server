@@ -264,7 +264,13 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
     return true;
   }
   // every item (public), so a shared trade link can be rebuilt
-  if (url.pathname === "/api/trade-items") { sendJson(res, 200, { items: await allItems(port) }); return true; }
+  if (url.pathname === "/api/trade-items") {
+    // ?id=<game>|<key> (repeatable): just those items (favourites), instead of all ~9,000
+    const ids = new Set(url.searchParams.getAll("id"));
+    const items = await allItems(port);
+    sendJson(res, 200, { items: ids.size ? items.filter((i) => ids.has(`${i.game}|${i.key}`)) : items });
+    return true;
+  }
   if (url.pathname === "/api/item-search") {
     const q = (url.searchParams.get("q") || "").toLowerCase().trim();
     const game = url.searchParams.get("game") || "";

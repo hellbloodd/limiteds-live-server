@@ -46,7 +46,7 @@ const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme"
 async function load() {
   const favs = await window.avFavsReady;
   if (!favs.length) { document.getElementById("grid").innerHTML = `<div class="empty">No favourites yet — open any item and tap ☆, or use 🔍 search.</div>`; return; }
-  const all = (await (await fetch("/api/trade-items")).json()).items || [];
+  const all = (await (await fetch("/api/trade-items?" + favs.map((f) => "id=" + encodeURIComponent(`${f.game}|${f.key}`)).join("&"))).json()).items || [];
   const byId = new Map(all.map((i) => [`${i.game}|${i.key}`, i]));
   document.getElementById("grid").innerHTML = favs.map((f) => {
     const i = byId.get(`${f.game}|${f.key}`) || f;
