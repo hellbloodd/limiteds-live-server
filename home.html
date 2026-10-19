@@ -164,7 +164,7 @@
     </section>
 
     <section class="panel c-trend">
-      <div class="ph"><h3>Price index · 30 days</h3><div class="seg-t" id="trend-games"></div></div>
+      <div class="ph"><h3 id="trend-title">Price index · 30 days</h3><div class="seg-t" id="trend-games"></div></div>
       <div class="trend" id="trend"><svg viewBox="0 0 640 240" preserveAspectRatio="none"></svg><div class="tip" id="tip"></div></div>
       <div class="note">Median Eldorado price of listed items vs the start of the period (100 = unchanged). Above 100: items got pricier.</div>
     </section>
@@ -275,9 +275,11 @@ getJson("/api/dashboard").then((d) => {
   countUp(document.getElementById("k-usd"), sum((g) => g.usd7d), (n) => "$" + Math.round(n).toLocaleString());
   const tracked = sum((g) => g.tracked), listed = sum((g) => g.listed);
   document.getElementById("k-listed-d").textContent = `${tracked ? Math.round(listed / tracked * 100) : 0}% of tracked items`;
-  const sales = daily(1), usd = daily(2);
+  let sales = daily(1), usd = daily(2);
+  const first = sales.findIndex((n) => n > 0); // sales tracking may be newer than 14 days
+  if (first > 0) { sales = sales.slice(first); usd = usd.slice(first); }
   const wk = (a, from) => a.slice(from, from + 7).reduce((x, y) => x + y, 0);
-  const ch = wk(usd, 0) ? Math.round((wk(usd, 7) - wk(usd, 0)) / wk(usd, 0) * 100) : null;
+  const ch = usd.length < 14 ? null : wk(usd, 0) ? Math.round((wk(usd, 7) - wk(usd, 0)) / wk(usd, 0) * 100) : null;
   if (ch != null) document.getElementById("k-usd-d").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch)}%</span> vs the week before`;
   spark(document.getElementById("s-tracked"), G.map(([, g]) => g.tracked), "#8b5cf6");
   spark(document.getElementById("s-listed"), G.map(([, g]) => g.listed), "#22d3ee");
@@ -310,6 +312,7 @@ function drawTrend(d, on) {
   const lines = Object.entries(d.games).filter(([n, g]) => on.has(n) && g.index.length > 1);
   if (!lines.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="ax" style="font-size:13px">Price history is still being collected</text>`; return; }
   const days = [...new Set(lines.flatMap(([, g]) => g.index.map((p) => p[0])))].sort((a, b) => a - b);
+  document.getElementById("trend-title").textContent = `Price index · ${days.length >= 30 ? "30" : days.length} days`;
   const vals = lines.flatMap(([, g]) => g.index.map((p) => p[1]));
   let lo = Math.min(100, ...vals), hi = Math.max(100, ...vals); const pad = (hi - lo) * .15 || 2; lo -= pad; hi += pad;
   const x = (day) => L + (day - days[0]) / Math.max(1, days.at(-1) - days[0]) * (W - L - Rr);

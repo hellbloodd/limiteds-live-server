@@ -45,9 +45,16 @@ async function build(port) {
   return { at: new Date().toISOString(), games };
 }
 
+let building = null;
+const rebuild = (port) => (building ||= build(port).then((data) => { cache = { t: Date.now(), data }; return data; }).finally(() => { building = null; }));
+
+// Stale-while-revalidate: answer from the last build and refresh it in the background.
 export async function dashboard(port) {
-  if (cache && Date.now() - cache.t < 10 * 60 * 1000) return cache.data;
-  const data = await build(port);
-  cache = { t: Date.now(), data };
-  return data;
+  if (!cache) return rebuild(port);
+  if (Date.now() - cache.t > 10 * 60 * 1000) rebuild(port).catch(() => {});
+  return cache.data;
+}
+
+export function warmDashboard(port) {
+  setTimeout(() => rebuild(port).catch(() => {}), 60 * 1000).unref();
 }
