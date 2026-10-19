@@ -38,7 +38,10 @@ let building = null;
 async function buildAllItems(port) {
   const lists = await Promise.all(Object.entries(GAMES).map(async ([game, g]) => (await gameItems(g, port).catch(() => [])).map((i) => ({
     game, key: i.key, name: i.name, image: i.image, usd: i.usd ?? null, second: i.second ?? null, url: i.eldoradoUrl || "",
-    value: i.value ?? null, soldPrice: i.soldPrice ?? null, sold7d: i.sold7d || 0, change7d: i.priceChanges?.["7d"]?.pct ?? null, sellers: i.sellers || null }))));
+    value: i.value ?? null, soldPrice: i.soldPrice ?? null, sold7d: i.sold7d || 0, change7d: i.priceChanges?.["7d"]?.pct ?? null, sellers: i.sellers || null,
+    valueText: i.valueText || "", category: i.category || "",
+    // Adopt Me: value and cheapest price of each version (No Potion, FR, NFR, Mega...) for the trade calculator
+    ...(i.vals ? { vals: i.vals, vprices: Object.fromEntries((i.variants || []).filter((v) => v.usd > 0).map((v) => [v.code, v.usd])) } : {}) }))));
   const items = lists.flat();
   if (items.length) searchCache = { at: Date.now(), items };
   return searchCache.items;
@@ -237,7 +240,7 @@ async function portfolio(port) {
 
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));
@@ -248,6 +251,8 @@ export async function handleToolsRequest(url, req, res, sendJson, port) {
     res.end(await readFile(join(HERE, "tools.css"), "utf8"));
     return true;
   }
+  // every item (public), so a shared trade link can be rebuilt
+  if (url.pathname === "/api/trade-items") { sendJson(res, 200, { items: await allItems(port) }); return true; }
   if (url.pathname === "/api/item-search") {
     const q = (url.searchParams.get("q") || "").toLowerCase().trim();
     const game = url.searchParams.get("game") || "";

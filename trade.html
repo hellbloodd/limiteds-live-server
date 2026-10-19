@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:type" content="website"><meta property="og:title" content="Trade calculator · Agony Values"><meta property="og:description" content="Is this trade a win? Compare values and real Eldorado prices for MM2, Blade Ball, Adopt Me and Steal a Brainrot."><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png"><meta name="twitter:card" content="summary">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js" defer></script>
+<title>Trade calculator · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  :root { --accent:#22d3ee; --accent-2:#a78bfa; --accent-soft:#22d3ee22; --glow:#22d3ee55; }
+  .sides { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  @media (max-width:820px) { .sides { grid-template-columns:1fr; } }
+  .side { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:14px; }
+  .side h2 { font:700 15px "Unbounded", sans-serif; margin:0 0 10px; display:flex; justify-content:space-between; align-items:baseline; }
+  .side h2 small { font:600 12px Manrope, sans-serif; color:var(--muted); }
+  .picker { position:relative; }
+  .picker input { width:100%; box-sizing:border-box; }
+  .slot { display:grid; grid-template-columns:40px 1fr auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--border); }
+  .slot img { width:40px; height:40px; object-fit:contain; border-radius:8px; background:var(--surface-2); }
+  .slot .nm { font-weight:800; font-size:13px; }
+  .slot .sub { font-size:11px; color:var(--muted); }
+  .slot .ctl { display:flex; gap:6px; align-items:center; }
+  .slot input[type=number] { width:52px; padding:5px 6px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); font:inherit; }
+  .slot select { padding:5px 6px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); font:inherit; font-size:12px; }
+  .x { border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:16px; }
+  .tot { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+  .tot div span { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .tot b { font:700 17px "JetBrains Mono", monospace; }
+  .verdict { margin:16px 0; padding:16px; border-radius:16px; border:1px solid var(--border); background:var(--surface); text-align:center; }
+  .verdict .big { font:700 28px "Unbounded", sans-serif; letter-spacing:.02em; }
+  .verdict.win { border-color:#22c55e66; background:linear-gradient(160deg,#22c55e18,var(--surface)); } .verdict.win .big { color:#22c55e; }
+  .verdict.loss { border-color:#ef444466; background:linear-gradient(160deg,#ef444418,var(--surface)); } .verdict.loss .big { color:#ef4444; }
+  .verdict.fair .big { color:var(--accent); }
+  .verdict p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+  .row-btns { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:10px; }
+  .warn { font-size:12px; color:#f5b400; margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab active" href="/trade">⚖️ Trade</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+  </nav>
+  <section class="hero">
+    <div>
+      <h1>Trade calculator</h1>
+      <p class="dim">Add what you give and what you get. You'll see both sides' value and what they'd cost on Eldorado right now — and whether the trade is a win.</p>
+    </div>
+  </section>
+
+  <div class="sides">
+    <div class="side" id="give"><h2>You give <small id="give-n"></small></h2>
+      <div class="picker"><input type="search" placeholder="Add an item…" autocomplete="off"><div class="suggest" hidden></div></div>
+      <div class="slots"></div><div class="tot"></div></div>
+    <div class="side" id="get"><h2>You get <small id="get-n"></small></h2>
+      <div class="picker"><input type="search" placeholder="Add an item…" autocomplete="off"><div class="suggest" hidden></div></div>
+      <div class="slots"></div><div class="tot"></div></div>
+  </div>
+
+  <div class="verdict" id="verdict"><div class="big">Add items</div><p>Pick items on both sides to compare.</p></div>
+</div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = (n) => (n == null ? "—" : "$" + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
+const num = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+const AM_LABEL = { none: "No Potion", f: "Fly", r: "Ride", fr: "Fly Ride", n: "Neon", nf: "Neon Fly", nr: "Neon Ride", nfr: "Neon Fly Ride", m: "Mega", mf: "Mega Fly", mr: "Mega Ride", mfr: "Mega Fly Ride" };
+const state = { give: [], get: [] }; // [{ item, qty, code }]
+
+// value and price of one line (Adopt Me: the chosen version)
+function lineValue(l) { const v = l.code && l.item.vals ? l.item.vals[l.code] : l.item.value; return (v || 0) * l.qty; }
+function linePrice(l) { const p = l.code && l.item.vprices ? l.item.vprices[l.code] : l.item.usd; return p > 0 ? p * l.qty : null; }
+
+function sideTotals(side) {
+  const lines = state[side];
+  const value = lines.reduce((n, l) => n + lineValue(l), 0);
+  const priced = lines.filter((l) => linePrice(l) != null);
+  const price = priced.reduce((n, l) => n + linePrice(l), 0);
+  return { value, price, unpriced: lines.length - priced.length, unvalued: lines.filter((l) => !lineValue(l)).length, games: new Set(lines.map((l) => l.item.game)) };
+}
+
+function renderSide(side) {
+  const box = document.getElementById(side);
+  $(".slots", box).innerHTML = state[side].map((l, n) => {
+    const it = l.item;
+    const versions = it.vals ? Object.keys(AM_LABEL).filter((c) => it.vals[c] > 0) : [];
+    return `<div class="slot"><img src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <div style="min-width:0"><div class="nm">${esc(it.name)}</div><div class="sub">${esc(it.game)} · value ${num(lineValue(l))} · ${linePrice(l) != null ? money(linePrice(l)) : "not on Eldorado"}</div></div>
+      <div class="ctl">${versions.length ? `<select data-n="${n}" data-f="code">${versions.map((c) => `<option value="${c}"${c === l.code ? " selected" : ""}>${AM_LABEL[c]}</option>`).join("")}</select>` : ""}
+        <input type="number" min="1" step="1" value="${l.qty}" data-n="${n}" data-f="qty" aria-label="Quantity">
+        <button class="x" data-n="${n}" title="Remove" type="button">✕</button></div></div>`;
+  }).join("") || `<div class="sub" style="padding:10px 0;color:var(--muted)">Nothing yet.</div>`;
+  const t = sideTotals(side);
+  $(".tot", box).innerHTML = `<div><span>Value</span><b>${num(t.value)}</b></div><div><span>On Eldorado</span><b>${money(t.price)}</b>${t.unpriced ? `<div class="sub">${t.unpriced} item${t.unpriced > 1 ? "s" : ""} not listed</div>` : ""}</div>`;
+  document.getElementById(`${side}-n`).textContent = state[side].length ? `${state[side].reduce((n, l) => n + l.qty, 0)} item(s)` : "";
+}
+
+function render() {
+  renderSide("give"); renderSide("get");
+  const g = sideTotals("give"), r = sideTotals("get");
+  const v = $("#verdict");
+  if (!state.give.length || !state.get.length) { v.className = "verdict"; v.innerHTML = `<div class="big">Add items</div><p>Pick items on both sides to compare.</p>`; save(); return; }
+  // Values only compare within one game (each game's values use a different scale); $ always compares.
+  const games = new Set([...g.games, ...r.games]);
+  const useValue = games.size === 1 && g.value > 0 && r.value > 0;
+  const a = useValue ? g.value : g.price, b = useValue ? r.value : r.price;
+  const diff = a ? (b - a) / a * 100 : 0;
+  const cls = Math.abs(diff) < 5 ? "fair" : diff > 0 ? "win" : "loss";
+  const word = { fair: "FAIR", win: "WIN", loss: "LOSS" }[cls];
+  const priceDiff = r.price - g.price;
+  v.className = `verdict ${cls}`;
+  v.innerHTML = `<div class="big">${word} ${cls === "fair" ? "" : `${diff > 0 ? "+" : ""}${diff.toFixed(0)}%`}</div>
+    <p>${useValue ? `By value: you give <b>${num(g.value)}</b>, you get <b>${num(r.value)}</b>.` : "Different games use different value scales, so this compares Eldorado prices."}
+    In money you ${priceDiff >= 0 ? "gain" : "lose"} <b>${money(Math.abs(priceDiff))}</b> (${money(g.price)} → ${money(r.price)}).</p>
+    ${g.unvalued + r.unvalued ? `<div class="warn">⚠️ ${g.unvalued + r.unvalued} item(s) have no value yet — they count as 0 by value.</div>` : ""}
+    ${useValue && Math.sign(diff) !== Math.sign(priceDiff) && Math.abs(priceDiff) > 0.5 ? `<div class="warn">⚠️ Value and money disagree — values say ${diff > 0 ? "win" : "loss"}, Eldorado prices say ${priceDiff > 0 ? "gain" : "loss"}.</div>` : ""}
+    <div class="row-btns"><button class="btn ghost" id="share" type="button">🔗 Copy link to this trade</button><button class="btn ghost" id="clear" type="button">Clear</button></div>`;
+  $("#share").onclick = async () => { try { await navigator.clipboard.writeText(location.href); $("#share").textContent = "Link copied ✓"; } catch { prompt("Copy this link:", location.href); } };
+  $("#clear").onclick = () => { state.give = []; state.get = []; render(); };
+  save();
+}
+
+// the trade lives in the link: ?give=game~key~qty~code,…&get=…
+function save() {
+  const enc = (lines) => lines.map((l) => [l.item.game, l.item.key, l.qty, l.code || ""].map(encodeURIComponent).join("~")).join(",");
+  const q = new URLSearchParams();
+  if (state.give.length) q.set("give", enc(state.give));
+  if (state.get.length) q.set("get", enc(state.get));
+  history.replaceState(null, "", q.toString() ? `/trade?${q}` : "/trade");
+}
+async function restore() {
+  const q = new URLSearchParams(location.search);
+  if (!q.get("give") && !q.get("get")) return;
+  const all = await fetch("/api/trade-items").then((r) => r.json()).catch(() => ({ items: [] }));
+  const find = (game, key) => all.items.find((i) => i.game === game && String(i.key) === key);
+  for (const side of ["give", "get"]) {
+    for (const part of (q.get(side) || "").split(",").filter(Boolean)) {
+      const [game, key, qty, code] = part.split("~").map(decodeURIComponent);
+      const item = find(game, key);
+      if (item) state[side].push({ item, qty: Math.max(1, Number(qty) || 1), code: code || (item.vals ? "fr" : "") });
+    }
+  }
+}
+
+for (const side of ["give", "get"]) {
+  const box = document.getElementById(side), input = $(".picker input", box), list = $(".suggest", box);
+  let timer;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { list.hidden = true; return; }
+    timer = setTimeout(async () => {
+      const { items } = await fetch(`/api/item-search?q=${encodeURIComponent(q)}`).then((r) => r.json()).catch(() => ({ items: [] }));
+      list.innerHTML = items.map((i, n) => `<div data-n="${n}"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(i.name)} <span class="dim">· ${esc(i.game)}${i.usd ? ` · ${money(i.usd)}` : ""}</span></span></div>`).join("") || `<div class="dim">No match</div>`;
+      list.hidden = false;
+      list.onclick = (e) => {
+        const d = e.target.closest("[data-n]"); if (!d) return;
+        const item = items[d.dataset.n];
+        state[side].push({ item, qty: 1, code: item.vals ? "fr" : "" });
+        input.value = ""; list.hidden = true; render(); input.focus();
+      };
+    }, 150);
+  });
+  box.addEventListener("change", (e) => {
+    const n = e.target.dataset.n; if (n == null) return;
+    if (e.target.dataset.f === "qty") state[side][n].qty = Math.max(1, Number(e.target.value) || 1);
+    if (e.target.dataset.f === "code") state[side][n].code = e.target.value;
+    render();
+  });
+  box.addEventListener("click", (e) => { const b = e.target.closest(".x"); if (b) { state[side].splice(Number(b.dataset.n), 1); render(); } });
+}
+restore().then(render);
+</script>
+</body>
+</html>
