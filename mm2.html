@@ -244,6 +244,13 @@
     svg.spark polyline, svg.chart .line { stroke-dasharray:none; stroke-dashoffset:0; }
     svg.chart .area { opacity:1; }
   }
+  .depth { margin:14px 0 4px; padding:12px 14px; border-radius:14px; background:rgba(255,255,255,.03); border:1px solid var(--border); }
+  .depth-h { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:13px; margin-bottom:8px; }
+  .depth-row { display:grid; grid-template-columns:minmax(90px, auto) 1fr minmax(64px, auto); gap:10px; align-items:center; font-size:12px; padding:2px 0; }
+  .depth-row > span:last-child { text-align:right; }
+  .depth-bar { height:10px; border-radius:6px; background:rgba(255,255,255,.05); overflow:hidden; }
+  .depth-bar i { display:block; height:100%; border-radius:6px; background:linear-gradient(90deg, #8b5cf6, #22d3ee); box-shadow:0 0 10px rgba(139,92,246,.6); }
+  .depth-buy { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:12px; }
 </style>
 <link rel="stylesheet" href="/glass.css">
 </head>
@@ -261,9 +268,9 @@
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
     <a class="tab" href="/watch">🏷️ My Listings</a>
-    <a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
+    <a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
   <section class="hero">
     <div>
@@ -625,6 +632,32 @@ function mountChart(valuePoints, pricePoints = null, marketSeries = null) {
   draw();
 }
 
+// Market depth: how many units are listed at each price (from the last Eldorado check).
+async function loadDepth(i) {
+  const d = await fetch(`/api/depth?game=${encodeURIComponent(GAME_NAME[GAME.tab])}&key=${encodeURIComponent(i.key)}`).then((r) => r.json()).catch(() => null);
+  const el = $("depth"); if (!el || !d?.offers?.length) return;
+  const offers = d.offers; // [usd, units], cheapest first
+  // group into price steps: each distinct price, or 10 ranges when there are many
+  const distinct = [...new Set(offers.map((o) => o[0]))];
+  let rows;
+  if (distinct.length <= 12) rows = distinct.map((p) => ({ lo: p, hi: p, units: offers.filter((o) => o[0] === p).reduce((a, o) => a + o[1], 0), n: offers.filter((o) => o[0] === p).length }));
+  else {
+    const lo = offers[0][0], hi = offers.at(-1)[0], k = Math.pow(hi / lo, 1 / 10);
+    rows = Array.from({ length: 10 }, (_, b) => ({ lo: lo * k ** b, hi: lo * k ** (b + 1) }));
+    for (const r of rows) { const inR = offers.filter((o, j) => o[0] >= r.lo && (o[0] < r.hi || (r === rows.at(-1) && o[0] <= r.hi))); r.units = inR.reduce((a, o) => a + o[1], 0); r.n = inR.length; }
+    rows = rows.filter((r) => r.n);
+  }
+  const max = Math.max(...rows.map((r) => r.units));
+  let cum = 0;
+  const units = offers.reduce((a, o) => a + o[1], 0);
+  // cost of buying the cheapest 1 / 3 / 5 units
+  const costOf = (n) => { let left = n, cost = 0; for (const [p, u] of offers) { const t = Math.min(u, left); cost += t * p; left -= t; if (!left) break; } return left ? null : cost; };
+  const buys = [1, 3, 5, 10].map((n) => [n, costOf(n)]).filter(([, c]) => c != null);
+  el.innerHTML = `<div class="depth"><div class="depth-h"><b>Market depth</b><span class="dim">${fmt(units)} units in ${fmt(offers.length)} listings${d.complete ? "" : " (cheapest page)"}</span></div>
+    ${rows.map((r) => { cum += r.units; return `<div class="depth-row"><span class="tabular">${r.lo === r.hi ? usd(r.lo) : `${usd(r.lo)}–${usd(r.hi)}`}</span><div class="depth-bar"><i style="width:${Math.max(3, r.units / max * 100)}%"></i></div><span class="tabular">${fmt(r.units)}<span class="dim"> · ${fmt(cum)}</span></span></div>`; }).join("")}
+    <div class="depth-buy">${buys.map(([n, c]) => `<span>Buy ${n}: <b class="tabular">${usd(c)}</b><span class="dim"> (avg ${usd(c / n)})</span></span>`).join("")}</div></div>`;
+}
+
 $("grid").addEventListener("click", (e) => {
   const card = e.target.closest(".card"); if (!card) return;
   openItem(card.dataset.key);
@@ -646,10 +679,12 @@ async function openItem(key) {
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>
     ${i.valueText ? `<p class="dim">${/not valued/i.test(i.valueText) ? "New item — mm2values hasn't given it a value yet. Its Eldorado price is tracked already." : "This item is valued as a trade ratio, so there's no number to chart."}</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
+    <div id="depth"></div>
     <div id="hist" class="dim">Loading history…</div>
     <p class="d-actions"><a class="alert-btn" href="/alerts?${new URLSearchParams({ game: GAME_NAME[GAME.tab] || "", key: i.key, name: i.name, image: i.image || "", usd: i.usd || "" })}">🔔 Alert me when it's cheaper</a>
       <a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
   $("dlg").showModal();
+  if (i.usd) loadDepth(i);
   if (i.valueText && !i.usd) { $("hist").innerHTML = ""; return; }
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
   // Eldorado price: stored points ([day number, usd]) plus the live price now

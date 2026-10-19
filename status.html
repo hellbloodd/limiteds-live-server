@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:title" content="Status · Agony Values"><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js"></script>
+<title>Status · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  .summary { display:flex; align-items:center; gap:14px; padding:18px 20px; margin-bottom:18px; }
+  .summary .big { width:18px; height:18px; border-radius:50%; flex:none; }
+  .summary b { font:700 18px "Unbounded", sans-serif; }
+  .sec { margin:22px 0 10px; font:700 14px "Unbounded", sans-serif; }
+  .lights { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .lt { padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
+  .lt .h { display:flex; align-items:center; gap:10px; font-weight:800; }
+  .lt .h span.age { margin-left:auto; font:600 11px "JetBrains Mono", monospace; color:var(--muted); }
+  .lt .m { font-size:12px; color:var(--muted); line-height:1.45; }
+  .lt .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .lt .chips span { font-size:11px; padding:3px 8px; border-radius:999px; background:rgba(255,255,255,.05); border:1px solid rgba(140,150,255,.15); }
+  .lt .chips span.zero { color:#fbbf24; border-color:rgba(251,191,36,.4); }
+  .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .dot.g { background:#34f5a6; box-shadow:0 0 12px #34f5a6; animation:breathe 2.4s ease-in-out infinite; }
+  .dot.y { background:#fbbf24; box-shadow:0 0 12px #fbbf24; }
+  .dot.r { background:#ff5c8a; box-shadow:0 0 14px #ff5c8a; animation:breathe 1s ease-in-out infinite; }
+  .dot.n { background:#6c7398; }
+  @keyframes breathe { 50% { opacity:.45; } }
+  .log { padding:12px 16px; font:500 12px/1.7 "JetBrains Mono", monospace; color:#c7cbe6; max-height:320px; overflow:auto; }
+  .legend-s { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin-top:4px; }
+  .legend-s span { display:flex; align-items:center; gap:6px; }
+</style>
+<link rel="stylesheet" href="/glass.css">
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab active" href="/status">🟢 Status</a>
+  </nav>
+  <section class="hero"><div><h1>Status</h1><p class="dim">Is every data source working? Each light shows when that source last worked. Updates every 30 seconds.</p>
+    <div class="legend-s"><span><i class="dot g"></i>working</span><span><i class="dot y"></i>late or partly missing</span><span><i class="dot r"></i>not working</span></div></div></section>
+  <div id="out"><div class="empty">Checking…</div></div>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ms = (t) => (t ? Date.now() - (typeof t === "number" ? t : Date.parse(t)) : Infinity);
+const ago = (t) => { const s = ms(t) / 1000; if (!isFinite(s)) return "never"; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+// green if it worked within `g` ms, yellow within `y` ms, otherwise red
+const light = (t, g, y) => { const a = ms(t); return a <= g ? "g" : a <= y ? "y" : "r"; };
+const H = 3600e3, MIN = 60e3;
+const worst = (ls) => (ls.includes("r") ? "r" : ls.includes("y") ? "y" : "g");
+const card = (l, title, t, body) => `<div class="card lt"><div class="h"><i class="dot ${l}"></i>${esc(title)}<span class="age">${t === null ? "" : ago(t)}</span></div>${body || ""}</div>`;
+const GAMES = ["MM2", "Blade Ball", "Adopt Me", "Steal a Brainrot"];
+const SOURCE = { "MM2": "mm2values.com", "Blade Ball": "bbvalues.uk", "Adopt Me": "adoptmevalues.app", "Steal a Brainrot": "sabrvalues.com" };
+
+async function load() {
+  const [s, cur] = await Promise.all([
+    fetch("/api/status", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
+    fetch("/api/currency").then((r) => r.json()).catch(() => null),
+  ]);
+  if (!s) { document.getElementById("out").innerHTML = card("r", "Server", null, `<div class="m">The server didn't answer — it may be restarting (takes about a minute).</div>`); return; }
+  const all = [];
+  const add = (l) => { all.push(l); return l; };
+
+  // values sites: refreshed every ~30 min
+  const values = GAMES.map((g) => { const v = s.values?.[g] || {}; const l = add(s.running?.[g] && !v.lastOkAt ? "y" : light(v.lastOkAt, 2 * H, 12 * H));
+    return card(l, `${g} values`, v.lastOkAt || null, `<div class="m">from ${SOURCE[g]}${s.running?.[g] ? " · updating now…" : ""}${v.ok === false && v.lastOkAt ? " · last try failed, showing the previous values" : ""}</div>`); });
+
+  // Eldorado prices per game
+  const prices = GAMES.map((g) => { const p = s.prices?.[g] || {}; const l = add(light(p.okAt, 1.5 * H, 6 * H));
+    return card(l, `${g} Eldorado prices`, p.okAt || null, `<div class="m">${esc(p.message || "No price check finished yet.")}</div>`); });
+
+  // Eldorado API health
+  const e = s.eldorado || {};
+  const el = add(e.pausedFor > 0 ? "y" : e.tooMany10min > 60 ? "y" : "g");
+  const eldo = card(el, "Eldorado API", null, `<div class="m">${e.pausedFor > 0 ? `Paused ${Math.ceil(e.pausedFor / 1000)}s after "too many requests". ` : ""}${e.active ?? 0} requests running (limit ${e.limit}/${e.max}) · ${e.tooMany10min ?? 0} "slow down" replies in the last 10 min${e.waiting ? ` · waiting: ${Object.entries(e.waiting).map(([k, v]) => `${k} ${v}`).join(", ")}` : ""}</div>`);
+
+  // other marketplaces
+  const markets = Object.entries(s.markets || {}).map(([m, v]) => {
+    const counts = Object.entries(v.items || {});
+    const zeros = counts.filter(([, n]) => !n).length;
+    const l = add(light(v.updatedAt, 1.5 * H, 6 * H) === "g" && zeros > 1 && zeros === counts.length ? "y" : light(v.updatedAt, 1.5 * H, 6 * H));
+    return card(l, m, v.updatedAt || null, `<div class="chips">${counts.map(([g, n]) => `<span class="${n ? "" : "zero"}" title="${n ? "" : "no prices found for this game on " + esc(m)}">${esc(g === "Steal a Brainrot" ? "SAB" : g)} ${Number(n || 0).toLocaleString()}</span>`).join("") || `<span class="zero">no items yet</span>`}</div>`);
+  });
+
+  // currency
+  const curCards = Object.entries(cur?.prices || {}).map(([k, list]) => {
+    const newest = list.map((x) => x.at).filter(Boolean).sort().pop();
+    const l = add(list.length ? light(newest, 2 * H, 8 * H) : "r");
+    return card(l, cur.currencies?.[k] || k, newest || null, `<div class="chips">${list.map((x) => `<span>${esc(x.market)} $${Number(x.per1k).toFixed(2)}/1k</span>`).join("") || `<span class="zero">no prices</span>`}</div>`);
+  });
+
+  // sniper and PC booster
+  const sn = s.sniper || {};
+  const snl = add(light(sn.lastCheckAt, 5 * MIN, 30 * MIN));
+  const sniper = card(snl, "Sniper", sn.lastCheckAt || null, `<div class="m">${(sn.hotItems || 0).toLocaleString()} items watched · ${Math.round(sn.checksPerMin || 0)} checks/min · ${sn.parallel || 0} at once${sn.results ? ` · ${sn.results.alerts} snipes sent, ${sn.results.goneWithinHour} bought by someone within an hour` : ""}</div>`);
+  const b = sn.booster || {};
+  const bl = add(b.active ? light(b.lastSeen, 5 * MIN, 30 * MIN) : "r");
+  const booster = card(bl, "PC booster", b.lastSeen || null, `<div class="m">${b.active ? `Connected · ${(b.checks || 0).toLocaleString()} checks done` : "Not connected — the PC is off or the booster isn't running. Blade Ball values and some marketplace prices wait for it."}</div>`);
+
+  const overall = worst(all);
+  const bad = all.filter((l) => l === "r").length, late = all.filter((l) => l === "y").length;
+  document.getElementById("out").innerHTML = `<div class="card summary"><i class="dot big ${overall}"></i><div><b>${overall === "g" ? "Everything is working" : overall === "y" ? `${late} source${late === 1 ? " is" : "s are"} late` : `${bad} source${bad === 1 ? " isn't" : "s aren't"} working`}</b>
+      <div class="dim" style="font-size:12px">checked ${new Date().toLocaleTimeString()}${s.updating ? " · an update is running" : ""}</div></div></div>
+    <div class="sec">Live tools</div><div class="lights">${sniper}${booster}${eldo}</div>
+    <div class="sec">Values sites</div><div class="lights">${values.join("")}</div>
+    <div class="sec">Eldorado prices</div><div class="lights">${prices.join("")}</div>
+    <div class="sec">Other marketplaces</div><div class="lights">${markets.join("")}</div>
+    <div class="sec">Currency</div><div class="lights">${curCards.join("")}</div>
+    ${s.recentErrors?.length ? `<div class="sec">Recent log</div><div class="card log">${s.recentErrors.slice().reverse().map((l) => `<div>${esc(l)}</div>`).join("")}</div>` : ""}`;
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

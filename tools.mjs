@@ -10,6 +10,7 @@ import { GAMES, gameItems, post, SITE, fmt, valueField } from "./deals.mjs";
 import { eldoradoJson } from "./mm2-values.mjs";
 
 import { sellerTrust } from "./sellers.mjs";
+import { loadWarm, saveWarm } from "./warm-store.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OWNER_KEY = String(process.env.OWNER_KEY || "").trim();
 
@@ -43,8 +44,14 @@ async function buildAllItems(port) {
     // Adopt Me: value and cheapest price of each version (No Potion, FR, NFR, Mega...) for the trade calculator
     ...(i.vals ? { vals: i.vals, vprices: Object.fromEntries((i.variants || []).filter((v) => v.usd > 0).map((v) => [v.code, v.usd])) } : {}) }))));
   const items = lists.flat();
-  if (items.length) searchCache = { at: Date.now(), items };
+  if (items.length) { searchCache = { at: Date.now(), items }; saveWarm("items", items); }
   return searchCache.items;
+}
+
+// After a restart: start from the last saved list (marked stale, so it's rebuilt right away).
+export async function preloadItems() {
+  const items = await loadWarm("items");
+  if (items?.length && !searchCache.items.length) searchCache = { at: 0, items };
 }
 export async function allItems(port) {
   const stale = Date.now() - searchCache.at > 60 * 1000;
@@ -240,7 +247,7 @@ async function portfolio(port) {
 
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html", "/compare": "compare.html", "/status": "status.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));

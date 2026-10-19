@@ -103,6 +103,17 @@ const PRICE_HISTORY_SAVE_MS = 3 * 60 * 60 * 1000;
 const priceHistorySaved = {}; // prefix -> [ms, day]
 const lastItems = {}; // prefix -> items from the last value update (memory only)
 const lastListings = {};
+const listingsAt = {}; // prefix -> when lastListings was taken
+
+// Market depth for one item: every listing we saw in the last check, cheapest first, as [usd, units].
+// complete=false when only the cheapest page of listings was read.
+export function listingDepth(game, key) {
+  const prefix = GAME_PREFIX[game];
+  const snap = prefix == null ? null : lastListings[prefix]?.[key];
+  if (!snap?.offers) return null;
+  const offers = snap.offers.filter((o) => o[1] > 0).map((o) => [Math.round(o[1] * 100) / 100, Math.max(1, Number(o[2]) || 1)]).sort((a, b) => a[0] - b[0]);
+  return { offers, complete: !(snap.windowMax < Infinity), at: listingsAt[prefix] ? new Date(listingsAt[prefix]).toISOString() : null };
+}
 const vanished = {}; // prefix -> { itemKey: [{ id, seller, usd, at }] } waiting to be confirmed as sales // prefix -> { itemKey: { offers, windowMax } } from the previous check (memory only)
 // partial: only some items were re-checked (Flip Finder "Refresh now") - merge them into the
 // existing prices and listing snapshots instead of replacing everything.
@@ -119,6 +130,7 @@ async function savePrices(prefix, state, allPrices, { partial = false, live = fa
   const salesChanged = mergeSales(state.sales, soldNow);
   const snap = Object.fromEntries(Object.entries(allPrices).filter(([, p]) => p.offers).map(([k, p]) => [k, { offers: p.offers, windowMax: p.windowMax }]));
   lastListings[prefix] = partial ? { ...(prev || {}), ...snap } : snap;
+  listingsAt[prefix] = Date.now();
   const prices = partial ? { ...(state.eldorado?.prices || {}) } : {};
   if (partial) for (const [k, p] of Object.entries(allPrices)) if (!(p.usd > 0) && !p.variants) delete prices[k]; // nothing listed any more
   for (const [k, p] of Object.entries(allPrices)) {

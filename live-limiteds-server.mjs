@@ -6,7 +6,7 @@ import { handleMm2Request, startMm2Tracker } from "./mm2-values.mjs";
 import { handleBbRequest, startBbTracker } from "./bb-values.mjs";
 import { handleAmRequest, startAmTracker } from "./am-values.mjs";
 import { handleSabRequest, startSabTracker } from "./sab-values.mjs";
-import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus } from "./updater.mjs";
+import { requestRefresh, requestSelectedRefresh, startAutoUpdates, updaterStatus, listingDepth } from "./updater.mjs";
 import { sniperStatus, boosterWork, boosterResults, boosterTakeFull, boosterFinishFull, sampleItem, requestMarketsScan, resetSniperLists } from "./sniper.mjs";
 import { clearLibraryCache, eldoradoBudget } from "./mm2-values.mjs";
 import { isOwner, warmItems } from "./tools.mjs";
@@ -17,7 +17,7 @@ import { startRemoteMarkets, receiveMarket, remoteMarketStatus } from "./remote-
 import { startCurrency, refreshCurrency, receiveCurrency, currencyPrices } from "./currency.mjs";
 import { startAlerts, listAlerts, addAlert, removeAlert } from "./alerts.mjs";
 import { startMarketHistory, marketHistory } from "./market-history.mjs";
-import { startSeasons, seasonsReport } from "./seasons.mjs";
+import { startSeasons, seasonsReport, preloadSeasons } from "./seasons.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -31,9 +31,9 @@ for (const level of ["error", "warn"]) {
   };
 }
 import { sendTestAlert } from "./deals.mjs";
-import { handleFlipsRequest, warmFlips } from "./flips.mjs";
-import { handleToolsRequest } from "./tools.mjs";
-import { dashboard, warmDashboard } from "./dashboard.mjs";
+import { handleFlipsRequest, warmFlips, preloadFlips } from "./flips.mjs";
+import { handleToolsRequest, preloadItems } from "./tools.mjs";
+import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -140,6 +140,7 @@ const server = http.createServer(async (req, res) => {
       const items = (await (await fetch(`http://127.0.0.1:${PORT}/api/mm2`)).json().catch(() => ({ items: [] }))).items || [];
       return sendJson(res, 200, seasonsReport(items));
     }
+    if (parsedUrl.pathname === "/api/depth") return sendJson(res, 200, listingDepth(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") || { offers: [] });
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)
@@ -201,7 +202,10 @@ const server = http.createServer(async (req, res) => {
 
 async function startServer() {
   console.log("Waiting for Render network to be ready...");
+  // meanwhile, load the last saved snapshots so the first visitors don't wait for rebuilds
+  const preload = Promise.allSettled([preloadItems(), preloadFlips(), preloadDashboard(), preloadSeasons()]);
   await new Promise(resolve => setTimeout(resolve, 5000));
+  await Promise.race([preload, new Promise((resolve) => setTimeout(resolve, 10000))]);
   server.listen(PORT, () => console.log(`Agony Values server ${SERVER_VERSION} running on http://localhost:${PORT}`));
 }
 

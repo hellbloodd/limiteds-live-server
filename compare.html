@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:title" content="Compare · Agony Values"><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js"></script>
+<title>Compare · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  .picker { position:relative; max-width:520px; margin:6px 0 16px; }
+  .picker input { width:100%; padding:12px 14px; font-size:15px; }
+  .sugg { position:absolute; left:0; right:0; top:calc(100% + 6px); z-index:20; border-radius:14px; overflow:hidden; background:rgba(12,14,36,.96); border:1px solid rgba(139,92,246,.4); box-shadow:0 20px 60px -20px #000, 0 0 40px -16px rgba(139,92,246,.7); }
+  .sugg button { display:flex; width:100%; gap:10px; align-items:center; padding:8px 12px; border:0; background:none; color:var(--text); text-align:left; cursor:pointer; font:inherit; }
+  .sugg button:hover, .sugg button.hl { background:rgba(139,92,246,.18); }
+  .sugg img { width:30px; height:30px; object-fit:contain; border-radius:8px; background:rgba(255,255,255,.05); }
+  .sugg .g { font-size:11px; color:var(--muted); } .sugg .p { margin-left:auto; font:700 12px "JetBrains Mono", monospace; }
+  .picks { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; margin-bottom:16px; }
+  .pick { padding:14px; position:relative; border-top:3px solid var(--c) !important; }
+  .pick .t { display:flex; gap:10px; align-items:center; min-width:0; color:inherit; text-decoration:none; }
+  .pick img { width:46px; height:46px; object-fit:contain; border-radius:10px; background:rgba(255,255,255,.05); flex:none; }
+  .pick .n { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pick .g { font-size:11px; color:var(--muted); }
+  .pick .x { position:absolute; top:8px; right:8px; border:0; background:none; color:var(--muted); font-size:18px; cursor:pointer; }
+  .dotc { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--c); box-shadow:0 0 8px var(--c); margin-right:6px; }
+  .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0 10px; }
+  .ctl button { font:600 12px "Manrope", sans-serif; padding:6px 12px; border-radius:999px; background:rgba(20,22,50,.5); border:1px solid rgba(140,150,255,.2); color:var(--muted); cursor:pointer; }
+  .ctl button.on { color:#fff; border-color:rgba(139,92,246,.75); background:linear-gradient(135deg, rgba(139,92,246,.5), rgba(59,130,246,.25)); box-shadow:0 0 14px -4px rgba(139,92,246,.8); }
+  .chartbox { padding:16px; margin-bottom:16px; position:relative; }
+  .chartbox svg { width:100%; height:300px; display:block; overflow:visible; }
+  .chartbox .ax { fill:#6c7398; font:500 10px "JetBrains Mono", monospace; }
+  .chartbox .tip { position:absolute; pointer-events:none; padding:8px 10px; border-radius:12px; font-size:12px; background:rgba(10,12,32,.9); border:1px solid rgba(139,92,246,.45); opacity:0; white-space:nowrap; z-index:2; }
+  .cmp { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
+  .cmp th, .cmp td { padding:9px 12px; text-align:right; border-bottom:1px solid rgba(140,150,255,.1); white-space:nowrap; }
+  .cmp th:first-child, .cmp td:first-child { text-align:left; color:var(--muted); font-weight:600; }
+  .cmp thead th { color:#fff; font-weight:800; }
+  .cmp td.best { color:#34f5a6; text-shadow:0 0 10px rgba(52,245,166,.4); font-weight:800; }
+  .tblwrap { overflow-x:auto; padding:6px 4px; }
+  @media (max-width:600px) { .chartbox svg { height:220px; } }
+</style>
+<link rel="stylesheet" href="/glass.css">
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab active" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+  </nav>
+  <section class="hero"><div><h1>Compare</h1><p class="dim">Pick up to 4 items (any game) and see their value, price and history side by side.</p></div></section>
+  <div class="picker"><input id="q" placeholder="Add an item — type a name…" autocomplete="off"><div class="sugg" id="sugg" hidden></div></div>
+  <div class="picks" id="picks"></div>
+  <div id="main"></div>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const $m = (n) => n == null ? "—" : "$" + Number(n).toFixed(n >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const num = (n) => n == null ? "—" : Number(n).toLocaleString();
+const COLORS = ["#8b5cf6", "#22d3ee", "#e879f9", "#34f5a6"];
+const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme", "Steal a Brainrot": "/stealabrainrot" };
+const API = { "MM2": "/api/mm2", "Blade Ball": "/api/bladeball", "Adopt Me": "/api/adoptme", "Steal a Brainrot": "/api/stealabrainrot" };
+let picks = new URLSearchParams(location.search).getAll("i").slice(0, 4); // "game|key"
+const data = {}; // id -> { item, value: [[ms, v]], price: [[ms, usd]] }
+let mode = "price", days = 30;
+
+const save = () => history.replaceState(null, "", picks.length ? "?" + picks.map((p) => "i=" + encodeURIComponent(p)).join("&") : location.pathname);
+
+// ---------- picker ----------
+const q = document.getElementById("q"), sugg = document.getElementById("sugg");
+let timer, found = [], hl = 0;
+q.addEventListener("input", () => {
+  clearTimeout(timer);
+  const t = q.value.trim();
+  if (t.length < 2) { sugg.hidden = true; return; }
+  timer = setTimeout(async () => {
+    found = (await fetch(`/api/item-search?q=${encodeURIComponent(t)}`).then((r) => r.json()).catch(() => ({ items: [] }))).items || [];
+    hl = 0; drawSugg();
+  }, 120);
+});
+function drawSugg() {
+  sugg.hidden = false;
+  sugg.innerHTML = found.length ? found.map((i, n) => `<button type="button" data-n="${n}" class="${n === hl ? "hl" : ""}"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><div><div>${esc(i.name)}</div><div class="g">${esc(i.game)}</div></div><span class="p">${i.usd ? $m(i.usd) : ""}</span></button>`).join("") : `<div style="padding:10px 12px" class="dim">No match</div>`;
+}
+q.addEventListener("keydown", (e) => {
+  if (sugg.hidden || !found.length) return;
+  if (e.key === "ArrowDown") { hl = (hl + 1) % found.length; drawSugg(); e.preventDefault(); }
+  if (e.key === "ArrowUp") { hl = (hl - 1 + found.length) % found.length; drawSugg(); e.preventDefault(); }
+  if (e.key === "Enter") { add(found[hl]); e.preventDefault(); }
+  if (e.key === "Escape") sugg.hidden = true;
+});
+sugg.addEventListener("click", (e) => { const b = e.target.closest("button[data-n]"); if (b) add(found[+b.dataset.n]); });
+document.addEventListener("click", (e) => { if (!e.target.closest(".picker")) sugg.hidden = true; });
+function add(i) {
+  const id = `${i.game}|${i.key}`;
+  if (!picks.includes(id)) { if (picks.length >= 4) picks.shift(); picks.push(id); }
+  q.value = ""; sugg.hidden = true; save(); load();
+}
+document.getElementById("picks").addEventListener("click", (e) => {
+  const b = e.target.closest(".x"); if (!b) return;
+  e.preventDefault();
+  picks = picks.filter((p) => p !== b.dataset.id); save(); load();
+});
+
+// ---------- data ----------
+async function load() {
+  if (!picks.length) { document.getElementById("picks").innerHTML = ""; document.getElementById("main").innerHTML = `<div class="empty">Search above to add items — e.g. two godlies you're choosing between.</div>`; return; }
+  const now = (await fetch("/api/trade-items?" + picks.map((p) => "id=" + encodeURIComponent(p)).join("&")).then((r) => r.json()).catch(() => ({ items: [] }))).items || [];
+  const byId = new Map(now.map((i) => [`${i.game}|${i.key}`, i]));
+  await Promise.all(picks.map(async (id) => {
+    if (data[id]) { data[id].item = byId.get(id) || data[id].item; return; }
+    const [game, ...rest] = id.split("|"); const key = rest.join("|");
+    const h = API[game] ? await fetch(`${API[game]}/history?key=${encodeURIComponent(key)}`).then((r) => r.json()).catch(() => ({})) : {};
+    const item = byId.get(id) || { game, key, name: key };
+    const price = (h.pricePoints || []).map(([d, v]) => [d * 864e5, v]);
+    if (item.usd) price.push([Date.now(), item.usd]);
+    data[id] = { item, value: h.points || [], price };
+  }));
+  draw();
+}
+
+function draw() {
+  const rows = picks.map((id, n) => ({ id, c: COLORS[n], ...data[id] })).filter((r) => r.item);
+  document.getElementById("picks").innerHTML = rows.map((r) => `<div class="card pick" style="--c:${r.c}"><button class="x" data-id="${esc(r.id)}" title="Remove">×</button>
+    <a class="t" href="${PAGE[r.item.game]}?item=${encodeURIComponent(r.item.key)}"><img src="${esc(r.item.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+    <div style="min-width:0"><div class="n"><span class="dotc"></span>${esc(r.item.name)}</div><div class="g">${esc(r.item.game)}</div></div></a></div>`).join("");
+  const best = (vals, high) => { const v = vals.filter((x) => x != null); if (v.length < 2) return null; return high ? Math.max(...v) : Math.min(...v); };
+  const vpd = (i) => i.value > 0 && i.usd > 0 && !i.valueText ? i.value / i.usd : null;
+  const metrics = [
+    ["Value", (i) => (i.valueText ? null : i.value), num, true],
+    ["Cheapest price", (i) => i.usd || null, $m, false],
+    ["Next listing", (i) => i.second || null, $m, null],
+    ["Value per $", vpd, (v) => (v == null ? "—" : v >= 100 ? Math.round(v).toLocaleString() : v.toPrecision(3)), true],
+    ["Price 7d", (i) => i.change7d ?? null, (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`), false],
+    ["Sold last 7d", (i) => i.sold7d ?? null, num, true],
+    ["Typical sale", (i) => i.soldPrice || null, $m, null],
+  ];
+  const table = `<div class="card tblwrap"><table class="cmp"><thead><tr><th></th>${rows.map((r) => `<th><span class="dotc" style="--c:${r.c}"></span>${esc(r.item.name)}</th>`).join("")}</tr></thead><tbody>
+    ${metrics.map(([label, get, f, high]) => { const vals = rows.map((r) => get(r.item)); const b = high == null ? null : best(vals, high);
+      return `<tr><td>${label}</td>${vals.map((v) => `<td class="tabular${b != null && v === b ? " best" : ""}">${f(v)}</td>`).join("")}</tr>`; }).join("")}
+    <tr><td>Buy</td>${rows.map((r) => `<td>${r.item.url ? `<a href="${esc(r.item.url)}" target="_blank" rel="noopener">Eldorado ↗</a>` : "—"}</td>`).join("")}</tr></tbody></table></div>`;
+  const ctl = `<div class="ctl">${[["price", "Price %"], ["value", "Value %"], ["usd", "Price $"]].map(([k, l]) => `<button data-mode="${k}" class="${mode === k ? "on" : ""}">${l}</button>`).join("")}
+    <span style="width:12px"></span>${[[7, "7d"], [30, "30d"], [90, "90d"], [365, "1y"]].map(([n, l]) => `<button data-days="${n}" class="${days === n ? "on" : ""}">${l}</button>`).join("")}</div>`;
+  document.getElementById("main").innerHTML = `${ctl}<div class="card chartbox"><svg viewBox="0 0 640 300" preserveAspectRatio="none"></svg><div class="tip" id="tip"></div></div>${table}
+    <p class="dim" style="font-size:12px">Price % and Value % show each item's change from the start of the range, so cheap and expensive items fit on one chart. Green = best in the row.</p>`;
+  document.querySelector(".ctl").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; if (b.dataset.mode) mode = b.dataset.mode; if (b.dataset.days) days = +b.dataset.days; draw(); };
+  chart(rows);
+}
+
+function chart(rows) {
+  const W = 640, H = 300, L = 56, R = 10, T = 12, B = 26;
+  const svg = document.querySelector(".chartbox svg"), tip = document.getElementById("tip");
+  const from = Date.now() - days * 864e5;
+  const series = rows.map((r) => {
+    const src = mode === "value" ? r.value : r.price;
+    const inR = src.filter((p) => p[0] >= from);
+    const before = src.filter((p) => p[0] < from).pop();
+    const pts = before ? [[from, before[1]], ...inR] : [...inR];
+    if (pts.length && pts.at(-1)[0] < Date.now() - 36e5) pts.push([Date.now(), pts.at(-1)[1]]);
+    const base = pts[0]?.[1];
+    return { ...r, pts: mode === "usd" ? pts : pts.map(([t, v]) => [t, base ? (v / base - 1) * 100 : 0]) };
+  }).filter((s) => s.pts.length > 1);
+  if (!series.length) { svg.innerHTML = `<text x="320" y="150" text-anchor="middle" class="ax" style="font-size:13px">No ${mode === "value" ? "value" : "price"} history in this range yet</text>`; return; }
+  const t0 = Math.min(...series.map((s) => s.pts[0][0])), t1 = Date.now();
+  const all = series.flatMap((s) => s.pts.map((p) => p[1]));
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (mode !== "usd") { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const pad = (hi - lo) * 0.12 || 1; lo -= pad; hi += pad; if (mode === "usd") lo = Math.max(0, lo);
+  const x = (t) => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R), y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  const fmtY = (v) => (mode === "usd" ? $m(v) : `${v > 0 ? "+" : ""}${Math.abs(hi - lo) < 10 ? v.toFixed(1) : Math.round(v)}%`);
+  let grid = "";
+  for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4; grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(140,150,255,.1)"/><text class="ax" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${fmtY(v)}</text>`; }
+  const date = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  grid += `<text class="ax" x="${L}" y="${H - 6}">${date(t0)}</text><text class="ax" x="${W - R}" y="${H - 6}" text-anchor="end">Today</text>`;
+  if (mode !== "usd") grid += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"/>`;
+  // step lines: a price holds until it changes
+  const path = (pts) => pts.map((p, i) => (i ? `H${x(p[0]).toFixed(1)}V${y(p[1]).toFixed(1)}` : `M${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`)).join("");
+  svg.innerHTML = grid + series.map((s) => `<path d="${path(s.pts)}" fill="none" stroke="${s.c}" stroke-width="2.2" stroke-linejoin="round" style="filter:drop-shadow(0 0 5px ${s.c})"/>`).join("") + `<line id="vl" y1="${T}" y2="${H - B}" stroke="rgba(255,255,255,.3)" stroke-dasharray="3 4" visibility="hidden"/>`;
+  const vl = svg.querySelector("#vl");
+  svg.onpointermove = (e) => {
+    const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) / r.width * W, t = t0 + Math.min(1, Math.max(0, (px - L) / (W - L - R))) * (t1 - t0);
+    vl.setAttribute("x1", x(t)); vl.setAttribute("x2", x(t)); vl.setAttribute("visibility", "visible");
+    tip.innerHTML = `<div class="dim" style="margin-bottom:4px">${date(t)}</div>` + series.map((s) => { const p = s.pts.filter((qq) => qq[0] <= t).pop() || s.pts[0]; return `<div><span class="dotc" style="--c:${s.c}"></span>${esc(s.item.name)} <b>${fmtY(p[1])}</b></div>`; }).join("");
+    tip.style.opacity = 1;
+    const tx = x(t) / W * r.width; tip.style.left = `${tx > r.width * 0.6 ? tx - tip.offsetWidth - 12 : tx + 12}px`; tip.style.top = "12px";
+  };
+  svg.onpointerleave = () => { tip.style.opacity = 0; vl.setAttribute("visibility", "hidden"); };
+}
+load();
+</script>
+</body>
+</html>

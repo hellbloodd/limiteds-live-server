@@ -2,6 +2,7 @@
 // Halloween / Xmas" views), refreshed every 6 hours, plus their value and price trends so you can
 // time buying before an event and selling during it.
 import { curlGet } from "./mm2-values.mjs";
+import { loadWarm, saveWarm } from "./warm-store.mjs";
 
 const PAGES = ["ancient", "godly", "chroma", "unique", "vintage", "legend", "rare", "uncommon", "common"];
 const EVENTS = { Halloween: { disp: "hallow", month: 9, day: 31 }, Christmas: { disp: "xmas", month: 11, day: 25 } };
@@ -21,7 +22,10 @@ async function refreshTags() {
     }
     if (set.size) names[event] = set;
   }
-  if (Object.keys(names).length) tags = { at: Date.now(), names };
+  if (Object.keys(names).length) {
+    tags = { at: Date.now(), names };
+    saveWarm("seasons", { at: tags.at, names: Object.fromEntries(Object.entries(names).map(([k, v]) => [k, [...v]])) }, 0);
+  }
 }
 
 const nextDate = ({ month, day }) => {
@@ -47,6 +51,11 @@ export function seasonsReport(items) {
       avg: { v7: avg("v7"), v30: avg("v30"), v1y: avg("v1y"), p7: avg("p7"), p30: avg("p30") }, items: list });
   }
   return { updatedAt: tags.at ? new Date(tags.at).toISOString() : null, events: events.sort((a, b) => a.daysAway - b.daysAway) };
+}
+
+export async function preloadSeasons() {
+  const d = await loadWarm("seasons", 7 * 864e5);
+  if (d?.names && !tags.at) tags = { at: d.at, names: Object.fromEntries(Object.entries(d.names).map(([k, v]) => [k, new Set(v)])) };
 }
 
 export function startSeasons() {

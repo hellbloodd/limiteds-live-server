@@ -2,6 +2,7 @@
 // cheapest real listing (buy) and the next one up (what a relist would undercut). The page does the
 // profit maths with the user's own seller fee.
 import { readFile } from "node:fs/promises";
+import { loadWarm, saveWarm } from "./warm-store.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { sellerTrust, warmSellers } from "./sellers.mjs";
@@ -19,7 +20,11 @@ const CACHE_MS = 60 * 1000;
 let cache = { at: 0, body: null };
 let rebuilding = null;
 // keep it warm so the Flip Finder and the home page never wait
-export function warmFlips(port) { setInterval(() => { if (!rebuilding) rebuilding = collect(port).then((body) => { cache = { at: Date.now(), body }; }).catch(() => {}).finally(() => { rebuilding = null; }); }, 60 * 1000).unref(); }
+export async function preloadFlips() {
+  const body = await loadWarm("flips");
+  if (body && !cache.body) cache = { at: 0, body };
+}
+export function warmFlips(port) { setInterval(() => { if (!rebuilding) rebuilding = collect(port).then((body) => { cache = { at: Date.now(), body }; saveWarm("flips", body); }).catch(() => {}).finally(() => { rebuilding = null; }); }, 60 * 1000).unref(); }
 
 async function collect(port) {
   const rows = [];
@@ -98,8 +103,8 @@ export async function handleFlipsRequest(url, res, sendJson, port) {
     // ?fresh=1 (used while "Refresh now" waits for new prices) skips the 1-minute cache
     // building takes ~10 s, so answer from the last build and rebuild in the background when it's
     // over a minute old; only "fresh" (Refresh now waiting for new prices) or the very first call waits
-    if (!cache.body || url.searchParams.has("fresh")) cache = { at: Date.now(), body: await collect(port) };
-    else if (Date.now() - cache.at > CACHE_MS && !rebuilding) rebuilding = collect(port).then((body) => { cache = { at: Date.now(), body }; }).catch(() => {}).finally(() => { rebuilding = null; });
+    if (!cache.body || url.searchParams.has("fresh")) { cache = { at: Date.now(), body: await collect(port) }; saveWarm("flips", cache.body); }
+    else if (Date.now() - cache.at > CACHE_MS && !rebuilding) rebuilding = collect(port).then((body) => { cache = { at: Date.now(), body }; saveWarm("flips", body); }).catch(() => {}).finally(() => { rebuilding = null; });
     sendJson(res, 200, filterRows(cache.body, url.searchParams));
     return true;
   }

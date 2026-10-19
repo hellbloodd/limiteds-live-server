@@ -5,6 +5,7 @@ import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
 import { sbMarketData } from "./sab-values.mjs";
 import { allItems } from "./tools.mjs";
+import { loadWarm, saveWarm } from "./warm-store.mjs";
 
 const DATA = { "MM2": mm2MarketData, "Blade Ball": bbMarketData, "Adopt Me": amMarketData, "Steal a Brainrot": sbMarketData };
 const DAYS = 30;
@@ -49,13 +50,18 @@ async function build(port) {
 }
 
 let building = null;
-const rebuild = (port) => (building ||= build(port).then((data) => { cache = { t: Date.now(), data }; return data; }).finally(() => { building = null; }));
+const rebuild = (port) => (building ||= build(port).then((data) => { cache = { t: Date.now(), data }; saveWarm("dashboard", data); return data; }).finally(() => { building = null; }));
 
 // Stale-while-revalidate: answer from the last build and refresh it in the background.
 export async function dashboard(port) {
   if (!cache) return rebuild(port);
   if (Date.now() - cache.t > 10 * 60 * 1000) rebuild(port).catch(() => {});
   return cache.data;
+}
+
+export async function preloadDashboard() {
+  const data = await loadWarm("dashboard");
+  if (data && !cache) cache = { t: 0, data };
 }
 
 export function warmDashboard(port) {
