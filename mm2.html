@@ -339,7 +339,7 @@ const row = (label, html) => (html ? `<dt>${label}</dt><dd>${html}</dd>` : "");
 let period = "7d";
 let medianVpd = 0;
 const usd = (n) => "$" + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
-const fmtVpd = (n) => n >= 100 ? Math.round(n).toLocaleString() : n >= 1 ? n.toFixed(1) : Number(n.toPrecision(2)).toString();
+const fmtVpd = (n) => !(n > 0) ? "—" : n >= 100 ? Math.round(n).toLocaleString() : n >= 1 ? n.toFixed(1) : Number(n.toPrecision(2)).toString();
 // Green = more value per dollar than the typical weapon, red = less.
 const vpdClass = (n) => !medianVpd ? "" : n >= medianVpd * 1.25 ? "up" : n <= medianVpd * 0.75 ? "down" : "flat";
 const PERIOD_LABEL = { "24h": "24h", "7d": "7 days", "30d": "30 days", "1y": "1 year", all: "all time" };
@@ -466,11 +466,11 @@ function render() {
       <div class="c-mid">
         <div>
           <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
-          <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">Trade value</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
+          <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">${/not valued/i.test(i.valueText) ? "Price tracked, value coming" : "Trade value"}</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
         </div>
         ${spark(i.spark)}
       </div>
-      ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b><span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
+      ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b>${i.valuePerUsd > 0 ? `<span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>` : ""}${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
     </div>`).join("") : `<div class="empty">Nothing matches.</div>`;
 }
 
