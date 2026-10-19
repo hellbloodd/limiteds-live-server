@@ -93,6 +93,8 @@
   svg.chart text { fill:var(--muted); font:11px "JetBrains Mono", monospace; }
   .chart-foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
   .range-row { display:flex; gap:6px; margin-bottom:8px; }
+  .d-actions { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
+  .alert-btn { display:inline-block; padding:8px 14px; border-radius:999px; background:var(--accent); color:#120c22; font-weight:800; font-size:13px; text-decoration:none; }
   .kind-row { display:flex; gap:6px; margin:4px 0 8px; }
   .kind { font:800 12px Manrope, sans-serif; padding:6px 12px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; }
   .kind.on { color:var(--text); border-color:var(--accent); background:var(--accent-soft); }
@@ -254,7 +256,7 @@
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a>
+    <a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
     <a class="tab" href="/watch">🏷️ My Listings</a>
     <a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a>
   </nav>
@@ -335,6 +337,7 @@ function priceVsRow(i) {
   }).join("");
   return `<dt>Eldorado price vs.</dt><dd class="tabular pvs">${cells}${Object.keys(i.priceChanges || {}).length ? "" : `<span class="dim pv-note">Tracked from now on — 7d fills in after a week.</span>`}</dd>`;
 }
+const GAME_NAME = { mm2: "MM2", bladeball: "Blade Ball", adoptme: "Adopt Me", stealabrainrot: "Steal a Brainrot" };
 const row = (label, html) => (html ? `<dt>${label}</dt><dd>${html}</dd>` : "");
 let period = "7d";
 let medianVpd = 0;
@@ -584,7 +587,8 @@ $("grid").addEventListener("click", async (e) => {
     </dl>
     ${i.valueText ? `<p class="dim">${/not valued/i.test(i.valueText) ? "New item — mm2values hasn't given it a value yet. Its Eldorado price is tracked already." : "This item is valued as a trade ratio, so there's no number to chart."}</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="hist" class="dim">Loading history…</div>
-    <p><a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
+    <p class="d-actions"><a class="alert-btn" href="/alerts?${new URLSearchParams({ game: GAME_NAME[GAME.tab] || "", key: i.key, name: i.name, image: i.image || "", usd: i.usd || "" })}">🔔 Alert me when it's cheaper</a>
+      <a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
   $("dlg").showModal();
   if (i.valueText && !i.usd) { $("hist").innerHTML = ""; return; }
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));

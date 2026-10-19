@@ -14,6 +14,7 @@ import { startG2g, g2gStatus, g2gRefreshNow } from "./g2g.mjs";
 import { startU7, u7Status, u7RefreshNow } from "./u7buy.mjs";
 import { startRemoteMarkets, receiveMarket, remoteMarketStatus } from "./remote-markets.mjs";
 import { startCurrency, refreshCurrency, receiveCurrency, currencyPrices } from "./currency.mjs";
+import { startAlerts, listAlerts, addAlert, removeAlert } from "./alerts.mjs";
 import { publicKey as pushPublicKey, addSubscription, notifyPhones, latestNotification } from "./push.mjs";
 import { readFile as readStatic } from "node:fs/promises";
 // The last 30 errors/warnings, for /api/status (Render's logs aren't always at hand).
@@ -104,6 +105,23 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/api/currency") return sendJson(res, 200, currencyPrices());
+    // price alerts (owner only)
+    if (parsedUrl.pathname === "/api/alerts") {
+      if (!process.env.OWNER_KEY) return sendJson(res, 503, { error: "Set OWNER_KEY (a password of 6+ characters) in Render's Environment first." });
+      if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong owner key." });
+      try {
+        if (req.method === "GET") return sendJson(res, 200, { alerts: await listAlerts(PORT) });
+        if (req.method === "DELETE") return sendJson(res, 200, await removeAlert(parsedUrl.searchParams.get("id")));
+        if (req.method === "POST") {
+          let body = ""; for await (const c of req) { body += c; if (body.length > 10000) break; }
+          return sendJson(res, 200, { ok: true, alert: await addAlert(JSON.parse(body || "{}")) });
+        }
+      } catch (e) { return sendJson(res, 400, { error: e.message }); }
+    }
+    if (parsedUrl.pathname === "/alerts" || parsedUrl.pathname === "/alerts/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(await readStatic(new URL("alerts.html", import.meta.url)));
+    }
     if (parsedUrl.pathname === "/currency" || parsedUrl.pathname === "/currency/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(await readStatic(new URL("currency.html", import.meta.url)));
@@ -162,6 +180,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startU7(PORT);
   startRemoteMarkets(); // GameBoost / Itemku, sent by the PC booster
   startCurrency(); // Blade Ball tokens and Robux on every marketplace
+  startAlerts(PORT); // the owner's price alerts
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));
 }
