@@ -32,6 +32,7 @@ for (const level of ["error", "warn"]) {
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest, warmFlips } from "./flips.mjs";
 import { handleToolsRequest } from "./tools.mjs";
+import { dashboard } from "./dashboard.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -66,7 +67,7 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     // Phone app: installable (manifest + service worker + icons) with push notifications
-    const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
+    const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/glass.css": ["glass.css", "text/css"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
     const icon = /^\/icons\/([a-z0-9-]+\.png)$/.exec(parsedUrl.pathname);
     if (STATIC[parsedUrl.pathname] || icon) {
       const [file, type] = STATIC[parsedUrl.pathname] || [`icons/${icon[1]}`, "image/png"];
@@ -111,6 +112,7 @@ const server = http.createServer(async (req, res) => {
       const items = (await (await fetch(`http://127.0.0.1:${PORT}/api/mm2`)).json().catch(() => ({ items: [] }))).items || [];
       return sendJson(res, 200, seasonsReport(items));
     }
+    if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)
     if (parsedUrl.pathname === "/api/alerts") {

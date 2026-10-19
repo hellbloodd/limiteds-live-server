@@ -213,3 +213,4 @@ export async function handleSabRequest(url, res, sendJson) {
   }
   return false;
 }
+export const sbMarketData = () => ({ priceHistory: sbPriceHistory, sales: sbSales });

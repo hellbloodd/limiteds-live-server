@@ -126,3 +126,33 @@
     if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) { e.preventDefault(); open(); }
   });
 })();
+
+// ---------- liquid glass effects: light follows the pointer, panels rise in, neon orbs ----------
+(() => {
+  const GLASS = ".panel, .tile, .card, .tbl, .dc, .tile-link, .fc, .side, .verdict, .snipes, .chart-panel, .controls, .tiles4 > div, .c-stats > div";
+  addEventListener("pointermove", (e) => {
+    const el = e.target.closest?.(GLASS);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    el.style.setProperty("--my", `${e.clientY - r.top}px`);
+  }, { passive: true });
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const io = !reduce && "IntersectionObserver" in window ? new IntersectionObserver((es) => es.forEach((en) => { if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); } }), { rootMargin: "0px 0px -6% 0px" }) : null;
+  let n = 0;
+  const reveal = (root = document) => {
+    if (!io) return;
+    root.querySelectorAll?.(`${GLASS}, .hero, h2`).forEach((el) => {
+      if (el.classList.contains("reveal") || el.closest("dialog")) return;
+      el.classList.add("reveal"); el.style.transitionDelay = `${Math.min(n++ % 12, 11) * 45}ms`;
+      io.observe(el);
+    });
+  };
+  addEventListener("DOMContentLoaded", () => {
+    for (const c of ["a", "b"]) { const o = document.createElement("div"); o.className = `neon-orb ${c}`; document.body.prepend(o); }
+    reveal();
+    // content drawn later (lists, cards) animates in too
+    new MutationObserver((ms) => { n = 0; ms.forEach((m) => m.addedNodes.forEach((x) => x.nodeType === 1 && (x.matches?.(GLASS) ? reveal(x.parentNode) : reveal(x)))); })
+      .observe(document.body, { childList: true, subtree: true });
+  });
+})();

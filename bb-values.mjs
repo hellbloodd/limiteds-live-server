@@ -354,3 +354,4 @@ export async function handleBbRequest(url, res, sendJson) {
   return false;
 }
 
+export const bbMarketData = () => ({ priceHistory: bbPriceHistory, sales: bbSales });

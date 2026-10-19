@@ -745,3 +745,4 @@ export async function handleMm2Request(url, res, sendJson) {
   }
   return false;
 }
+export const mm2MarketData = () => ({ priceHistory: mm2PriceHistory, sales: mm2Sales });

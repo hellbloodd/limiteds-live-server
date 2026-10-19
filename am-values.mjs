@@ -319,3 +319,4 @@ export async function handleAmRequest(url, res, sendJson) {
   }
   return false;
 }
+export const amMarketData = () => ({ priceHistory: amPriceHistory, sales: amSales });
