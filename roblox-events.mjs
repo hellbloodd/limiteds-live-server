@@ -45,7 +45,7 @@ async function refresh() {
       const tag = (String(g.name).match(/^\s*\[([^\]]{1,24})\]/) || [])[1] || "";
       // description lines that look like an event / update announcement
       const lines = String(g.description || "").split("\n").map((l) => l.trim()).filter(Boolean);
-      const news = lines.filter((l) => /event|update|halloween|christmas|winter|easter|summer|spring|new |limited|week \d/i.test(l)).slice(0, 4);
+      const news = lines.filter((l) => /\bevent\b|\bupdate\b|halloween|christmas|winter|easter|summer|spring|week \d/i.test(l) && l.length < 160).slice(0, 4);
       games[game] = { name: g.name, tag, updated: g.updated, playing: g.playing, news, url: `https://www.roblox.com/games/${PLACES[game]}` };
     }
   } catch (e) { console.warn(`Roblox game pages: ${e.message}`); }
