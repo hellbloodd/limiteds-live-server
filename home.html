@@ -140,7 +140,7 @@
   <nav class="tabs">
     <a class="tab active" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
 
   <div class="dg">
@@ -358,7 +358,14 @@ getJson("/api/flips?fee=10&minProfit=1&minRoi=10&minListings=3&minSold=1").then(
 
 // ---------- small cards: portfolio, alerts, currency, favourites ----------
 const stackCards = {};
-function mini(id, html) { stackCards[id] = html; document.getElementById("stack").innerHTML = ["portfolio", "alerts", "currency", "favs"].filter((k) => stackCards[k]).map((k) => `<section class="panel mini">${stackCards[k]}</section>`).join(""); }
+function mini(id, html) { stackCards[id] = html; document.getElementById("stack").innerHTML = ["movers", "portfolio", "alerts", "currency", "favs"].filter((k) => stackCards[k]).map((k) => `<section class="panel mini">${stackCards[k]}</section>`).join(""); }
+getJson("/api/sale-movers?period=24h").then((d) => {
+  const rows = (d?.rows || []).filter((r) => r.salesNow >= 3 && r.salesBefore >= 3 && Math.max(r.avgNow, r.avgBefore) >= 1);
+  const up = rows.filter((r) => r.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 3), dn = rows.filter((r) => r.pct < 0).sort((a, b) => a.pct - b.pct).slice(0, 3);
+  if (!up.length && !dn.length) return;
+  const li = (r) => `<a class="li" href="${PAGE[r.game]}?item=${encodeURIComponent(r.key)}"><img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(r.name)}</span><b class="${r.pct > 0 ? "up" : "down"}">${r.pct > 0 ? "+" : ""}${r.pct}%</b></a>`;
+  mini("movers", `<div class="ph"><h3>📈 Sale movers · 24h</h3><a href="/movers">all →</a></div>${up.map(li).join("")}${dn.map(li).join("")}<div class="sub">average Eldorado sale price vs the day before</div>`);
+});
 if (ownerKey) {
   owner("/api/holdings").then((d) => d && mini("portfolio", `<div class="ph"><h3>💼 Portfolio</h3><a href="/portfolio">open →</a></div><div class="big">${$m(d.totals.sellNow)}</div>
     <div class="sub">if sold now · <span class="${d.totals.unrealised >= 0 ? "up" : "down"}">${d.totals.unrealised >= 0 ? "+" : ""}${$m(d.totals.unrealised)}</span> unrealised · ${d.totals.items} items</div>`));

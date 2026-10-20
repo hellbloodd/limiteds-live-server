@@ -35,6 +35,7 @@ import { handleFlipsRequest, warmFlips, preloadFlips } from "./flips.mjs";
 import { handleToolsRequest, preloadItems } from "./tools.mjs";
 import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
+import { saleMovers } from "./movers.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -46,7 +47,7 @@ const SERVER_VERSION = "agony-values-2";
 // Public answers that are the same for everyone are kept (already compressed) for a short while, so
 // a page load doesn't rebuild and re-gzip several MB each time. Owner-only routes are never cached.
 const SHARED_TTL = { "/api/mm2": 30e3, "/api/bladeball": 30e3, "/api/adoptme": 30e3, "/api/stealabrainrot": 30e3, "/api/trade-items": 60e3,
-  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3 };
+  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3, "/api/sale-movers": 120e3 };
 const shared = new Map(); // url -> { t, ttl, status, text, gz, etag }
 const BASE_HEADERS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
@@ -142,6 +143,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, seasonsReport(items));
     }
     if (parsedUrl.pathname === "/api/depth") return sendJson(res, 200, await depthFor(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "", PORT));
+    if (parsedUrl.pathname === "/api/sale-movers") return sendJson(res, 200, await saleMovers(parsedUrl.searchParams.get("period") || "24h", PORT));
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)

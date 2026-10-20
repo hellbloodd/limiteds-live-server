@@ -247,7 +247,7 @@ async function portfolio(port) {
 
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html", "/compare": "compare.html", "/status": "status.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html", "/compare": "compare.html", "/status": "status.html", "/movers": "movers.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));
