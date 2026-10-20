@@ -90,7 +90,8 @@ export async function marketDeals(port) {
     if (!(i.soldPrice > 0) || (i.sold7d || 0) < 3) continue;
     const offers = [...(i.usd > 0 ? [["Eldorado", i.usd, i.url]] : []), ...cheapestElsewhere(i.game, i.name, i.game === "Adopt Me" ? "fr" : "", i.usd)].sort((a, b) => a[1] - b[1]);
     const best = offers[0];
-    if (best && best[1] <= i.soldPrice * 0.75) {
+    // under 30% of the typical sale is almost always a different item matched by name, or a scam listing
+    if (best && best[1] <= i.soldPrice * 0.75 && best[1] >= i.soldPrice * 0.3) {
       const profit = i.soldPrice * (1 - SELL_FEE) - best[1];
       if (profit >= 0.5) under.push({ game: i.game, key: i.key, name: i.name, image: i.image, buy: best[1], market: best[0], url: best[2], soldPrice: i.soldPrice, sold7d: i.sold7d,
         below: Math.round((1 - best[1] / i.soldPrice) * 1000) / 10, profit: Math.round(profit * 100) / 100 });

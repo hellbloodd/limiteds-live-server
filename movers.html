@@ -125,7 +125,7 @@ function drawDeals() {
       ${rows.map((r, n) => `<a class="mv" href="${esc(r.url)}" target="_blank" rel="noopener"><span class="rk">${n + 1}</span><img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
         <div class="n">${esc(r.name)}</div><div class="p"><b class="up">+${$m(r.profit)}</b><span>${$m(r.buy)} on ${esc(r.market)}</span></div>
         <div class="s"><span class="gd" style="--gc:${GC[r.game]}"></span>${esc(r.game)} · ${r.below}% under the typical sale ${$m(r.soldPrice)} · ${r.sold7d} sold in 7d</div></a>`).join("") || `<div class="empty" style="padding:18px 6px">Nothing listed well under its recent sales right now.</div>`}</section>
-      <p class="note">Cheapest listing on any marketplace at least 25% under the item's typical (median) Eldorado sale price of the last 7 days, items with 3+ sales. Profit = typical sale minus the ${pct}% Eldorado fee minus the buy price. Click a row to open the listing.</p>`;
+      <p class="note">Cheapest listing on any marketplace 25–70% under the item's typical (median) Eldorado sale price of the last 7 days, items with 3+ sales. Profit = typical sale minus the ${pct}% Eldorado fee minus the buy price. Click a row to open the listing.</p>`;
     return;
   }
   const rows = deals.bulk.filter((r) => (!g || r.game === g) && r.soldPrice >= mp);

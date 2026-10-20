@@ -485,6 +485,7 @@ function flipOf(i) {
   if (sell == null) return null;
   if (i.soldPrice > 0 && (i.sold7d || 0) >= 3) sell = Math.min(sell, i.soldPrice);
   const profit = sell * (1 - FLIP_FEE) - buy;
+  if (buy < sell * 0.3) return null; // that cheap is almost always a mis-tagged item or a scam listing
   return profit >= 0.5 && profit / buy >= 0.1 ? { market, buy, url, sell, profit } : null;
 }
 function flipLine(i) {
