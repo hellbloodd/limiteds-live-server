@@ -4,6 +4,7 @@
 // server-rendered and embeds every item in a "packed" list (decoded the same way the site's own
 // unpackPets() does). It sits behind Cloudflare, so like the others it's fetched from a home PC by
 // mm2-push.mjs and stored in Supabase (mm2_state rows prefixed "am_").
+import { cheapestElsewhere } from "./markets.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
   pageSize,
@@ -283,7 +284,13 @@ export function startAmTracker() {
   setInterval(tick, every).unref();
 }
 
+// Eldorado fields plus the cheapest offer on each other marketplace (links on the item cards)
 function eldoradoFields(it) {
+  const base = eldoradoOnly(it);
+  const others = cheapestElsewhere("Adopt Me", it.name, base.priceVariant === "Fly Ride" ? "fr" : "", base.usd);
+  return others.length ? { ...base, others } : base;
+}
+function eldoradoOnly(it) {
   const p = amEldorado.prices[it.key];
   const variantRows = () => Object.entries(p.variants || {}).map(([code, v]) => ({ code, label: AM_TRAITS[code], value: it.vals?.[code] ?? null, ...v, url: `${p.baseUrl}&adopt-me-traits=${code}` }));
   if (!p?.usd) return p?.variants ? { variants: variantRows() } : {};

@@ -251,6 +251,15 @@
   .depth-bar { height:10px; border-radius:6px; background:rgba(255,255,255,.05); overflow:hidden; }
   .depth-bar i { display:block; height:100%; border-radius:6px; background:linear-gradient(90deg, #8b5cf6, #22d3ee); box-shadow:0 0 10px rgba(139,92,246,.6); }
   .depth-buy { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:12px; }
+  .mk-links { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+  .mk { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px; font-size:11px; color:var(--text); text-decoration:none;
+    background:rgba(255,255,255,.04); border:1px solid color-mix(in srgb, var(--mc) 40%, transparent); transition:background .2s, box-shadow .2s, transform .2s; }
+  .mk i { width:6px; height:6px; border-radius:50%; background:var(--mc); box-shadow:0 0 6px var(--mc); }
+  .mk b { font:700 11px "JetBrains Mono", monospace; }
+  .mk:hover { background:color-mix(in srgb, var(--mc) 18%, transparent); box-shadow:0 0 12px -3px var(--mc); transform:translateY(-1px); }
+  .mk.best { border-color:#34f5a6; box-shadow:0 0 10px -3px #34f5a6; }
+  .mk.best b { color:#34f5a6; }
+  dd .mk-links { margin-top:0; }
 </style>
 <link rel="stylesheet" href="/glass.css">
 </head>
@@ -445,6 +454,21 @@ async function load() {
   }
 }
 
+// Direct links to the cheapest listing on Eldorado and every other marketplace that has the item;
+// the cheapest of all is highlighted.
+const MK_SHORT = { Eldorado: "Eldorado", G2G: "G2G", U7BUY: "U7BUY", GameBoost: "GameBoost", Itemku: "Itemku" };
+function marketOffers(i) {
+  const list = [...(i.usd && i.eldoradoUrl ? [["Eldorado", i.usd, i.eldoradoUrl]] : []), ...(i.others || [])];
+  return list.sort((a, b) => a[1] - b[1]);
+}
+function marketLinks(i, max = 4) {
+  const list = marketOffers(i);
+  if (!list.length) return "";
+  const shown = list.slice(0, max);
+  if (i.usd && i.eldoradoUrl && !shown.some((o) => o[0] === "Eldorado")) shown[shown.length - 1] = ["Eldorado", i.usd, i.eldoradoUrl];
+  return `<div class="mk-links">${shown.map((o) => `<a class="mk${o === list[0] && list.length > 1 ? " best" : ""}" href="${esc(o[2])}" target="_blank" rel="noopener" style="--mc:${MARKET_COLORS[o[0]] || "#8b5cf6"}" title="Cheapest on ${esc(o[0])}: ${usd(o[1])}"><i></i>${esc(MK_SHORT[o[0]] || o[0])} <b>${usd(o[1])}</b></a>`).join("")}</div>`;
+}
+
 function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
@@ -486,6 +510,7 @@ function render() {
         ${spark(i.spark)}
       </div>
       ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b>${i.valuePerUsd > 0 ? `<span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>` : ""}${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
+      ${marketLinks(i)}
     </div>`;
   showChunks(list, cardHtml);
 }
@@ -661,6 +686,7 @@ async function loadDepth(i) {
 }
 
 $("grid").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return; // marketplace links open the listing, not the preview
   const card = e.target.closest(".card"); if (!card) return;
   openItem(card.dataset.key);
 });
@@ -677,6 +703,7 @@ async function openItem(key) {
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
     ${priceVsRow(i)}
+    ${(i.others || []).length ? `<dt>Cheapest anywhere</dt><dd>${marketLinks(i, 9)}</dd>` : ""}
     <dt>Sold on Eldorado</dt><dd class="tabular">${i.sold7d ? `${fmt(i.sold24h)} in 24h · ${fmt(i.sold7d)} in 7d${i.soldPrice ? ` · typical sale ${usd(i.soldPrice)}` : ""}` : `<span class="dim">none seen yet — sales are tracked from now on</span>`}</dd>
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>

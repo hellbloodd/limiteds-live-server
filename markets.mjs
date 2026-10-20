@@ -100,3 +100,12 @@ export function amCode(title) {
   if (/ ride /.test(t)) return "r";
   return null;
 }
+
+// Cheapest offer on each other marketplace for an item card: [[market, usd, url], ...], cheapest first.
+// Offers under 35% of the Eldorado price are left out (almost always a different item matched by name).
+export function cheapestElsewhere(game, name, code = "", eldoradoUsd = null) {
+  return otherMarketPrices(game, name, code)
+    .filter((o) => o.url && !(eldoradoUsd > 0 && o.usd < eldoradoUsd * 0.35))
+    .sort((a, b) => a.usd - b.usd)
+    .map((o) => [o.market, Math.round(o.usd * 100) / 100, o.url]);
+}

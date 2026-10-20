@@ -2,6 +2,7 @@
 //
 // bbvalues.uk sits behind Cloudflare too, so values are fetched from a home PC by mm2-push.mjs
 // and stored in Supabase (mm2_state rows prefixed "bb_"); the live server only reads them.
+import { cheapestElsewhere } from "./markets.mjs";
 import { currencyPrices } from "./currency.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
@@ -268,7 +269,13 @@ export function startBbTracker() {
   setInterval(tick, every).unref();
 }
 
+// Eldorado fields plus the cheapest offer on each other marketplace (links on the item cards)
 function eldoradoFields(it) {
+  const base = eldoradoOnly(it);
+  const others = cheapestElsewhere("Blade Ball", it.name, "", base.usd);
+  return others.length ? { ...base, others } : base;
+}
+function eldoradoOnly(it) {
   const p = bbEldorado.prices[it.key];
   if (!p?.usd) return {};
   return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };

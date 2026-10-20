@@ -1,3 +1,4 @@
+import { cheapestElsewhere } from "./markets.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 // MM2 weapon values tracker.
 //
@@ -660,7 +661,13 @@ export function startMm2Tracker() {
   setInterval(tick, every).unref();
 }
 
+// Eldorado fields plus the cheapest offer on each other marketplace (links on the item cards)
 function eldoradoFields(it) {
+  const base = eldoradoOnly(it);
+  const others = cheapestElsewhere("MM2", it.name, "", base.usd);
+  return others.length ? { ...base, others } : base;
+}
+function eldoradoOnly(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p?.usd) return {};
   return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,

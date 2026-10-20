@@ -4,6 +4,7 @@
 // read the item pages instead: the sitemap lists every brainrot page, and each page embeds a
 // schema.org Product block with the name, picture, rarity, demand and value (in Dragons -
 // Dragon Cannelloni = 1). Rarities are re-checked once a day; Secret/OG values every update.
+import { cheapestElsewhere } from "./markets.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline,
   eldoradoJson, sendGamePage,
@@ -180,7 +181,13 @@ export function startSabTracker() {
   setInterval(tick, every).unref();
 }
 
+// Eldorado fields plus the cheapest offer on each other marketplace (links on the item cards)
 function eldoradoFields(it) {
+  const base = eldoradoOnly(it);
+  const others = cheapestElsewhere("Steal a Brainrot", it.name, "", base.usd);
+  return others.length ? { ...base, others } : base;
+}
+function eldoradoOnly(it) {
   const p = sbEldorado.prices[it.key];
   if (!p?.usd) return {};
   // Values are in Dragons, often far below 1, so keep 3 significant digits.
