@@ -251,6 +251,11 @@
   .depth-bar { height:10px; border-radius:6px; background:rgba(255,255,255,.05); overflow:hidden; }
   .depth-bar i { display:block; height:100%; border-radius:6px; background:linear-gradient(90deg, #8b5cf6, #22d3ee); box-shadow:0 0 10px rgba(139,92,246,.6); }
   .depth-buy { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:12px; }
+  .flip { margin-top:7px; font-size:11.5px; padding:5px 9px; border-radius:10px; background:rgba(52,245,166,.07); border:1px solid rgba(52,245,166,.25); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .flip b { color:#34f5a6; font:700 12px "JetBrains Mono", monospace; text-shadow:0 0 8px rgba(52,245,166,.4); }
+  .st-row { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .st-row input { width:110px; padding:6px 10px; }
+  .st-out { font-size:12.5px; margin-top:8px; line-height:1.5; }
   .mk-links { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
   .mk { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px; font-size:11px; color:var(--text); text-decoration:none;
     background:rgba(255,255,255,.04); border:1px solid color-mix(in srgb, var(--mc) 40%, transparent); transition:background .2s, box-shadow .2s, transform .2s; }
@@ -277,7 +282,7 @@
     <a class="tab" data-tab="bladeball" href="/bladeball">Blade Ball Values</a>
     <a class="tab" data-tab="adoptme" href="/adoptme">Adopt Me Values</a>
     <a class="tab" data-tab="stealabrainrot" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a>
     <a class="tab" href="/watch">🏷️ My Listings</a>
     <a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
@@ -469,6 +474,47 @@ function marketLinks(i, max = 4) {
   return `<div class="mk-links">${shown.map((o) => `<a class="mk${o === list[0] && list.length > 1 ? " best" : ""}" href="${esc(o[2])}" target="_blank" rel="noopener" style="--mc:${MARKET_COLORS[o[0]] || "#8b5cf6"}" title="Cheapest on ${esc(o[0])}: ${usd(o[1])}"><i></i>${esc(MK_SHORT[o[0]] || o[0])} <b>${usd(o[1])}</b></a>`).join("")}</div>`;
 }
 
+// Flip on the card: buy the cheapest listing anywhere, relist on Eldorado just under the next price
+// (under Eldorado's cheapest when buying elsewhere), never above what it typically sold for this week.
+const FLIP_FEE = 0.10;
+function flipOf(i) {
+  const offers = marketOffers(i);
+  if (!offers.length || !i.usd) return null;
+  const [market, buy, url] = offers[0];
+  let sell = market === "Eldorado" ? (i.second > 0 ? i.second - 0.01 : null) : i.usd - 0.01;
+  if (sell == null) return null;
+  if (i.soldPrice > 0 && (i.sold7d || 0) >= 3) sell = Math.min(sell, i.soldPrice);
+  const profit = sell * (1 - FLIP_FEE) - buy;
+  return profit >= 0.5 && profit / buy >= 0.1 ? { market, buy, url, sell, profit } : null;
+}
+function flipLine(i) {
+  const f = flipOf(i);
+  return f ? `<div class="flip" title="Buy on ${esc(f.market)} at ${usd(f.buy)}, list on Eldorado at ${usd(f.sell)}, ${Math.round(FLIP_FEE * 100)}% fee">💸 Flip <b>+${usd(f.profit)}</b> <span class="dim">${esc(f.market)} ${usd(f.buy)} → ${usd(f.sell)}</span></div>` : "";
+}
+
+// Sell-time estimate: of the confirmed sales in the last 7 days, how many were at this price or higher.
+async function loadSellTime(i) {
+  const el = $("selltime"); if (!el) return;
+  const d = await fetch(`/api/sales?game=${encodeURIComponent(GAME_NAME[GAME.tab])}&key=${encodeURIComponent(i.key)}`).then((r) => r.json()).catch(() => null);
+  const now = Date.now() / 1000, week = (d?.sales || []).filter((e) => e[0] >= now - 7 * 86400);
+  const suggested = i.usd ? Math.max(0.01, Math.round((i.usd - 0.01) * 100) / 100) : (i.soldPrice || 1);
+  el.innerHTML = `<div class="depth"><div class="depth-h"><b>How fast would it sell?</b><span class="dim">${week.length} confirmed sale${week.length === 1 ? "" : "s"} in 7 days</span></div>
+    <label class="st-row">If I list it at $ <input id="st-price" type="number" min="0" step="0.01" value="${suggested}" inputmode="decimal"></label><div id="st-out" class="st-out"></div></div>`;
+  const draw = () => {
+    const x = Number($("st-price").value);
+    if (!(x > 0)) { $("st-out").textContent = ""; return; }
+    if (!week.length) { $("st-out").innerHTML = `<span class="dim">No sales seen in the last 7 days — expect a slow sale at any price.</span>`; return; }
+    const n = week.filter((e) => e[1] >= x * 0.98).length;
+    const prices = week.map((e) => e[1]).sort((a, b) => a - b), mid = prices[prices.length >> 1];
+    if (!n) { $("st-out").innerHTML = `<span class="down">No sale this week was at ${usd(x)} or higher</span> <span class="dim">(highest ${usd(prices.at(-1))}, typical ${usd(mid)}) — it may sit for a long time.</span>`; return; }
+    const hours = 7 * 24 / n;
+    const when = hours < 1.5 ? "within the hour" : hours < 36 ? `in about ${Math.round(hours)} h` : `in about ${Math.round(hours / 24)} days`;
+    $("st-out").innerHTML = `<b class="${hours <= 24 ? "up" : ""}">Likely ${when}</b> <span class="dim">· ${n} of ${week.length} sales this week were at ${usd(x)} or more (typical sale ${usd(mid)}). Undercutting the cheapest listing usually sells first.</span>`;
+  };
+  $("st-price").addEventListener("input", draw);
+  draw();
+}
+
 function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
@@ -510,7 +556,7 @@ function render() {
         ${spark(i.spark)}
       </div>
       ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b>${i.valuePerUsd > 0 ? `<span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>` : ""}${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
-      ${marketLinks(i)}
+      ${marketLinks(i)}${flipLine(i)}
     </div>`;
   showChunks(list, cardHtml);
 }
@@ -709,11 +755,13 @@ async function openItem(key) {
     </dl>
     ${i.valueText ? `<p class="dim">${/not valued/i.test(i.valueText) ? "New item — mm2values hasn't given it a value yet. Its Eldorado price is tracked already." : "This item is valued as a trade ratio, so there's no number to chart."}</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="depth"></div>
+    <div id="selltime"></div>
     <div id="hist" class="dim">Loading history…</div>
     <p class="d-actions"><a class="alert-btn" href="/alerts?${new URLSearchParams({ game: GAME_NAME[GAME.tab] || "", key: i.key, name: i.name, image: i.image || "", usd: i.usd || "" })}">🔔 Alert me when it's cheaper</a>
       <a href="${esc(i.sourceUrl)}" target="_blank" rel="noopener">View on ${esc(GAME.sourceName)}</a></p>`;
   $("dlg").showModal();
   if (i.usd) loadDepth(i);
+  if (i.usd || i.sold7d) loadSellTime(i);
   if (i.valueText && !i.usd) { $("hist").innerHTML = ""; return; }
   const h = await fetch(GAME.api + "/history?key=" + encodeURIComponent(i.key)).then((r) => r.json()).catch(() => ({ points: [] }));
   // Eldorado price: stored points ([day number, usd]) plus the live price now

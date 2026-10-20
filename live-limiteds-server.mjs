@@ -32,10 +32,11 @@ for (const level of ["error", "warn"]) {
 }
 import { sendTestAlert } from "./deals.mjs";
 import { handleFlipsRequest, warmFlips, preloadFlips } from "./flips.mjs";
-import { handleToolsRequest, preloadItems } from "./tools.mjs";
+import { handleToolsRequest, preloadItems, startPortfolioSnapshots } from "./tools.mjs";
 import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
-import { saleMovers } from "./movers.mjs";
+import { listEvents, addEvent, deleteEvent } from "./calendar.mjs";
+import { saleMovers, marketDeals, itemSales, startMoverAlerts } from "./movers.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -47,7 +48,7 @@ const SERVER_VERSION = "agony-values-2";
 // Public answers that are the same for everyone are kept (already compressed) for a short while, so
 // a page load doesn't rebuild and re-gzip several MB each time. Owner-only routes are never cached.
 const SHARED_TTL = { "/api/mm2": 30e3, "/api/bladeball": 30e3, "/api/adoptme": 30e3, "/api/stealabrainrot": 30e3, "/api/trade-items": 60e3,
-  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3, "/api/sale-movers": 120e3 };
+  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3, "/api/sale-movers": 120e3, "/api/market-deals": 120e3 };
 const shared = new Map(); // url -> { t, ttl, status, text, gz, etag }
 const BASE_HEADERS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
@@ -144,9 +145,26 @@ const server = http.createServer(async (req, res) => {
     }
     if (parsedUrl.pathname === "/api/depth") return sendJson(res, 200, await depthFor(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "", PORT));
     if (parsedUrl.pathname === "/api/sale-movers") return sendJson(res, 200, await saleMovers(parsedUrl.searchParams.get("period") || "24h", PORT));
+    if (parsedUrl.pathname === "/api/market-deals") return sendJson(res, 200, await marketDeals(PORT));
+    if (parsedUrl.pathname === "/api/sales") return sendJson(res, 200, { sales: itemSales(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)
+    // event calendar: anyone can read it, only the owner adds or removes events
+    if (parsedUrl.pathname === "/api/calendar") {
+      try {
+        if (req.method === "GET") {
+          const seasons = await (await fetch(`http://127.0.0.1:${PORT}/api/seasons`)).json().catch(() => null);
+          return sendJson(res, 200, { events: await listEvents(seasons) });
+        }
+        if (!process.env.OWNER_KEY || !isOwner(req)) return sendJson(res, 401, { error: "Only the owner can change the calendar (owner key)." });
+        if (req.method === "DELETE") { await deleteEvent(parsedUrl.searchParams.get("id") || ""); return sendJson(res, 200, { ok: true }); }
+        if (req.method === "POST") {
+          let body = ""; for await (const c of req) { body += c; if (body.length > 10000) break; }
+          return sendJson(res, 200, { ok: true, event: await addEvent(JSON.parse(body || "{}")) });
+        }
+      } catch (e) { return sendJson(res, 400, { error: e.message }); }
+    }
     if (parsedUrl.pathname === "/api/alerts") {
       if (!process.env.OWNER_KEY) return sendJson(res, 503, { error: "Set OWNER_KEY (a password of 6+ characters) in Render's Environment first." });
       if (!isOwner(req)) return sendJson(res, 401, { error: "Wrong owner key." });
@@ -225,6 +243,8 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startRemoteMarkets(); // GameBoost / Itemku, sent by the PC booster
   startCurrency(); // Blade Ball tokens and Robux on every marketplace
   startAlerts(PORT); // the owner's price alerts
+  startMoverAlerts(PORT);
+  startPortfolioSnapshots(PORT); // portfolio value saved every 6 hours (the chart fills in without visiting) // Discord + phone when an item's average sale price jumps or drops
   warmItems(PORT); // item search / alerts / portfolio list, always ready
   startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku
   startSeasons(); // Halloween / Christmas item lists from mm2values

@@ -156,3 +156,41 @@
       .observe(document.body, { childList: true, subtree: true });
   });
 })();
+
+
+// ---------- install the app + offline notice ----------
+(() => {
+  let deferred = null;
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+  const dismissed = (() => { try { return localStorage.getItem("installDismissed") === "1"; } catch { return false; } })();
+  const addButton = () => {
+    if (standalone || dismissed || document.getElementById("install-btn")) return;
+    const top = document.querySelector("header .top"); if (!top) return;
+    const b = document.createElement("button");
+    b.id = "install-btn"; b.type = "button"; b.textContent = "📲 Install app";
+    b.style.cssText = "margin-left:8px;padding:7px 12px;border-radius:999px;border:1px solid rgba(139,92,246,.5);background:linear-gradient(135deg,rgba(139,92,246,.35),rgba(34,211,238,.18));color:#fff;font:600 12px Manrope,sans-serif;cursor:pointer;box-shadow:0 0 16px -6px rgba(139,92,246,.9);white-space:nowrap";
+    b.onclick = async () => {
+      if (deferred) { deferred.prompt(); const r = await deferred.userChoice.catch(() => null); deferred = null; if (r?.outcome === "accepted") b.remove(); return; }
+      if (ios) alert("To install: tap the Share button (square with an arrow) at the bottom of Safari, then \"Add to Home Screen\".");
+    };
+    b.oncontextmenu = (e) => { e.preventDefault(); try { localStorage.setItem("installDismissed", "1"); } catch { /* ignore */ } b.remove(); };
+    b.title = "Install Agony Values as an app (right-click / long-press to hide this button)";
+    top.appendChild(b);
+  };
+  addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferred = e; if (document.readyState !== "loading") addButton(); else addEventListener("DOMContentLoaded", addButton); });
+  addEventListener("appinstalled", () => document.getElementById("install-btn")?.remove());
+  if (ios && !standalone) addEventListener("DOMContentLoaded", addButton);
+
+  // small pill while offline: the page is showing its last saved data
+  const pill = () => {
+    let el = document.getElementById("offline-pill");
+    if (navigator.onLine) { el?.remove(); return; }
+    if (el) return;
+    el = document.createElement("div");
+    el.id = "offline-pill"; el.textContent = "Offline — showing the last saved data";
+    el.style.cssText = "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:50;padding:8px 14px;border-radius:999px;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.5);color:#fde68a;font:600 12px Manrope,sans-serif;backdrop-filter:blur(10px)";
+    document.body.appendChild(el);
+  };
+  addEventListener("online", pill); addEventListener("offline", pill); addEventListener("DOMContentLoaded", pill);
+})();

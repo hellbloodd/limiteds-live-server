@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:site_name" content="Agony Values"><meta property="og:title" content="Calendar · Agony Values"><meta property="og:image" content="https://agony-values.onrender.com/icons/icon-512.png">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0b0a14">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
+<script src="/app.js"></script>
+<title>Calendar · Agony Values</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/tools.css">
+<style>
+  .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0 16px; }
+  .ctl button { font:600 12px "Manrope", sans-serif; padding:7px 13px; border-radius:999px; background:rgba(20,22,50,.5); border:1px solid rgba(140,150,255,.2); color:var(--muted); cursor:pointer; }
+  .ctl button.on { color:#fff; border-color:rgba(139,92,246,.75); background:linear-gradient(135deg, rgba(139,92,246,.5), rgba(59,130,246,.25)); box-shadow:0 0 14px -4px rgba(139,92,246,.8); }
+  .timeline { position:relative; padding-left:26px; }
+  .timeline::before { content:""; position:absolute; left:8px; top:6px; bottom:6px; width:2px; border-radius:2px; background:linear-gradient(#8b5cf6, #22d3ee 60%, transparent); box-shadow:0 0 12px rgba(139,92,246,.6); }
+  .ev { position:relative; padding:14px 16px; margin-bottom:12px; }
+  .ev::before { content:""; position:absolute; left:-24px; top:20px; width:12px; height:12px; border-radius:50%; background:var(--gc); box-shadow:0 0 12px var(--gc); border:2px solid #05060f; }
+  .ev.past { opacity:.55; }
+  .ev .top { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:baseline; }
+  .ev h3 { margin:0; font:700 15px "Unbounded", sans-serif; }
+  .ev .cd { margin-left:auto; font:700 14px "JetBrains Mono", monospace; color:#fff; text-shadow:0 0 12px var(--gc); }
+  .ev .when { font-size:12px; color:var(--muted); }
+  .ev .note { font-size:13px; color:#d6d9f0; margin-top:6px; line-height:1.5; }
+  .ev .tagg { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid color-mix(in srgb, var(--gc) 50%, transparent); color:#fff; }
+  .ev .del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:12px; }
+  .month { font:700 12px "Unbounded", sans-serif; color:var(--muted); margin:18px 0 10px -26px; letter-spacing:.05em; text-transform:uppercase; }
+  .add { padding:16px; margin:18px 0; display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:10px; align-items:end; }
+  .add label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .add .wide { grid-column:1 / -1; }
+  .add input, .add select { padding:9px 10px; }
+</style>
+<link rel="stylesheet" href="/glass.css">
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<header><div class="wrap top"><a class="brand" href="/"><div class="brand-mark">A</div><div class="brand-text">Agony <span class="dim">Values</span></div></a></div></header>
+<div class="wrap">
+  <nav class="tabs">
+    <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
+    <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab active" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+  </nav>
+  <section class="hero"><div><h1>Calendar</h1><p class="dim">Upcoming game updates and events, with countdowns. Prices usually move before and right after an update — plan buys and sales around them.</p></div></section>
+  <div class="ctl" id="ctl"><button data-g="" class="on">All</button><button data-g="MM2">MM2</button><button data-g="Blade Ball">Blade Ball</button><button data-g="Adopt Me">Adopt Me</button><button data-g="Steal a Brainrot">Steal a Brainrot</button><span style="width:10px"></span><button data-past="1" id="past-btn">Show past</button></div>
+  <div id="out"><div class="empty">Loading…</div></div>
+  <form class="card add" id="add" hidden>
+    <label>Title<input name="title" required maxlength="80" placeholder="Halloween update part 2"></label>
+    <label>Game<select name="game"><option>MM2</option><option>Blade Ball</option><option>Adopt Me</option><option>Steal a Brainrot</option><option>Other</option></select></label>
+    <label>Starts<input name="date" type="datetime-local" required></label>
+    <label>Ends (optional)<input name="end" type="datetime-local"></label>
+    <label class="wide">Note (optional)<input name="note" maxlength="300" placeholder="New godlies expected; old event items usually dip"></label>
+    <label class="wide">Link (optional)<input name="link" type="url" placeholder="https://…"></label>
+    <div><button class="btn" type="submit">Add event</button> <span id="add-msg" class="dim" style="font-size:12px"></span></div>
+  </form>
+  <p class="dim" style="font-size:12px" id="owner-hint"></p>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const GC = { "MM2": "#8b5cf6", "Blade Ball": "#22d3ee", "Adopt Me": "#e879f9", "Steal a Brainrot": "#3b82f6", "Other": "#fbbf24" };
+const ownerKey = (() => { try { return localStorage.getItem("ownerKey") || ""; } catch { return ""; } })();
+let events = [], game = "", past = false;
+
+function countdown(ms) {
+  if (ms <= 0) return "now";
+  const d = Math.floor(ms / 864e5), h = Math.floor(ms % 864e5 / 36e5), m = Math.floor(ms % 36e5 / 6e4);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function draw() {
+  const now = Date.now();
+  const list = events.filter((e) => (!game || e.game === game) && (past || Date.parse(e.end || e.date) >= now - 864e5));
+  let month = "";
+  document.getElementById("out").innerHTML = list.length ? `<div class="timeline">${list.map((e) => {
+    const t = Date.parse(e.date), end = e.end ? Date.parse(e.end) : null, live = t <= now && (end ? end >= now : now - t < 864e5);
+    const m = new Date(t).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const head = m !== month ? `<div class="month">${(month = m)}</div>` : "";
+    return `${head}<div class="card ev${!live && (end || t) < now ? " past" : ""}" style="--gc:${GC[e.game] || GC.Other}">
+      <div class="top"><span class="tagg">${esc(e.game)}</span><h3>${esc(e.title)}</h3><span class="cd" data-t="${t}" data-end="${end || ""}">${live ? "LIVE" : t > now ? countdown(t - now) : "ended"}</span></div>
+      <div class="when">${new Date(t).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${end ? ` → ${new Date(end).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+      ${e.note ? `<div class="note">${esc(e.note)}</div>` : ""}
+      <div class="when" style="margin-top:6px">${e.link ? `<a href="${esc(e.link)}" ${e.link.startsWith("/") ? "" : 'target="_blank" rel="noopener"'}>${e.link.startsWith("/") ? "Open" : "Details ↗"}</a>` : ""}
+      ${ownerKey && !e.auto ? ` <button class="del" data-id="${esc(e.id)}">Remove</button>` : ""}${e.auto ? ` <span class="dim">· added automatically</span>` : ""}</div></div>`;
+  }).join("")}</div>` : `<div class="empty">No upcoming events${game ? ` for ${esc(game)}` : ""}.${ownerKey ? " Add one below." : ""}</div>`;
+}
+
+async function load() {
+  const d = await fetch("/api/calendar").then((r) => r.json()).catch(() => ({ events: [] }));
+  events = d.events || [];
+  draw();
+}
+
+document.getElementById("ctl").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.past) { past = !past; b.classList.toggle("on", past); }
+  else { game = b.dataset.g; document.querySelectorAll("#ctl button[data-g]").forEach((x) => x.classList.toggle("on", x === b)); }
+  draw();
+});
+document.getElementById("out").addEventListener("click", async (e) => {
+  const b = e.target.closest(".del"); if (!b || !confirm("Remove this event?")) return;
+  await fetch(`/api/calendar?id=${encodeURIComponent(b.dataset.id)}`, { method: "DELETE", headers: { "x-owner-key": ownerKey } });
+  load();
+});
+if (ownerKey) {
+  document.getElementById("add").hidden = false;
+  document.getElementById("add").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const r = await fetch("/api/calendar", { method: "POST", headers: { "Content-Type": "application/json", "x-owner-key": ownerKey },
+      body: JSON.stringify({ ...f, date: new Date(f.date).toISOString(), end: f.end ? new Date(f.end).toISOString() : "" }) }).then((x) => x.json()).catch(() => ({ error: "Couldn't reach the server." }));
+    document.getElementById("add-msg").textContent = r.error || "Added ✓";
+    if (!r.error) { e.target.reset(); load(); }
+  });
+} else {
+  document.getElementById("owner-hint").textContent = "The owner adds events here (unlock any private page with the owner key first).";
+}
+// live countdowns
+setInterval(() => document.querySelectorAll(".cd[data-t]").forEach((el) => {
+  const t = +el.dataset.t, end = +el.dataset.end || 0, now = Date.now();
+  el.textContent = t > now ? countdown(t - now) : (end ? end >= now : now - t < 864e5) ? "LIVE" : "ended";
+}), 30000);
+load();
+</script>
+</body>
+</html>

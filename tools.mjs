@@ -245,9 +245,17 @@ async function portfolio(port) {
   return { fee: FEE, totals, holdings, history: hist };
 }
 
+// Saves the portfolio's value point for today every 6 hours, so the chart has a point for every day
+// even when the Portfolio page isn't opened.
+export function startPortfolioSnapshots(port) {
+  const run = () => portfolio(port).catch((e) => console.warn(`Portfolio snapshot: ${e.message}`));
+  setTimeout(run, 8 * 60e3).unref();
+  setInterval(run, 6 * 3600e3).unref();
+}
+
 // ---------- routes ----------
 export async function handleToolsRequest(url, req, res, sendJson, port) {
-  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html", "/compare": "compare.html", "/status": "status.html", "/movers": "movers.html" }[url.pathname.replace(/\/$/, "")];
+  const page = { "/watch": "watch.html", "/profits": "profits.html", "/portfolio": "portfolio.html", "/trade": "trade.html", "/gaps": "gaps.html", "/favourites": "favourites.html", "/seasons": "seasons.html", "/compare": "compare.html", "/status": "status.html", "/movers": "movers.html", "/calendar": "calendar.html" }[url.pathname.replace(/\/$/, "")];
   if (page) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, page), "utf8"));

@@ -18,6 +18,9 @@
   .ctl button.on { color:#fff; border-color:rgba(139,92,246,.75); background:linear-gradient(135deg, rgba(139,92,246,.5), rgba(59,130,246,.25)); box-shadow:0 0 14px -4px rgba(139,92,246,.8); }
   .ctl select { padding:7px 10px; font-size:12px; }
   .ctl .sp { width:10px; }
+  .views button { font-size:13px; padding:8px 15px; }
+  #periods { display:contents; }
+  .tbl2 .mv { grid-template-columns:22px 38px 1fr auto; }
   .cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
   @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
   .col { padding:16px 16px 10px; }
@@ -48,11 +51,12 @@
   <nav class="tabs">
     <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab active" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab active" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
-  <section class="hero"><div><h1>Movers</h1><p class="dim">Biggest gains and drops in average Eldorado sale price — what items actually sold for, compared with the period before.</p></div></section>
+  <section class="hero"><div><h1>Movers</h1><p class="dim">Prices measured against what items actually sold for: biggest moves in average sale price, listings under recent sales, and bulk buys that still pay.</p></div></section>
+  <div class="ctl views" id="views"><button data-v="movers" class="on">📈 Sale movers</button><button data-v="under">🏷️ Under recent sales</button><button data-v="bulk">📦 Bulk deals</button></div>
   <div class="ctl" id="ctl">
-    <button data-p="24h" class="on">24h</button><button data-p="3d">3 days</button><button data-p="7d">7 days</button><button data-p="14d">14 days</button>
+    <span id="periods"><button data-p="24h" class="on">24h</button><button data-p="3d">3 days</button><button data-p="7d">7 days</button><button data-p="14d">14 days</button></span>
     <span class="sp"></span>
     <select id="game"><option value="">All games</option><option>MM2</option><option>Blade Ball</option><option>Adopt Me</option><option>Steal a Brainrot</option></select>
     <select id="min"><option value="2">2+ sales each period</option><option value="3" selected>3+ sales each period</option><option value="5">5+ sales each period</option><option value="10">10+ sales each period</option></select>
@@ -69,9 +73,14 @@ const LABEL = { "24h": "last 24h", "3d": "last 3 days", "7d": "last 7 days", "14
 const PREV = { "24h": "the 24h before", "3d": "the 3 days before", "7d": "the week before", "14d": "the 2 weeks before" };
 const saved = (() => { try { return JSON.parse(localStorage.getItem("movers") || "{}"); } catch { return {}; } })();
 let period = saved.period || "24h";
+let view = saved.view || "movers", deals = null;
 for (const k of ["game", "min", "minp"]) if (saved[k] != null) document.getElementById(k).value = saved[k];
 let data = null;
 
+async function loadDeals() {
+  deals = await fetch("/api/market-deals").then((r) => r.json()).catch(() => null);
+  draw();
+}
 async function load() {
   document.querySelectorAll("#ctl button").forEach((b) => b.classList.toggle("on", b.dataset.p === period));
   data = await fetch(`/api/sale-movers?period=${period}`).then((r) => r.json()).catch(() => null);
@@ -79,7 +88,11 @@ async function load() {
 }
 
 function draw() {
-  try { localStorage.setItem("movers", JSON.stringify({ period, game: game.value, min: min.value, minp: minp.value })); } catch { /* private mode */ }
+  try { localStorage.setItem("movers", JSON.stringify({ period, view, game: game.value, min: min.value, minp: minp.value })); } catch { /* private mode */ }
+  document.querySelectorAll("#views button").forEach((b) => b.classList.toggle("on", b.dataset.v === view));
+  document.getElementById("periods").style.display = view === "movers" ? "contents" : "none";
+  document.getElementById("min").style.display = view === "movers" ? "" : "none";
+  if (view !== "movers") return drawDeals();
   const out = document.getElementById("out");
   if (!data || data.error) { out.innerHTML = `<div class="empty">${esc(data?.error || "Couldn't load sales — try again in a moment.")}</div>`; if (data?.error) setTimeout(load, 30000); return; }
   const g = game.value, mn = +min.value, mp = +minp.value;
@@ -101,6 +114,28 @@ function draw() {
     </div>
     <p class="note">Average sale price of the ${LABEL[period]} vs ${PREV[period]}, from confirmed Eldorado sales (a listing that disappears and doesn't come back within 3 hours). Each sale counts once; sales 4× above or below the item's usual sale price are ignored, and with 5+ sales the highest and lowest 10% are left out, so one odd sale can't fake a move. ${rows.length} items had sales in both periods with these filters.</p>`;
 }
+function drawDeals() {
+  const out = document.getElementById("out");
+  if (!deals) { out.innerHTML = `<div class="empty">Loading deals…</div>`; loadDeals(); return; }
+  const g = game.value, mp = +minp.value;
+  const pct = Math.round((deals.fee || 0.1) * 100);
+  if (view === "under") {
+    const rows = deals.under.filter((r) => (!g || r.game === g) && r.soldPrice >= mp);
+    out.innerHTML = `<section class="card col tbl2"><h2>🏷️ Listed well under recent sales <span class="dim" style="font:500 12px Manrope">${rows.length}</span></h2>
+      ${rows.map((r, n) => `<a class="mv" href="${esc(r.url)}" target="_blank" rel="noopener"><span class="rk">${n + 1}</span><img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+        <div class="n">${esc(r.name)}</div><div class="p"><b class="up">+${$m(r.profit)}</b><span>${$m(r.buy)} on ${esc(r.market)}</span></div>
+        <div class="s"><span class="gd" style="--gc:${GC[r.game]}"></span>${esc(r.game)} · ${r.below}% under the typical sale ${$m(r.soldPrice)} · ${r.sold7d} sold in 7d</div></a>`).join("") || `<div class="empty" style="padding:18px 6px">Nothing listed well under its recent sales right now.</div>`}</section>
+      <p class="note">Cheapest listing on any marketplace at least 25% under the item's typical (median) Eldorado sale price of the last 7 days, items with 3+ sales. Profit = typical sale minus the ${pct}% Eldorado fee minus the buy price. Click a row to open the listing.</p>`;
+    return;
+  }
+  const rows = deals.bulk.filter((r) => (!g || r.game === g) && r.soldPrice >= mp);
+  out.innerHTML = `<section class="card col tbl2"><h2>📦 Bulk buys that still pay <span class="dim" style="font:500 12px Manrope">${rows.length}</span></h2>
+    ${rows.map((r, n) => `<a class="mv" href="${esc(r.url || PAGE[r.game] + "?item=" + encodeURIComponent(r.key))}" target="_blank" rel="noopener"><span class="rk">${n + 1}</span><img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <div class="n">Buy ${r.n}× ${esc(r.name)}</div><div class="p"><b class="up">+${$m(r.profit)}</b><span>${r.roi}% on ${$m(r.cost)}</span></div>
+      <div class="s"><span class="gd" style="--gc:${GC[r.game]}"></span>${esc(r.game)} · cheapest ${$m(r.cheapest)} · resell at typical ${$m(r.soldPrice)} · ${r.sold7d} sold in 7d</div></a>`).join("") || `<div class="empty" style="padding:18px 6px">No bulk buy pays right now.</div>`}</section>
+    <p class="note">Cost of the cheapest ${"3, 5 or 10"} units on Eldorado (from the last price check) vs reselling them all at the typical sale price after the ${pct}% fee — only when the item sold at least that many times this week (buyers exist) and the return is 15%+. The best size per item is shown.</p>`;
+}
+document.getElementById("views").addEventListener("click", (e) => { const b = e.target.closest("button[data-v]"); if (!b) return; view = b.dataset.v; draw(); });
 document.getElementById("ctl").addEventListener("click", (e) => { const b = e.target.closest("button[data-p]"); if (!b) return; period = b.dataset.p; load(); });
 for (const id of ["game", "min", "minp"]) document.getElementById(id).addEventListener("change", draw);
 load();

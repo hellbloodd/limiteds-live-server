@@ -39,7 +39,7 @@
   <nav class="tabs">
     <a class="tab" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab active" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab active" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
   <section class="hero">
     <div>
@@ -90,17 +90,49 @@ let key = ""; try { key = localStorage.getItem("ownerKey") || ""; } catch {}
 const api = (path) => fetch(path, { headers: { "x-owner-key": key } })
   .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }); return j; });
 
+// Portfolio over time: a neon area for "if sold now", cost dashed, realised profit green, with a
+// range picker, axis labels and a hover readout. One point a day (saved every 6 hours by the server).
+let chartDays = 30, chartHist = [];
 function chart(hist) {
-  const svg = $("chart");
-  if (hist.length < 2) { svg.innerHTML = `<text x="300" y="95" text-anchor="middle" fill="currentColor" opacity=".5" font-size="13">The chart fills in day by day — come back tomorrow.</text>`; return; }
-  const W = 600, H = 180, P = 8;
-  const vals = hist.flatMap((p) => [p[1], p[2], p[3]]);
-  const lo = Math.min(0, ...vals), hi = Math.max(...vals, 1);
-  const x = (i) => P + i / (hist.length - 1) * (W - 2 * P), y = (v) => H - P - (v - lo) / (hi - lo) * (H - 2 * P);
-  const line = (idx, color, dash = "") => `<polyline fill="none" stroke="${color}" stroke-width="2" ${dash} vector-effect="non-scaling-stroke" points="${hist.map((p, i) => `${x(i).toFixed(1)},${y(p[idx]).toFixed(1)}`).join(" ")}"/>`;
-  svg.innerHTML = `<line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="currentColor" opacity=".12"/>`
-    + line(1, "var(--muted)", 'stroke-dasharray="4 4"') + line(3, "#22c55e") + line(2, "var(--accent)");
-  $("chart-note").textContent = `${hist[0][0]} → ${hist[hist.length - 1][0]}`;
+  chartHist = hist;
+  const svg = $("chart"), box = svg.parentNode;
+  box.style.position = "relative";
+  if (!$("p-range")) {
+    svg.insertAdjacentHTML("beforebegin", `<div id="p-range" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">${[[7, "7d"], [30, "30d"], [90, "90d"], [365, "1y"], [0, "All"]].map(([n, l]) => `<button type="button" class="range" data-d="${n}" style="font:600 12px Manrope,sans-serif;padding:5px 11px;border-radius:999px;cursor:pointer">${l}</button>`).join("")}<span id="p-delta" style="margin-left:auto;font-size:13px"></span></div>`);
+    svg.insertAdjacentHTML("afterend", `<div id="p-tip" style="position:absolute;pointer-events:none;opacity:0;padding:8px 10px;border-radius:12px;font-size:12px;background:rgba(10,12,32,.9);border:1px solid rgba(139,92,246,.45);white-space:nowrap;z-index:2"></div>`);
+    $("p-range").onclick = (e) => { const b = e.target.closest("button[data-d]"); if (b) { chartDays = +b.dataset.d; chart(chartHist); } };
+  }
+  $("p-range").querySelectorAll("button").forEach((b) => b.classList.toggle("on", +b.dataset.d === chartDays));
+  const cutoff = chartDays ? new Date(Date.now() - chartDays * 864e5).toISOString().slice(0, 10) : "";
+  const h = hist.filter((p) => p[0] >= cutoff);
+  if (h.length < 2) { svg.innerHTML = `<text x="300" y="95" text-anchor="middle" fill="currentColor" opacity=".5" font-size="13">${hist.length < 2 ? "The chart fills in day by day — a point is saved every 6 hours." : "Not enough days in this range yet — try All."}</text>`; $("p-delta").textContent = ""; return; }
+  const W = 600, H = 180, L = 46, R = 6, T = 8, B = 18;
+  const vals = h.flatMap((p) => [p[1], p[2], p[3]]);
+  let lo = Math.min(0, ...vals), hi = Math.max(...vals, 1); const pad = (hi - lo) * 0.08; hi += pad; if (lo < 0) lo -= pad;
+  const x = (i) => L + i / (h.length - 1) * (W - L - R), y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  const pts = (idx) => h.map((p, i) => `${x(i).toFixed(1)},${y(p[idx]).toFixed(1)}`).join(" ");
+  let grid = "";
+  for (let i = 0; i <= 3; i++) { const v = lo + (hi - lo) * i / 3; grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="currentColor" opacity=".08"/><text x="${L - 5}" y="${y(v) + 3}" text-anchor="end" fill="currentColor" opacity=".5" font-size="9">${money(v)}</text>`; }
+  grid += `<text x="${L}" y="${H - 4}" fill="currentColor" opacity=".5" font-size="9">${h[0][0].slice(5)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end" fill="currentColor" opacity=".5" font-size="9">${h.at(-1)[0].slice(5)}</text>`;
+  svg.innerHTML = `<defs><linearGradient id="pfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cf6" stop-opacity=".45"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></linearGradient></defs>${grid}
+    <polygon fill="url(#pfill)" points="${x(0)},${y(Math.max(lo, 0))} ${pts(2)} ${x(h.length - 1)},${y(Math.max(lo, 0))}"/>
+    <polyline fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" points="${pts(1)}"/>
+    <polyline fill="none" stroke="#34f5a6" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts(3)}" style="filter:drop-shadow(0 0 4px #34f5a6)"/>
+    <polyline fill="none" stroke="#a78bfa" stroke-width="2.4" vector-effect="non-scaling-stroke" points="${pts(2)}" style="filter:drop-shadow(0 0 6px #8b5cf6)"/>
+    <line id="p-vl" y1="${T}" y2="${H - B}" stroke="currentColor" opacity="0" stroke-dasharray="3 4"/>`;
+  const first = h[0], last = h.at(-1), dv = (last[2] + last[3]) - (first[2] + first[3]);
+  $("p-delta").innerHTML = `${chartDays ? `Last ${chartDays} days` : "All time"}: <b class="${dv >= 0 ? "up" : "down"}">${dv >= 0 ? "+" : "−"}${money(Math.abs(dv))}</b> <span class="dim">(holdings if sold + realised)</span>`;
+  $("chart-note").textContent = `${h[0][0]} → ${h.at(-1)[0]}`;
+  const tip = $("p-tip"), vl = $("p-vl");
+  svg.onpointermove = (e) => {
+    const r = svg.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width * W;
+    const i = Math.max(0, Math.min(h.length - 1, Math.round((fx - L) / (W - L - R) * (h.length - 1)))), p = h[i];
+    vl.setAttribute("x1", x(i)); vl.setAttribute("x2", x(i)); vl.setAttribute("opacity", ".35");
+    tip.innerHTML = `<div class="dim">${p[0]}</div><div>If sold now <b>${money(p[2])}</b></div><div class="dim">Cost ${money(p[1])} · <span class="${p[2] - p[1] >= 0 ? "up" : "down"}">${p[2] - p[1] >= 0 ? "+" : "−"}${money(Math.abs(p[2] - p[1]))}</span></div><div>Realised <b class="up">${money(p[3])}</b></div>`;
+    tip.style.opacity = 1;
+    const tx = x(i) / W * r.width; tip.style.left = `${tx > r.width * 0.6 ? tx - tip.offsetWidth - 10 : tx + 10}px`; tip.style.top = "40px";
+  };
+  svg.onpointerleave = () => { tip.style.opacity = 0; vl.setAttribute("opacity", "0"); };
 }
 
 async function load() {
