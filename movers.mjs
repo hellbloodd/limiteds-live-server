@@ -59,6 +59,8 @@ export async function saleMovers(period, port) {
   const c = cache.get(period);
   if (c && Date.now() - c.t < 5 * 60e3) return c.d;
   const d = await build(period, port);
+  // right after a restart the sales aren't loaded yet: say so, and don't keep that answer
+  if (!d.rows.length && !d.trackedDays) return { ...d, error: "Sales are still loading after a restart — try again in a minute." };
   cache.set(period, { t: Date.now(), d });
   return d;
 }

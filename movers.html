@@ -81,7 +81,7 @@ async function load() {
 function draw() {
   try { localStorage.setItem("movers", JSON.stringify({ period, game: game.value, min: min.value, minp: minp.value })); } catch { /* private mode */ }
   const out = document.getElementById("out");
-  if (!data) { out.innerHTML = `<div class="empty">Couldn't load sales — try again in a moment.</div>`; return; }
+  if (!data || data.error) { out.innerHTML = `<div class="empty">${esc(data?.error || "Couldn't load sales — try again in a moment.")}</div>`; if (data?.error) setTimeout(load, 30000); return; }
   const g = game.value, mn = +min.value, mp = +minp.value;
   const rows = data.rows.filter((r) => (!g || r.game === g) && r.salesNow >= mn && r.salesBefore >= mn && Math.max(r.avgNow, r.avgBefore) >= mp);
   const gains = rows.filter((r) => r.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 25);
