@@ -3,9 +3,10 @@
 // time buying before an event and selling during it.
 import { curlGet } from "./mm2-values.mjs";
 import { loadWarm, saveWarm } from "./warm-store.mjs";
+import { eventWindow } from "./roblox-events.mjs";
 
 const PAGES = ["ancient", "godly", "chroma", "unique", "vintage", "legend", "rare", "uncommon", "common"];
-const EVENTS = { Halloween: { disp: "hallow", month: 9, day: 31 }, Christmas: { disp: "xmas", month: 11, day: 25 } };
+const EVENTS = { Halloween: { disp: "hallow", month: 9, day: 31, re: /hallow/i }, Christmas: { disp: "xmas", month: 11, day: 25, re: /christmas|xmas|winter|holiday/i } };
 const EVERY_MS = 6 * 3600 * 1000;
 let tags = { at: 0, names: {} }; // names[event] = Set of lowercase names
 
@@ -46,8 +47,12 @@ export function seasonsReport(items) {
       v7: i.changes?.["7d"]?.pct ?? null, v30: i.changes?.["30d"]?.pct ?? null, v1y: i.changes?.["1y"]?.pct ?? null, p7: i.priceChanges?.["7d"]?.pct ?? null, p30: i.priceChanges?.["30d"]?.pct ?? null,
     })).sort((a, b) => (b.value || 0) - (a.value || 0));
     const avg = (k) => { const v = list.map((x) => x[k]).filter((x) => x != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null; };
-    const date = nextDate(cfg);
-    events.push({ event, date: new Date(date).toISOString(), daysAway: Math.ceil((date - Date.now()) / 864e5), count: list.length,
+    // the real dates from MM2's Roblox event when there is one, otherwise the usual date
+    const rbx = eventWindow("MM2", cfg.re);
+    const date = rbx ? Date.parse(rbx.date) : nextDate(cfg), end = rbx?.end ? Date.parse(rbx.end) : null;
+    const live = date <= Date.now() && (!end || end >= Date.now());
+    events.push({ event, date: new Date(date).toISOString(), end: end ? new Date(end).toISOString() : null, live, source: rbx ? "roblox" : "usual date", title: rbx?.title || null,
+      daysAway: live ? 0 : Math.ceil((date - Date.now()) / 864e5), daysLeft: live && end ? Math.ceil((end - Date.now()) / 864e5) : null, count: list.length,
       avg: { v7: avg("v7"), v30: avg("v30"), v1y: avg("v1y"), p7: avg("p7"), p30: avg("p30") }, items: list });
   }
   return { updatedAt: tags.at ? new Date(tags.at).toISOString() : null, events: events.sort((a, b) => a.daysAway - b.daysAway) };

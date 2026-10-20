@@ -29,6 +29,14 @@
   .ev .tagg { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid color-mix(in srgb, var(--gc) 50%, transparent); color:#fff; }
   .ev .del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:12px; }
   .month { font:700 12px "Unbounded", sans-serif; color:var(--muted); margin:18px 0 10px -26px; letter-spacing:.05em; text-transform:uppercase; }
+  .games-now { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; margin:0 0 20px; }
+  .gn { padding:14px 16px; color:var(--text); text-decoration:none; border-top:3px solid var(--gc) !important; }
+  .gn-h { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+  .gn-tag { font-size:11px; color:#fde68a; }
+  .gn-live { margin-left:auto; font:700 11px "JetBrains Mono", monospace; color:#34f5a6; text-shadow:0 0 10px #34f5a6; animation:blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity:.4; } }
+  .gn-ev { font-weight:800; font-size:14px; margin:4px 0; }
+  .gn-news { font-size:12px; color:#d6d9f0; line-height:1.5; }
   .add { padding:16px; margin:18px 0; display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:10px; align-items:end; }
   .add label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .add .wide { grid-column:1 / -1; }
@@ -45,8 +53,9 @@
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
     <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab active" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
-  <section class="hero"><div><h1>Calendar</h1><p class="dim">Upcoming game updates and events, with countdowns. Prices usually move before and right after an update — plan buys and sales around them.</p></div></section>
-  <div class="ctl" id="ctl"><button data-g="" class="on">All</button><button data-g="MM2">MM2</button><button data-g="Blade Ball">Blade Ball</button><button data-g="Adopt Me">Adopt Me</button><button data-g="Steal a Brainrot">Steal a Brainrot</button><span style="width:10px"></span><button data-past="1" id="past-btn">Show past</button></div>
+  <section class="hero"><div><h1>Calendar</h1><p class="dim">Updates and events for every game, read from each game's official Roblox events and Roblox page every 2 hours, with countdowns. Prices usually move before and right after an update — plan buys and sales around them.</p></div></section>
+  <div class="ctl" id="ctl"><button data-g="" class="on">All</button><button data-g="MM2">MM2</button><button data-g="Blade Ball">Blade Ball</button><button data-g="Adopt Me">Adopt Me</button><button data-g="Steal a Brainrot">Steal a Brainrot</button><span style="width:10px"></span><button data-past="1" id="past-btn">Show past</button><button data-minor="1" id="minor-btn">Show weekly small events</button></div>
+  <div class="games-now" id="games-now"></div>
   <div id="out"><div class="empty">Loading…</div></div>
   <form class="card add" id="add" hidden>
     <label>Title<input name="title" required maxlength="80" placeholder="Halloween update part 2"></label>
@@ -63,7 +72,7 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const GC = { "MM2": "#8b5cf6", "Blade Ball": "#22d3ee", "Adopt Me": "#e879f9", "Steal a Brainrot": "#3b82f6", "Other": "#fbbf24" };
 const ownerKey = (() => { try { return localStorage.getItem("ownerKey") || ""; } catch { return ""; } })();
-let events = [], game = "", past = false;
+let events = [], games = {}, checkedAt = null, game = "", past = false, minor = false;
 
 function countdown(ms) {
   if (ms <= 0) return "now";
@@ -71,9 +80,27 @@ function countdown(ms) {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 
+// What each game's Roblox page says right now: an event tag in the name ("[🎃]"), the event lines
+// of the description, when it was last updated.
+function drawGames() {
+  const el = document.getElementById("games-now");
+  const list = Object.entries(games).filter(([g]) => !game || g === game);
+  if (!list.length) { el.innerHTML = ""; return; }
+  const now = Date.now();
+  el.innerHTML = list.map(([g, x]) => {
+    const live = events.filter((e) => e.game === g && e.source === "roblox" && !e.minor && Date.parse(e.date) <= now && (e.end ? Date.parse(e.end) >= now : now - Date.parse(e.date) < 864e5));
+    return `<a class="card gn" href="${esc(x.url)}" target="_blank" rel="noopener" style="--gc:${GC[g]}">
+      <div class="gn-h"><span class="tagg">${esc(g)}</span>${x.tag ? `<span class="gn-tag">${esc(x.tag)} event tag</span>` : ""}${live.length ? `<span class="gn-live">LIVE</span>` : ""}</div>
+      ${live.map((e) => `<div class="gn-ev">${esc(e.title)}${e.end ? ` <span class="dim">· ends in ${countdown(Date.parse(e.end) - now)}</span>` : ""}</div>`).join("")}
+      ${x.news?.length ? `<div class="gn-news">${x.news.map(esc).join("<br>")}</div>` : live.length ? "" : `<div class="dim" style="font-size:12px">No event announced on its Roblox page.</div>`}
+      <div class="dim" style="font-size:11px;margin-top:6px">Game updated ${new Date(x.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${Number(x.playing || 0).toLocaleString()} playing</div></a>`;
+  }).join("") + (checkedAt ? `<div class="dim" style="font-size:11px;grid-column:1/-1">Checked on Roblox ${new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</div>` : "");
+}
+
 function draw() {
   const now = Date.now();
-  const list = events.filter((e) => (!game || e.game === game) && (past || Date.parse(e.end || e.date) >= now - 864e5));
+  const list = events.filter((e) => (!game || e.game === game) && (minor || !e.minor) && (past || Date.parse(e.end || e.date) >= now - 864e5));
+  drawGames();
   let month = "";
   document.getElementById("out").innerHTML = list.length ? `<div class="timeline">${list.map((e) => {
     const t = Date.parse(e.date), end = e.end ? Date.parse(e.end) : null, live = t <= now && (end ? end >= now : now - t < 864e5);
@@ -84,19 +111,20 @@ function draw() {
       <div class="when">${new Date(t).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${end ? ` → ${new Date(end).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}</div>
       ${e.note ? `<div class="note">${esc(e.note)}</div>` : ""}
       <div class="when" style="margin-top:6px">${e.link ? `<a href="${esc(e.link)}" ${e.link.startsWith("/") ? "" : 'target="_blank" rel="noopener"'}>${e.link.startsWith("/") ? "Open" : "Details ↗"}</a>` : ""}
-      ${ownerKey && !e.auto ? ` <button class="del" data-id="${esc(e.id)}">Remove</button>` : ""}${e.auto ? ` <span class="dim">· added automatically</span>` : ""}</div></div>`;
+      ${ownerKey && !e.auto ? ` <button class="del" data-id="${esc(e.id)}">Remove</button>` : ""}${e.source === "roblox" ? ` <span class="dim">· from Roblox</span>` : e.auto ? ` <span class="dim">· usual date</span>` : ""}</div></div>`;
   }).join("")}</div>` : `<div class="empty">No upcoming events${game ? ` for ${esc(game)}` : ""}.${ownerKey ? " Add one below." : ""}</div>`;
 }
 
 async function load() {
   const d = await fetch("/api/calendar").then((r) => r.json()).catch(() => ({ events: [] }));
-  events = d.events || [];
+  events = d.events || []; games = d.games || {}; checkedAt = d.checkedAt;
   draw();
 }
 
 document.getElementById("ctl").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.past) { past = !past; b.classList.toggle("on", past); }
+  else if (b.dataset.minor) { minor = !minor; b.classList.toggle("on", minor); }
   else { game = b.dataset.g; document.querySelectorAll("#ctl button[data-g]").forEach((x) => x.classList.toggle("on", x === b)); }
   draw();
 });

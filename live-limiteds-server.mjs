@@ -36,6 +36,7 @@ import { handleToolsRequest, preloadItems, startPortfolioSnapshots } from "./too
 import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
 import { listEvents, addEvent, deleteEvent } from "./calendar.mjs";
+import { startRobloxEvents } from "./roblox-events.mjs";
 import { saleMovers, marketDeals, itemSales, startMoverAlerts } from "./movers.mjs";
 
 
@@ -155,7 +156,7 @@ const server = http.createServer(async (req, res) => {
       try {
         if (req.method === "GET") {
           const seasons = await (await fetch(`http://127.0.0.1:${PORT}/api/seasons`)).json().catch(() => null);
-          return sendJson(res, 200, { events: await listEvents(seasons) });
+          return sendJson(res, 200, await listEvents(seasons));
         }
         if (!process.env.OWNER_KEY || !isOwner(req)) return sendJson(res, 401, { error: "Only the owner can change the calendar (owner key)." });
         if (req.method === "DELETE") { await deleteEvent(parsedUrl.searchParams.get("id") || ""); return sendJson(res, 200, { ok: true }); }
@@ -248,6 +249,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   warmItems(PORT); // item search / alerts / portfolio list, always ready
   startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku
   startSeasons(); // Halloween / Christmas item lists from mm2values
+  startRobloxEvents(); // official Roblox events + game pages (Calendar, Seasons dates)
   warmFlips(PORT); warmDashboard(PORT); // Flip Finder data always ready
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));

@@ -258,8 +258,8 @@ getJson("/api/snipes").then((s) => {
 getJson("/api/seasons").then((d) => {
   const e = d?.events?.[0];
   if (!e) return;
-  document.getElementById("event").innerHTML = `<a href="/seasons"><div class="cd">${e.daysAway <= 0 ? "LIVE" : e.daysAway + "d"}</div>
-    <div class="lb">${e.event === "Halloween" ? "🎃" : "🎄"} ${e.event} ${e.daysAway <= 0 ? "is on" : "until " + new Date(e.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${e.count} MM2 items · avg value 30d
+  document.getElementById("event").innerHTML = `<a href="/seasons"><div class="cd">${e.live || e.daysAway <= 0 ? "LIVE" : e.daysAway + "d"}</div>
+    <div class="lb">${e.event === "Halloween" ? "🎃" : "🎄"} ${e.event} ${e.live || e.daysAway <= 0 ? `is on${e.daysLeft != null ? ` · ${e.daysLeft} days left` : ""}` : "until " + new Date(e.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${e.count} MM2 items · avg value 30d
     <span class="${(e.avg.v30 || 0) >= 0 ? "up" : "down"}">${e.avg.v30 == null ? "—" : (e.avg.v30 > 0 ? "+" : "") + e.avg.v30 + "%"}</span></div></a>`;
 });
 

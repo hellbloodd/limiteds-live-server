@@ -104,6 +104,7 @@ export async function marketDeals(port) {
       let left = n, cost = 0;
       for (const [p, u] of depth.offers) { const t = Math.min(u, left); cost += t * p; left -= t; if (!left) break; }
       if (left) break; // fewer units listed than that
+      if (cost / n < i.soldPrice * 0.3) break; // that cheap is a mis-tagged item or a scam, not a deal
       const resale = n * i.soldPrice * (1 - SELL_FEE), profit = resale - cost;
       if (profit > 0 && profit / cost >= 0.15 && (!bestN || profit > bestN.profit)) bestN = { n, cost: Math.round(cost * 100) / 100, profit: Math.round(profit * 100) / 100, roi: Math.round(profit / cost * 1000) / 10 };
     }
