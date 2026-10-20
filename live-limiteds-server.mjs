@@ -70,7 +70,7 @@ function sendJson(res, status, body) {
   const text = JSON.stringify(body);
   const req = res.req;
   const pathname = req ? req.url.split("?")[0] : "";
-  if (req?.method === "GET" && SHARED_TTL[pathname] && status === 200) {
+  if (req?.method === "GET" && SHARED_TTL[pathname] && status === 200 && !body?.error) { // never keep a "still loading" answer
     const gz = text.length > 20000 ? gzipSync(text, { level: 6 }) : null;
     const c = { t: Date.now(), ttl: SHARED_TTL[pathname], status, text, gz, etag: `"${createHash("sha1").update(text).digest("base64url").slice(0, 20)}"` };
     shared.set(req.url, c);
