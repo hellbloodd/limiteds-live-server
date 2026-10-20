@@ -1,7 +1,8 @@
 // Biggest gains / drops in average sale price: for each item, the average price of confirmed Eldorado
 // sales in the last period (24h, 3d, 7d, 14d) vs the period before it. Sale events are [unix s, usd, qty];
 // each sale counts once (a bulk listing of 999 cheap units doesn't outweigh real sales), and with 5+
-// sales the top and bottom 10% are dropped so one odd sale can't fake a move. Cached 5 minutes.
+// sales the top and bottom 10% are dropped so one odd sale can't fake a move; sales 4x away from the
+// item's median sale are ignored. Cached 5 minutes.
 import { mm2MarketData } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
@@ -29,8 +30,13 @@ async function build(period, port) {
   for (const [game, get] of Object.entries(DATA)) {
     for (const [key, list] of Object.entries(get().sales || {})) {
       const recent = [], before = [];
+      // sales far from the item's typical sale price (4x above or below the median of all its sales)
+      // are troll / mis-tagged listings, not the market moving
+      const all = list.map((e) => e[1]).filter((u) => u > 0).sort((x, y) => x - y);
+      const mid = all[all.length >> 1];
       for (const [ts, usd] of list) {
         if (ts < oldest) oldest = ts;
+        if (!(usd > 0) || usd > mid * 4 || usd < mid / 4) continue;
         if (ts >= now - span) recent.push(usd);
         else if (ts >= now - 2 * span) before.push(usd);
       }

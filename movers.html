@@ -99,7 +99,7 @@ function draw() {
       <section class="card col up-c"><h2>🚀 Biggest gains <span class="dim" style="font:500 12px Manrope">${gains.length}</span></h2>${list(gains, "up")}</section>
       <section class="card col down-c"><h2>📉 Biggest drops <span class="dim" style="font:500 12px Manrope">${drops.length}</span></h2>${list(drops, "down")}</section>
     </div>
-    <p class="note">Average sale price of the ${LABEL[period]} vs ${PREV[period]}, from confirmed Eldorado sales (a listing that disappears and doesn't come back within 3 hours). Each sale counts once, and with 5+ sales the highest and lowest 10% are left out, so one odd sale can't fake a move. ${rows.length} items had sales in both periods with these filters.</p>`;
+    <p class="note">Average sale price of the ${LABEL[period]} vs ${PREV[period]}, from confirmed Eldorado sales (a listing that disappears and doesn't come back within 3 hours). Each sale counts once; sales 4× above or below the item's usual sale price are ignored, and with 5+ sales the highest and lowest 10% are left out, so one odd sale can't fake a move. ${rows.length} items had sales in both periods with these filters.</p>`;
 }
 document.getElementById("ctl").addEventListener("click", (e) => { const b = e.target.closest("button[data-p]"); if (!b) return; period = b.dataset.p; load(); });
 for (const id of ["game", "min", "minp"]) document.getElementById(id).addEventListener("change", draw);
