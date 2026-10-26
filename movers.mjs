@@ -13,6 +13,7 @@ import { cheapestElsewhere } from "./markets.mjs";
 import { listingDepth } from "./updater.mjs";
 import { post, SITE, fmt } from "./deals.mjs";
 import { notifyPhones } from "./push.mjs";
+import { secondValues } from "./second-source.mjs";
 
 const DATA = { "MM2": mm2MarketData, "Blade Ball": bbMarketData, "Adopt Me": amMarketData, "Steal a Brainrot": sbMarketData };
 export const PERIODS = { "24h": 1, "3d": 3, "7d": 7, "14d": 14 };
@@ -77,6 +78,48 @@ export function itemSales(game, key) {
   return list.filter((e) => saleUnits(e[2])).map(([ts, usd, qty]) => [ts, usd, saleUnits(qty)]);
 }
 
+
+// ---------- fair price across all games (Deals page: "Under fair price" / "Overpriced") ----------
+// Same rule as the item pages: fair = value x the median $-per-value of the 15 items closest in value
+// (items with 2+ listings); compared with the cheapest listing anywhere. The second value site's opinion
+// is attached, and a deal it disputes (it values the item 50%+ lower) is marked.
+const GAME_APIS = [["MM2", "/api/mm2", "/mm2"], ["Blade Ball", "/api/bladeball", "/bladeball"], ["Adopt Me", "/api/adoptme", "/adoptme"], ["Steal a Brainrot", "/api/stealabrainrot", "/stealabrainrot"]];
+async function fairRows(port) {
+  const rows = [];
+  for (const [game, api, page] of GAME_APIS) {
+    const data = await (await fetch(`http://127.0.0.1:${port}${api}`)).json().catch(() => ({ items: [] }));
+    const items = data.items || [];
+    const sv = secondValues(game);
+    const priced = items.filter((i) => i.value > 0 && i.usd > 0 && !i.valueText && (i.listings || 0) >= 2)
+      .map((i) => ({ lv: Math.log(i.value), r: i.usd / i.value, key: i.key })).sort((a, b) => a.lv - b.lv);
+    if (priced.length < 8) continue;
+    for (const i of items) {
+      if (!(i.value > 0) || i.valueText) continue;
+      const offers = [...(i.usd > 0 && i.eldoradoUrl ? [["Eldorado", i.usd, i.eldoradoUrl]] : []), ...(i.others || [])].sort((a, b) => a[1] - b[1]);
+      if (!offers.length) continue;
+      // 15 nearest by value: binary search, then widen both ways
+      const lv = Math.log(i.value);
+      let lo = 0, hi = priced.length;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (priced[m].lv < lv) lo = m + 1; else hi = m; }
+      let a = lo - 1, b = lo; const near = [];
+      while (near.length < 15 && (a >= 0 || b < priced.length)) {
+        const pick = b >= priced.length || (a >= 0 && lv - priced[a].lv <= priced[b].lv - lv) ? priced[a--] : priced[b++];
+        if (pick.key !== i.key) near.push(pick.r);
+      }
+      near.sort((x, y) => x - y);
+      const fair = i.value * near[near.length >> 1];
+      const best = offers[0];
+      const under = Math.round((1 - best[1] / fair) * 100), save = fair - best[1];
+      if (under > -25 && under < 15) continue;
+      const x = sv?.items?.[i.key];
+      rows.push({ game, page, key: i.key, name: i.name, image: i.image, category: i.category, value: i.value, fair: Math.round(fair * 100) / 100,
+        buy: best[1], market: best[0], url: best[2], under, save: Math.round(save * 100) / 100, suspect: best[1] < fair * 0.3,
+        v2: x ? x[0] : null, diff: x ? x[1] : null, source2: sv?.source || null, listings: i.listings || 0, sold7d: i.sold7d || 0, soldPrice: i.soldPrice || null });
+    }
+  }
+  return rows;
+}
+
 // ---------- deals measured against what items actually sell for ----------
 // under: cheapest listing anywhere well below the typical (median) sale price of the last 7 days.
 // bulk: buying the cheapest 3 / 5 / 10 units (from the last Eldorado check) and reselling them at the
@@ -113,7 +156,10 @@ export async function marketDeals(port) {
   }
   under.sort((a, b) => b.profit - a.profit);
   bulk.sort((a, b) => b.profit - a.profit);
-  const d = { at: new Date().toISOString(), fee: SELL_FEE, under: under.slice(0, 150), bulk: bulk.slice(0, 150) };
+  const fair = await fairRows(port).catch(() => []);
+  const d = { at: new Date().toISOString(), fee: SELL_FEE, under: under.slice(0, 150), bulk: bulk.slice(0, 150),
+    fairUnder: fair.filter((r) => r.under >= 15 && r.save >= 0.5).sort((a, b) => b.save - a.save).slice(0, 300),
+    fairOver: fair.filter((r) => r.under <= -25 && r.buy >= 1).sort((a, b) => a.under - b.under).slice(0, 200) };
   if (items.length) dealsCache = { t: Date.now(), d };
   return d;
 }

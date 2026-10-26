@@ -37,6 +37,7 @@ import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
 import { listEvents, addEvent, deleteEvent } from "./calendar.mjs";
 import { startRobloxEvents } from "./roblox-events.mjs";
+import { secondValues, startSecondValues } from "./second-source.mjs";
 import { mm2MarketData } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
@@ -53,7 +54,7 @@ const SERVER_VERSION = "agony-values-2";
 // Public answers that are the same for everyone are kept (already compressed) for a short while, so
 // a page load doesn't rebuild and re-gzip several MB each time. Owner-only routes are never cached.
 const SHARED_TTL = { "/api/mm2": 30e3, "/api/bladeball": 30e3, "/api/adoptme": 30e3, "/api/stealabrainrot": 30e3, "/api/trade-items": 60e3,
-  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3, "/api/sale-movers": 120e3, "/api/market-deals": 120e3 };
+  "/api/seasons": 300e3, "/api/flips": 30e3, "/api/dashboard": 60e3, "/api/currency": 30e3, "/api/item-search": 60e3, "/api/sale-movers": 120e3, "/api/market-deals": 120e3, "/api/second-values": 300e3 };
 const shared = new Map(); // url -> { t, ttl, status, text, gz, etag }
 const BASE_HEADERS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
@@ -107,7 +108,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (serveShared(req, res, parsedUrl.pathname)) return;
     // Phone app: installable (manifest + service worker + icons) with push notifications
-    const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/glass.css": ["glass.css", "text/css"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
+    const STATIC = { "/sw.js": ["sw.js", "text/javascript"], "/app.js": ["app.js", "text/javascript"], "/glass.css": ["glass.css", "text/css"], "/deals-tabs.js": ["deals-tabs.js", "text/javascript"], "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"] };
     const icon = /^\/icons\/([a-z0-9-]+\.png)$/.exec(parsedUrl.pathname);
     if (STATIC[parsedUrl.pathname] || icon) {
       const [file, type] = STATIC[parsedUrl.pathname] || [`icons/${icon[1]}`, "image/png"];
@@ -156,6 +157,7 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === "/api/sale-movers") return sendJson(res, 200, await saleMovers(parsedUrl.searchParams.get("period") || "24h", PORT));
     if (parsedUrl.pathname === "/api/market-deals") return sendJson(res, 200, await marketDeals(PORT));
     if (parsedUrl.pathname === "/api/sales") return sendJson(res, 200, { sales: itemSales(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
+    if (parsedUrl.pathname === "/api/second-values") return sendJson(res, 200, secondValues(parsedUrl.searchParams.get("game") || "") || { items: {} });
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
     // price alerts (owner only)
@@ -258,6 +260,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku
   startSeasons(); // Halloween / Christmas item lists from mm2values
   startRobloxEvents(); // official Roblox events + game pages (Calendar, Seasons dates)
+  startSecondValues(PORT); // a second value site per game (game.guide / robloxtools) as a cross-check
   warmFlips(PORT); warmDashboard(PORT); // Flip Finder data always ready
   // Discord alert when a game's prices/values go stale or the sniper stops (and when it's fixed)
   startHealthAlerts(() => ({ updater: updaterStatus(), sniper: sniperStatus(), errors: recentErrors }));

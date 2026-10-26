@@ -94,7 +94,10 @@ function filterRows(body, q) {
 
 // Returns true if the request was handled.
 export async function handleFlipsRequest(url, res, sendJson, port) {
-  if (url.pathname === "/flips" || url.pathname === "/flips/") {
+  // the old pages now live as tabs of /deals
+  const old = { "/flips": "flips", "/movers": "movers", "/gaps": "fair" }[url.pathname.replace(/\/$/, "")];
+  if (old) { res.writeHead(302, { Location: `/deals#${old}` }); res.end(); return true; }
+  if (url.pathname === "/deals" || url.pathname === "/deals/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await readFile(join(HERE, "flips.html"), "utf8"));
     return true;

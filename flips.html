@@ -8,7 +8,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="icon" href="/icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Agony Values">
 <script src="/app.js" defer></script>
-<title>Flip Finder · Agony Values</title>
+<title>Deals · Agony Values</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
 <style>
@@ -206,8 +206,8 @@
 
   <section class="hero">
     <div>
-      <h1>Flip Finder</h1>
-      <p class="dim">Items you could buy at the cheapest Eldorado listing and relist just under the next one, after the seller fee.</p>
+      <h1>Deals</h1>
+      <p class="dim" id="deals-sub">Every way to find an underpriced item, in one place: flips and snipes, items under their fair price, listings under recent sales, bulk buys and the biggest sale-price moves.</p>
     </div>
     <div class="tiles">
       <div class="tile"><span>Flips found</span><b id="t-count" class="tabular">—</b><small id="t-count-sub">&nbsp;</small></div>
@@ -215,6 +215,10 @@
       <div class="tile"><span>Prices updated</span><b id="t-updated" class="tabular">—</b><small>every 15 min · or refresh now</small></div>
     </div>
   </section>
+  <div class="deal-tabs" id="deal-tabs">
+    <a href="#flips" data-t="flips">💸 Flips &amp; snipes</a><a href="#fair" data-t="fair">💎 Under fair price</a><a href="#under" data-t="under">🏷️ Under recent sales</a><a href="#bulk" data-t="bulk">📦 Bulk buys</a><a href="#movers" data-t="movers">📈 Sale movers</a>
+  </div>
+  <div id="v-flips">
 
   <div class="panel">
     <div class="field grow"><label for="q">Search</label><input id="q" type="search" placeholder="Search items…" autocomplete="off"></div>
@@ -257,6 +261,8 @@
     </div>
     <div id="rows"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
   </div>
+  </div>
+  <div id="v-other" hidden></div>
 </div>
 
 <dialog id="card"><button class="close" type="button" onclick="card.close()" aria-label="Close">×</button><div id="card-body"></div></dialog>
@@ -487,5 +493,6 @@ $("refresh").addEventListener("click", async () => {
   done(fresh.size === games.length ? "Every offer re-checked ✓" : `Updated ${[...fresh].join(", ") || "nothing yet"} — the rest will appear shortly.`);
 });
 </script>
+<script src="/deals-tabs.js" defer></script>
 </body>
 </html>

@@ -286,6 +286,9 @@
     .t-num { text-align:left; font-size:12.5px; }
     .t-num::before { content:attr(data-l); display:block; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   }
+  .v2 { font-size:10.5px; color:var(--muted); margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .v2.ok { color:#6ee7b7; }
+  .v2.warn { color:#fbbf24; }
   .flip { margin-top:7px; font-size:11.5px; padding:5px 9px; border-radius:10px; background:rgba(52,245,166,.07); border:1px solid rgba(52,245,166,.25); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .flip b { color:#34f5a6; font:700 12px "JetBrains Mono", monospace; text-shadow:0 0 8px rgba(52,245,166,.4); }
   .st-row { display:flex; align-items:center; gap:8px; font-size:13px; }
@@ -456,7 +459,16 @@ function computeDeals() {
 }
 // One definition of a deal everywhere (badge, filter, hero): the cheapest listing anywhere is $1+ and
 // 20%+ under the fair price, and not so cheap that it's probably a different item or a scam.
-const isDeal = (i) => i.under >= 20 && i.save >= 1 && !i.suspect;
+const isDeal = (i) => i.under >= 20 && i.save >= 1 && !i.suspect && !(i.diff <= -50);
+// a second value site per game, as a cross-check (game.guide / robloxtools)
+let second = null;
+const disputed = (i) => i.diff != null && Math.abs(i.diff) >= 50;
+function secondLine(i, short = false) {
+  if (i.v2 == null || !second) return "";
+  const d = i.diff, src = esc(second.source);
+  if (Math.abs(d) < 15) return `<div class="v2 ok" title="${src} values it at ${fmt(i.v2)} in this site's units">✓ ${src} agrees</div>`;
+  return `<div class="v2${disputed(i) ? " warn" : ""}" title="${src} values it at ${fmt(i.v2)} (converted to this site's units)">${disputed(i) ? "⚠ " : ""}${src}: ${fmt(i.v2)} (${d > 0 ? "+" : ""}${d}%)</div>`;
+}
 // "Rising, price lagging": the value went up recently (+10% in 24h or +20% in 7 days) but the item
 // is still cheap on Eldorado compared with similar-value items - sellers haven't repriced yet.
 // Blade Ball: cheaper than buying the same value in tokens (Eldorado's recommended token price).
@@ -482,7 +494,9 @@ let lastUpdatedAt = null;
 let lastPricesAt = null;
 async function load() {
   try {
-    const data = await fetch(GAME.api).then((r) => r.json());
+    const [data, sv] = await Promise.all([fetch(GAME.api).then((r) => r.json()),
+      fetch(`/api/second-values?game=${encodeURIComponent(GAME_NAME[GAME.tab])}`).then((r) => r.json()).catch(() => null)]);
+    second = sv?.matched ? sv : null;
     lastUpdatedAt = data.updatedAt;
     lastPricesAt = data.pricesUpdatedAt;
     items = data.items || [];
@@ -492,8 +506,10 @@ async function load() {
     const cat = $("cat");
     if (cat.options.length === 3) for (const c of data.categories) cat.add(new Option(catLabel(c), c));
     $("stats").innerHTML = `<span><b>${items.length}</b> items</span><span>Updated <b>${new Date(data.updatedAt).toLocaleTimeString()}</b></span><span>Values from <a href="${esc(GAME.sourceUrl)}" target="_blank" rel="noopener">${esc(data.source)}</a></span>${data.pricesUpdatedAt ? `<span>Prices from <a href="${esc(GAME.shopUrl)}" target="_blank" rel="noopener">Eldorado.gg</a> · ${new Date(data.pricesUpdatedAt).toLocaleTimeString()}</span><span>Typical: <b>${fmtVpd(medianVpd)}</b> value per $</span>` : ""}${data.tokenRate ? `<span title="Cheapest of all marketplaces on the Currency page${data.tokenRate.eldoradoPer1k ? ` (Eldorado recommended: $${data.tokenRate.eldoradoPer1k.toFixed(2)} / 1k)` : ""}">🪙 Tokens: <b>$${data.tokenRate.per1k.toFixed(2)}</b> / 1k on <a href="${esc(data.tokenRate.url || "/currency")}" target="_blank" rel="noopener">${esc(data.tokenRate.market || "Eldorado")}</a> · <b>${data.tokenRate.perUsd}</b> per $ · <a href="/currency">compare</a></span>` : ""}`;
+    if (second) $("stats").insertAdjacentHTML("beforeend", `<span title="Values compared with a second site; its numbers are converted to this site's units">Cross-checked with <a href="${esc(second.url)}" target="_blank" rel="noopener">${esc(second.source)}</a>: <b>${second.matched}</b> items, typical gap <b>${second.medianGap}%</b></span>`);
     tokenPerUsd = data.tokenRate?.perUsd || 0;
     if (tokenPerUsd && !$("cat").querySelector('option[value="tokens"]')) $("cat").querySelector('option[value="rising"]').insertAdjacentHTML("afterend", '<option value="tokens">🪙 Cheaper than tokens</option>');
+    for (const i of data.items || []) { const x = second?.items?.[i.key]; i.v2 = x ? x[0] : null; i.diff = x ? x[1] : null; }
     computeDeals();
     computeFair();
     fillHero(data);
@@ -581,6 +597,7 @@ const VIEW_KEY = `view:${GAME.tab}`;
 let view = (() => { try { return localStorage.getItem(VIEW_KEY); } catch { return null; } })() || (GAME.tab === "stealabrainrot" ? "table" : "cards");
 function dealBadge(i) {
   if (i.under == null) return `<span class="dim">—</span>`;
+  if (i.under >= 20 && i.save >= 1 && i.diff <= -50) return `<span class="db warn" title="${esc(second?.source || "")} values it ${-i.diff}% lower — the discount may not be real">⚠ ${i.under}% under · disputed</span>`;
   if (i.suspect) return `<span class="db warn" title="Far under similar items — often a mis-tagged item or a scam; check the listing">⚠ ${i.under}% under · check</span>`;
   if (i.under >= 40 && i.save >= 1) return `<span class="db big">🔥 save ${usd(i.save)} · ${i.under}%</span>`;
   if (i.under >= 20 && i.save >= 1) return `<span class="db good">DEAL save ${usd(i.save)} · ${i.under}%</span>`;
@@ -592,7 +609,7 @@ function rowHtml(i, n) {
   return `<div class="trow" data-key="${esc(i.key)}">
     <span class="t-rank">${n + 1}</span>
     <div class="t-item"><img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><div style="min-width:0"><div class="name">${esc(i.name)}</div><div class="cat">${esc(catLabel(i.category))}${demand ? ` · demand ${esc(demand)}` : ""}</div></div></div>
-    <div class="t-num" data-l="Value"><b>${i.valueText ? esc(i.valueText) : fmt(i.value)}</b>${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
+    <div class="t-num" data-l="Value"><b>${i.valueText ? esc(i.valueText) : fmt(i.value)}</b>${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}${secondLine(i)}</div>
     <div class="t-num" data-l="Fair price">${i.fair ? usd(i.fair) : "—"}</div>
     <div class="t-num" data-l="Cheapest">${i.best ? `<a class="mk" href="${esc(i.best[2])}" target="_blank" rel="noopener" style="--mc:${MARKET_COLORS[i.best[0]] || "#8b5cf6"}"><i></i>${esc(i.best[0])} <b>${usd(i.best[1])}</b></a>` : `<span class="dim">not listed</span>`}</div>
     <div class="t-num" data-l="Deal">${dealBadge(i)}</div>
@@ -649,7 +666,7 @@ function render() {
       <div class="c-mid">
         <div>
           <div class="val tabular${i.valueText ? " ratio" : ""}">${i.valueText ? esc(i.valueText) : fmt(i.value)}${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
-          <div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">${/not valued/i.test(i.valueText) ? "Price tracked, value coming" : "Trade value"}</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
+          ${secondLine(i)}<div class="chg tabular ${cls(chg(i)?.abs)}">${i.valueText ? `<span class="dim">${/not valued/i.test(i.valueText) ? "Price tracked, value coming" : "Trade value"}</span>` : `<span class="dim">${period}</span> ${changeText(chg(i))}`}</div>
         </div>
         ${spark(i.spark)}
       </div>
@@ -691,6 +708,7 @@ function tags(i) {
   const out = [];
   if (isDeal(i)) out.push(`<span class="badge" title="${usd(i.best[1])} on ${esc(i.best[0])} vs a fair price of ${usd(i.fair)}">🔥 SAVE ${usd(i.save)}</span>`);
   else if (i.suspect) out.push(`<span class="badge token" title="Far cheaper than similar items: often a different item matched by name, or a scam listing">⚠ CHECK</span>`);
+  else if (i.under >= 20 && i.save >= 1 && i.diff <= -50) out.push(`<span class="badge token" title="Cheap for this site's value, but ${esc(second?.source || "the second source")} values it ${-i.diff}% lower">⚠ DISPUTED</span>`);
   if (beatsTokens(i)) {
     const per1k = i.usd / i.value * 1000, market = 1000 / tokenPerUsd;
     out.push(`<span class="badge token" title="This item costs $${per1k.toFixed(2)} per 1k tokens of value — 1k tokens cost $${market.toFixed(2)} on the cheapest marketplace (${(market / per1k).toFixed(1)}× more)">🪙 $${per1k < 1 ? per1k.toFixed(2) : per1k.toFixed(per1k < 10 ? 2 : 1)}/1k</span>`);
@@ -850,6 +868,7 @@ async function openItem(key) {
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
     ${priceVsRow(i)}
+    ${second && i.v2 != null ? `<dt>Second source</dt><dd class="tabular">${esc(second.source)}: <b>${fmt(i.v2)}</b> in this site's units <span class="${disputed(i) ? "down" : "dim"}">(${i.diff > 0 ? "+" : ""}${i.diff}%)</span> · <a href="${esc(second.url)}" target="_blank" rel="noopener">open</a></dd>` : ""}
     ${(i.others || []).length ? `<dt>Cheapest anywhere</dt><dd>${marketLinks(i, 9)}</dd>` : ""}
     <dt>Sold on Eldorado</dt><dd class="tabular">${i.sold7d ? `${fmt(i.sold24h)} in 24h · ${fmt(i.sold7d)} in 7d${i.soldPrice ? ` · typical sale ${usd(i.soldPrice)}` : ""}` : `<span class="dim">none seen yet — sales are tracked from now on</span>`}</dd>
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}

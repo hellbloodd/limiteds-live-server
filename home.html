@@ -140,7 +140,7 @@
   <nav class="tabs">
     <a class="tab active" href="/">🏠 Home</a><a class="tab" href="/favourites">★ Favourites</a><a class="tab" href="/mm2">MM2 Values</a><a class="tab" href="/bladeball">Blade Ball Values</a>
     <a class="tab" href="/adoptme">Adopt Me Values</a><a class="tab" href="/stealabrainrot">Steal a Brainrot Values</a>
-    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
+    <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/deals#fair">📊 Gaps</a><a class="tab" href="/deals#movers">📈 Movers</a><a class="tab" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/deals#flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
 
   <div class="dg">
@@ -170,7 +170,7 @@
     </section>
 
     <section class="panel c-flips">
-      <div class="ph"><h3>💸 Top flips</h3><a href="/flips">Flip Finder →</a></div>
+      <div class="ph"><h3>💸 Top flips</h3><a href="/deals#flips">Flip Finder →</a></div>
       <div class="bars" id="flips"><div class="empty-s">Finding flips…</div></div>
       <div class="note">Buy the cheapest, relist under the next seller · 10% fee</div>
     </section>
@@ -193,9 +193,9 @@
   <h2 class="sec">Tools</h2>
   <div class="links">
     <a class="card tile-link" href="/trade"><span class="em">⚖️</span><b>Trade calculator</b><span>Is it a win? Value and real price of both sides</span></a>
-    <a class="card tile-link" href="/gaps"><span class="em">📊</span><b>Value vs price gaps</b><span>Items priced far under or over their value</span></a>
+    <a class="card tile-link" href="/deals#fair"><span class="em">📊</span><b>Value vs price gaps</b><span>Items priced far under or over their value</span></a>
     <a class="card tile-link" href="/seasons"><span class="em">🎃</span><b>Seasons</b><span>Halloween & Christmas items: when to buy and sell</span></a>
-    <a class="card tile-link" href="/flips"><span class="em">💸</span><b>Flip Finder</b><span>Buy cheap, relist under the next seller, with snipes</span></a>
+    <a class="card tile-link" href="/deals#flips"><span class="em">💸</span><b>Flip Finder</b><span>Buy cheap, relist under the next seller, with snipes</span></a>
     <a class="card tile-link" href="/currency"><span class="em">💱</span><b>Currency</b><span>Blade Ball tokens and Robux on every marketplace</span></a>
     <a class="card tile-link" href="/alerts"><span class="em">🔔</span><b>Price alerts</b><span>Discord + phone ping when an item hits your price</span></a>
     <a class="card tile-link" href="/watch"><span class="em">🏷️</span><b>My Listings</b><span>Undercut alerts for your Eldorado shop</span></a>
@@ -364,7 +364,7 @@ getJson("/api/sale-movers?period=24h").then((d) => {
   const up = rows.filter((r) => r.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 3), dn = rows.filter((r) => r.pct < 0).sort((a, b) => a.pct - b.pct).slice(0, 3);
   if (!up.length && !dn.length) return;
   const li = (r) => `<a class="li" href="${PAGE[r.game]}?item=${encodeURIComponent(r.key)}"><img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><span>${esc(r.name)}</span><b class="${r.pct > 0 ? "up" : "down"}">${r.pct > 0 ? "+" : ""}${r.pct}%</b></a>`;
-  mini("movers", `<div class="ph"><h3>📈 Sale movers · 24h</h3><a href="/movers">all →</a></div>${up.map(li).join("")}${dn.map(li).join("")}<div class="sub">average Eldorado sale price vs the day before</div>`);
+  mini("movers", `<div class="ph"><h3>📈 Sale movers · 24h</h3><a href="/deals#movers">all →</a></div>${up.map(li).join("")}${dn.map(li).join("")}<div class="sub">average Eldorado sale price vs the day before</div>`);
 });
 if (ownerKey) {
   owner("/api/holdings").then((d) => d && mini("portfolio", `<div class="ph"><h3>💼 Portfolio</h3><a href="/portfolio">open →</a></div><div class="big">${$m(d.totals.sellNow)}</div>
