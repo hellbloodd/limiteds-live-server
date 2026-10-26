@@ -104,7 +104,7 @@
     $("deals-sub").textContent = SUB[t];
     const flips = t === "flips";
     $("v-flips").hidden = !flips;
-    document.querySelector(".hero .tiles")?.toggleAttribute("hidden", !flips);
+    const tiles = document.querySelector(".hero .tiles"); if (tiles) tiles.style.display = flips ? "" : "none";
     const out = $("v-other");
     out.hidden = flips;
     if (flips) return;

@@ -1,9 +1,9 @@
 // Agony Values service worker: makes the site installable and shows push notifications.
 // Pushes arrive empty (no payload), so we ask the server what the latest alert was.
-// Offline-ready: pages and the theme files open instantly from the last copy and update in the
-// background; public data is fetched fresh (3.5 s limit) and falls back to the last copy when offline
-// or slow. Private (owner) requests are never stored.
-const CACHE = "av-v2";
+// Offline-ready: pages, scripts and public data are fetched fresh (3.5 s limit) and fall back to the
+// last saved copy when offline or slow; icons and fonts come from the saved copy and update in the
+// background. Private (owner) requests are never stored.
+const CACHE = "av-v3";
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
@@ -35,7 +35,10 @@ async function networkFirst(e) {
     if (r !== "slow") return r;
     return (await caches.match(e.request)) || (await fresh);
   } catch {
-    return (await caches.match(e.request)) || new Response(JSON.stringify({ error: "You're offline and this wasn't saved yet." }), { status: 503, headers: { "Content-Type": "application/json" } });
+    const cached = await caches.match(e.request);
+    if (cached) return cached;
+    if (e.request.mode === "navigate") return OFFLINE();
+    return new Response(JSON.stringify({ error: "You're offline and this wasn't saved yet." }), { status: 503, headers: { "Content-Type": "application/json" } });
   }
 }
 
@@ -45,7 +48,9 @@ self.addEventListener("fetch", (e) => {
   if (url.origin === location.origin) {
     if (url.pathname.startsWith("/api/push") || url.pathname === "/api/status" || url.searchParams.has("fresh")) return;
     if (url.pathname.startsWith("/api/")) return e.respondWith(networkFirst(e));
-    if (req.mode === "navigate" || /\.(css|js|png|webmanifest)$/.test(url.pathname)) return e.respondWith(staleWhileRevalidate(e));
+    // pages and scripts: fresh when online (so a new version shows at once), the saved copy when offline or slow
+    if (req.mode === "navigate" || /\.(css|js|webmanifest)$/.test(url.pathname)) return e.respondWith(networkFirst(e));
+    if (/\.png$/.test(url.pathname)) return e.respondWith(staleWhileRevalidate(e));
     return;
   }
   if (/fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) e.respondWith(staleWhileRevalidate(e));
