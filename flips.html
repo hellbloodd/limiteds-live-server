@@ -239,7 +239,7 @@
     <div class="field"><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer;white-space:nowrap"><input type="checkbox" id="showUnproven" style="width:auto;padding:0"> Show unproven flips</label></div>
     <div class="field"><label>&nbsp;</label><button class="refresh" id="refresh" type="button"><span class="ico">↻</span> Refresh now</button></div>
     <div class="msg" id="refresh-status" style="flex-basis:100%;font-size:12px"></div>
-    <div class="note">Set the seller fee to what Eldorado charges you. Profit = realistic relist price × (1 − fee) − buy price. The realistic relist price is 1¢ under the next listing, but never above what the item sold for this week (+10%), or, with too few sales, above its fair price (+25%) — the next listing is often a troll or wishful price. Flips with no sales and no value to check against are hidden unless you tick "Show unproven".</div>
+    <div class="note">Set the seller fee to what Eldorado charges you. Profit = realistic relist price × (1 − fee) − buy price. The realistic relist price is 1¢ under the next listing, but never above what the item sold for this week (+10%), or, with too few sales, above its fair price (+25%) or double the cheapest listing — the next listing is often a troll or wishful price. Flips with no sales and no value to check against are hidden unless you tick "Show unproven".</div>
   </div>
 
   <section class="snipes" id="snipes" hidden>
@@ -301,9 +301,13 @@ function realism(r) {
       : { relist: cap, real: "capped-sales", listing, note: `capped at recent sales (${money(r.soldPrice)})` };
   }
   if (r.fair > 0) {
-    const cap = r.fair * 1.25;
+    // value alone is weaker evidence: also at most double the cheapest listing, and under the
+    // typical sale +25% when there were 1-2 sales
+    const caps = [[r.fair * 1.25, `fair price (${money(r.fair)})`], [r.usd * 2, "2× the cheapest listing"]];
+    if (r.soldPrice > 0 && r.sold7d > 0) caps.push([r.soldPrice * 1.25, `recent sales (${money(r.soldPrice)})`]);
+    const [cap, why] = caps.sort((a, b) => a[0] - b[0])[0];
     return listing <= cap ? { relist: listing, real: "value", note: `fair price ${money(r.fair)}` }
-      : { relist: cap, real: "capped-value", listing, note: `capped at fair price (${money(r.fair)})` };
+      : { relist: cap, real: "capped-value", listing, note: `capped at ${why}` };
   }
   const third = r.ladder?.[2];
   if (third && r.second >= third * 0.95) return { relist: listing, real: "ladder", note: "next listings agree on this price" };

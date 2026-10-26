@@ -348,7 +348,7 @@ function drawTrend(d, on) {
 function realRelist(r) {
   const listing = r.second - 0.01;
   if (r.sold7d >= 3 && r.soldPrice > 0) return Math.min(listing, r.soldPrice * 1.1);
-  if (r.fair > 0) return Math.min(listing, r.fair * 1.25);
+  if (r.fair > 0) return Math.min(listing, r.fair * 1.25, r.usd * 2, r.soldPrice > 0 && r.sold7d > 0 ? r.soldPrice * 1.25 : Infinity);
   return r.ladder?.[2] && r.second >= r.ladder[2] * 0.95 ? listing : null;
 }
 getJson("/api/flips?fee=10&minProfit=1&minRoi=10&minListings=3&minSold=1").then((d) => {
