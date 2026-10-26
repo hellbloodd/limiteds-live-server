@@ -114,7 +114,8 @@ const server = http.createServer(async (req, res) => {
       const [file, type] = STATIC[parsedUrl.pathname] || [`icons/${icon[1]}`, "image/png"];
       try {
         const body = await readStatic(new URL(file, import.meta.url));
-        res.writeHead(200, { "Content-Type": type, "Cache-Control": icon ? "public, max-age=604800" : file === "sw.js" || file.endsWith(".webmanifest") ? "no-cache" : "public, max-age=600, stale-while-revalidate=86400", ...(file === "sw.js" ? { "Service-Worker-Allowed": "/" } : {}) });
+        // scripts and styles are small: always the current version right after a deploy
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": icon ? "public, max-age=604800" : "no-cache", ...(file === "sw.js" ? { "Service-Worker-Allowed": "/" } : {}) });
         return res.end(body);
       } catch { res.writeHead(404); return res.end(); }
     }
