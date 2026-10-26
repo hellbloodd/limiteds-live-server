@@ -42,7 +42,7 @@ import { mm2MarketData } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
 import { sbMarketData } from "./sab-values.mjs";
-import { saleMovers, marketDeals, itemSales, startMoverAlerts } from "./movers.mjs";
+import { saleMovers, marketDeals, itemSales, startMoverAlerts, warmDeals } from "./movers.mjs";
 
 
 // Agony Values server: Roblox item values (MM2, Blade Ball, Adopt Me, Steal a Brainrot) with
@@ -255,6 +255,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   startCurrency(); // Blade Ball tokens and Robux on every marketplace
   startAlerts(PORT); // the owner's price alerts
   startMoverAlerts(PORT);
+  warmDeals(PORT); // Deals page data built in the background
   startPortfolioSnapshots(PORT); // portfolio value saved every 6 hours (the chart fills in without visiting) // Discord + phone when an item's average sale price jumps or drops
   warmItems(PORT); // item search / alerts / portfolio list, always ready
   startMarketHistory(PORT); // price history on G2G / U7BUY / GameBoost / Itemku

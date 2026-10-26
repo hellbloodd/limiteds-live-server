@@ -13,6 +13,7 @@ import { cheapestElsewhere } from "./markets.mjs";
 import { listingDepth } from "./updater.mjs";
 import { post, SITE, fmt } from "./deals.mjs";
 import { notifyPhones } from "./push.mjs";
+import { loadWarm, saveWarm } from "./warm-store.mjs";
 import { secondValues } from "./second-source.mjs";
 
 const DATA = { "MM2": mm2MarketData, "Blade Ball": bbMarketData, "Adopt Me": amMarketData, "Steal a Brainrot": sbMarketData };
@@ -126,8 +127,22 @@ async function fairRows(port) {
 // typical sale price still pays, and the item sells often enough to move that many in a week.
 const SELL_FEE = 0.10;
 let dealsCache = null;
+// Built in the background (reading every game takes ~40 s right after a restart): callers get the last
+// build at once, rebuilt when it's over 5 minutes old; a snapshot is saved for restarts.
+let dealsBuilding = null;
+const rebuildDeals = (port) => (dealsBuilding ||= buildDeals(port).finally(() => { dealsBuilding = null; }));
 export async function marketDeals(port) {
-  if (dealsCache && Date.now() - dealsCache.t < 5 * 60e3) return dealsCache.d;
+  if (!dealsCache) return rebuildDeals(port);
+  if (Date.now() - dealsCache.t > 5 * 60e3) rebuildDeals(port).catch(() => {});
+  return dealsCache.d;
+}
+export async function warmDeals(port) {
+  const saved = await loadWarm("market_deals", 6 * 3600e3);
+  if (saved && !dealsCache) dealsCache = { t: 0, d: saved };
+  setTimeout(() => rebuildDeals(port).catch(() => {}), 4 * 60e3).unref();
+  setInterval(() => rebuildDeals(port).catch(() => {}), 5 * 60e3).unref();
+}
+async function buildDeals(port) {
   const items = await allItems(port);
   const under = [], bulk = [];
   for (const i of items) {
@@ -160,7 +175,7 @@ export async function marketDeals(port) {
   const d = { at: new Date().toISOString(), fee: SELL_FEE, under: under.slice(0, 150), bulk: bulk.slice(0, 150),
     fairUnder: fair.filter((r) => r.under >= 15 && r.save >= 0.5).sort((a, b) => b.save - a.save).slice(0, 300),
     fairOver: fair.filter((r) => r.under <= -25 && r.buy >= 1).sort((a, b) => a.under - b.under).slice(0, 200) };
-  if (items.length) dealsCache = { t: Date.now(), d };
+  if (items.length) { dealsCache = { t: Date.now(), d }; saveWarm("market_deals", d, 30 * 60e3); }
   return d;
 }
 
