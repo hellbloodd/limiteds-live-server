@@ -91,10 +91,18 @@ async function refreshGame(game, ours) {
 async function refresh(port) {
   const all = await allItems(port);
   if (!all.length) return;
+  const failed = [];
   for (const game of Object.keys(SOURCES)) {
     try { state.games[game] = await refreshGame(game, all.filter((i) => i.game === game)); }
-    catch (e) { console.warn(`Second value source for ${game}: ${e.message}`); }
+    catch (e) { failed.push(game); console.warn(`Second value source for ${game}: ${e.message}`); }
   }
+  // a failed game (site down, booster busy) is tried again in 20 minutes rather than in 6 hours
+  if (failed.length) setTimeout(async () => {
+    for (const game of failed) {
+      try { state.games[game] = await refreshGame(game, (await allItems(port)).filter((i) => i.game === game)); saveWarm("second_values", state, 0); }
+      catch (e) { console.warn(`Second value source for ${game} (retry): ${e.message}`); }
+    }
+  }, 20 * 60e3).unref();
   state.at = Date.now();
   saveWarm("second_values", state, 0);
 }
