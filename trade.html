@@ -40,11 +40,11 @@
   .verdict p { margin:6px 0 0; color:var(--muted); font-size:13px; }
   .row-btns { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:10px; }
   .warn { font-size:12px; color:#f5b400; margin-top:6px; }
-  .slot .ctl { flex-wrap:wrap; justify-content:flex-end; }
+  .sabctl { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; }
+  .sabctl select { max-width:170px; }
   .traits { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 2px; }
   .trait { display:inline-flex; align-items:center; gap:2px; padding:2px 4px 2px 8px; border-radius:999px; font-size:11px; background:rgba(139,92,246,.18); border:1px solid rgba(139,92,246,.45); color:#e9e3ff; }
   .trait button { border:0; background:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0 3px; }
-  @media (max-width:520px) { .slot { grid-template-columns:40px 1fr; } .slot .ctl { grid-column:1 / -1; justify-content:flex-start; } }
 </style>
 <link rel="stylesheet" href="/glass.css">
 </head>
@@ -105,8 +105,10 @@ function sabMults(l) {
   const vm = sabMut.items?.[l.item.key] || {}, med = sabMut.median || {};
   const label = MUT_LABEL[l.mut || "none"];
   const base = label === "Normal" ? 1 : vm[label] ?? med[label] ?? null;
-  const withTrait = vm[`${label} + 1 Trait`] ?? med[`${label} + 1 Trait`] ?? null;
-  const perTrait = withTrait && (base || 1) ? withTrait / (base || 1) : med["Normal + 1 Trait"] || 1.09;
+  // what one trait adds: this brainrot's own "+1 trait" figure for this mutation when game.guide has it,
+  // else the typical one over all brainrots; a trait never lowers the value
+  const own = vm[`${label} + 1 Trait`] && (label === "Normal" || vm[label]) ? vm[`${label} + 1 Trait`] / (label === "Normal" ? 1 : vm[label]) : null;
+  const perTrait = Math.max(1, own ?? sabMut.traitRatio?.[label] ?? sabMut.traitRatio?.Normal ?? 1.09);
   return { mut: base, perTrait, traits: Math.pow(perTrait, (l.traits || []).length) };
 }
 function sabVariantFor(l) {
@@ -164,8 +166,8 @@ function renderSide(side) {
     const it = l.item;
     const versions = it.vals ? Object.keys(AM_LABEL).filter((c) => it.vals[c] > 0) : [];
     return `<div class="slot"><img src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
-      <div style="min-width:0"><div class="nm">${esc(it.name)}</div><div class="sub">${esc(it.game)} · value ${num(lineValue(l))} · ${linePrice(l) != null ? money(linePrice(l)) : isSab(l) && l.mut && l.mut !== "none" && sabVariant[`${it.key}|${l.mut}`] === "loading" ? "checking…" : "not on Eldorado"}</div>${isSab(l) ? sabDetails(l, n) : ""}</div>
-      <div class="ctl">${isSab(l) ? sabControls(l, n) : ""}${versions.length ? `<select data-n="${n}" data-f="code">${versions.map((c) => `<option value="${c}"${c === l.code ? " selected" : ""}>${AM_LABEL[c]}</option>`).join("")}</select>` : ""}
+      <div style="min-width:0"><div class="nm">${esc(it.name)}</div><div class="sub">${esc(it.game)} · value ${num(lineValue(l))} · ${linePrice(l) != null ? money(linePrice(l)) : isSab(l) && l.mut && l.mut !== "none" && sabVariant[`${it.key}|${l.mut}`] === "loading" ? "checking…" : "not on Eldorado"}</div>${isSab(l) ? `<div class="sabctl">${sabControls(l, n)}</div>${sabDetails(l, n)}` : ""}</div>
+      <div class="ctl">${versions.length ? `<select data-n="${n}" data-f="code">${versions.map((c) => `<option value="${c}"${c === l.code ? " selected" : ""}>${AM_LABEL[c]}</option>`).join("")}</select>` : ""}
         <input type="number" min="1" step="1" value="${l.qty}" data-n="${n}" data-f="qty" aria-label="Quantity">
         <button class="x" data-n="${n}" title="Remove" type="button">✕</button></div></div>`;
   }).join("") || `<div class="sub" style="padding:10px 0;color:var(--muted)">Nothing yet.</div>`;

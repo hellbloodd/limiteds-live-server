@@ -124,7 +124,14 @@ export function sabMutations() {
   const lists = {};
   for (const vm of Object.values(per)) for (const [k, v] of Object.entries(vm)) if (v > 0) (lists[k] ||= []).push(v);
   const median = Object.fromEntries(Object.entries(lists).map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
-  return { source: "game.guide", items: per, median };
+  // what one trait adds on top of each mutation: per brainrot "X + 1 Trait" / "X", median over brainrots
+  const ratios = {};
+  for (const vm of Object.values(per)) for (const [k, v] of Object.entries(vm)) {
+    const m = k.match(/^(.+) \+ 1 Trait$/);
+    if (m && v > 0 && (m[1] === "Normal" || vm[m[1]] > 0)) (ratios[m[1]] ||= []).push(v / (m[1] === "Normal" ? 1 : vm[m[1]]));
+  }
+  const traitRatio = Object.fromEntries(Object.entries(ratios).map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
+  return { source: "game.guide", items: per, median, traitRatio };
 }
 
 export async function startSecondValues(port) {
