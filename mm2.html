@@ -251,6 +251,41 @@
   .depth-bar { height:10px; border-radius:6px; background:rgba(255,255,255,.05); overflow:hidden; }
   .depth-bar i { display:block; height:100%; border-radius:6px; background:linear-gradient(90deg, #8b5cf6, #22d3ee); box-shadow:0 0 10px rgba(139,92,246,.6); }
   .depth-buy { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:12px; }
+  .viewbar { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:10px; }
+  .seg-v { display:inline-flex; border-radius:999px; padding:3px; background:rgba(20,22,50,.5); border:1px solid rgba(140,150,255,.2); }
+  .seg-v button { border:0; background:none; color:var(--muted); font:600 12px "Manrope", sans-serif; padding:6px 12px; border-radius:999px; cursor:pointer; }
+  .seg-v button.on { color:#fff; background:linear-gradient(135deg, rgba(139,92,246,.55), rgba(59,130,246,.3)); box-shadow:0 0 12px -4px rgba(139,92,246,.8); }
+  .only-deals input { width:auto !important; padding:0 !important; accent-color:#34f5a6; }
+  .only-deals { display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; }
+  .fair-help { font-size:11.5px; }
+  .grid.as-table { display:flex; flex-direction:column; gap:4px; }
+  .trow { display:grid; grid-template-columns:34px minmax(200px, 2.2fr) .8fr .9fr 1.4fr 1.2fr 1fr .7fr; gap:10px; align-items:center; padding:10px 12px; border-radius:14px;
+    background:rgba(18,20,50,.6); border:1px solid rgba(140,150,255,.1); cursor:pointer; transition:background .2s, border-color .2s; }
+  .trow:not(.thead):hover { background:rgba(139,92,246,.12); border-color:rgba(139,92,246,.45); }
+  .trow.thead { background:none; border:0; cursor:default; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); padding:4px 12px; }
+  .t-rank { font:700 12px "JetBrains Mono", monospace; color:var(--muted-2, #6c7398); text-align:center; }
+  .t-item { display:flex; gap:10px; align-items:center; min-width:0; }
+  .t-item img { width:40px; height:40px; object-fit:contain; border-radius:10px; background:rgba(255,255,255,.05); flex:none; }
+  .t-item .name { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .t-item .cat { font-size:11.5px; color:var(--muted); }
+  .t-num { text-align:right; font-size:13px; font-variant-numeric:tabular-nums; }
+  .t-num b { font:700 13px "JetBrains Mono", monospace; }
+  .db { display:inline-block; padding:3px 9px; border-radius:999px; font:700 11.5px "JetBrains Mono", monospace; background:rgba(255,255,255,.05); color:var(--muted); white-space:nowrap; }
+  .db.good { color:#34f5a6; background:rgba(52,245,166,.1); border:1px solid rgba(52,245,166,.35); }
+  .db.big { color:#05060f; background:linear-gradient(135deg, #34f5a6, #22d3ee); box-shadow:0 0 14px -2px rgba(52,245,166,.8); }
+  .db.bad { color:#ff5c8a; background:rgba(255,92,138,.08); }
+  .db.warn { color:#fbbf24; background:rgba(251,191,36,.1); border:1px solid rgba(251,191,36,.35); }
+  @media (max-width:900px) {
+    .trow.thead { display:none; }
+    .trow { grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px 10px; }
+    .t-rank { display:none; }
+    .t-item { grid-column:1 / -1; }
+    .t-num[data-l="Deal"] { grid-column:1 / -1; order:-1; }
+    .t-num[data-l="Deal"]::before { display:none; }
+    .db { white-space:normal; }
+    .t-num { text-align:left; font-size:12.5px; }
+    .t-num::before { content:attr(data-l); display:block; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  }
   .flip { margin-top:7px; font-size:11.5px; padding:5px 9px; border-radius:10px; background:rgba(52,245,166,.07); border:1px solid rgba(52,245,166,.25); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .flip b { color:#34f5a6; font:700 12px "JetBrains Mono", monospace; text-shadow:0 0 8px rgba(52,245,166,.4); }
   .st-row { display:flex; align-items:center; gap:8px; font-size:13px; }
@@ -303,6 +338,7 @@
     <input id="q" type="search" placeholder="Search…" autocomplete="off">
     <select id="cat"><option value="">All categories</option><option value="deals">🔥 Best deals</option><option value="rising">📈 Rising, price lagging</option></select>
     <select id="sort">
+      <option value="deal">Biggest deal ($ under fair price)</option>
       <option value="value">Highest value</option>
       <option value="valueAsc">Lowest value</option>
       <option value="change">Biggest gain %</option>
@@ -327,6 +363,11 @@
     <div class="stats" id="stats"></div>
     <button id="refresh" class="refresh" type="button"><span class="ico">↻</span> Refresh now</button>
     <span id="refresh-status" class="dim"></span>
+  </div>
+  <div class="viewbar">
+    <div class="seg-v" id="view-seg"><button type="button" data-v="table">☰ Deal table</button><button type="button" data-v="cards">▦ Cards</button></div>
+    <label class="only-deals"><input type="checkbox" id="only-deals"> Only deals ($1+ and 20%+ under fair)</label>
+    <span class="dim fair-help">Fair price = value × what similar-value items cost per value point right now.</span>
   </div>
   </div>
   <div class="grid" id="grid"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
@@ -452,6 +493,7 @@ async function load() {
     tokenPerUsd = data.tokenRate?.perUsd || 0;
     if (tokenPerUsd && !$("cat").querySelector('option[value="tokens"]')) $("cat").querySelector('option[value="rising"]').insertAdjacentHTML("afterend", '<option value="tokens">🪙 Cheaper than tokens</option>');
     computeDeals();
+    computeFair();
     fillHero(data);
     render();
   } catch (e) {
@@ -516,6 +558,56 @@ async function loadSellTime(i) {
   draw();
 }
 
+// ---------- fair price + deal table ----------
+// An item's fair price = its value × the median $-per-value of the 15 items closest to it in value
+// (cheap and expensive items cost different amounts per value point, so only similar ones are compared).
+// "under" = how far the cheapest listing anywhere is below that fair price.
+function computeFair() {
+  const priced = items.filter((i) => i.value > 0 && i.usd > 0 && !i.valueText && (i.listings || 0) >= 2)
+    .map((i) => ({ lv: Math.log(i.value), r: i.usd / i.value, key: i.key }));
+  for (const i of items) {
+    i.fair = i.under = i.best = i.save = null; i.suspect = false;
+    if (!(i.value > 0) || i.valueText || priced.length < 8) continue;
+    const lv = Math.log(i.value);
+    const near = priced.filter((p) => p.key !== i.key).sort((a, b) => Math.abs(a.lv - lv) - Math.abs(b.lv - lv)).slice(0, 15).map((p) => p.r).sort((a, b) => a - b);
+    i.fair = i.value * near[near.length >> 1];
+    const best = marketOffers(i)[0];
+    if (best) { i.best = best; i.under = Math.round((1 - best[1] / i.fair) * 100); i.save = i.fair - best[1]; i.suspect = best[1] < i.fair * 0.3; }
+  }
+}
+const VIEW_KEY = `view:${GAME.tab}`;
+let view = (() => { try { return localStorage.getItem(VIEW_KEY); } catch { return null; } })() || (GAME.tab === "stealabrainrot" ? "table" : "cards");
+function dealBadge(i) {
+  if (i.under == null) return `<span class="dim">—</span>`;
+  if (i.suspect) return `<span class="db warn" title="Far under similar items — often a mis-tagged item or a scam; check the listing">⚠ ${i.under}% under · check</span>`;
+  if (i.under >= 40 && i.save >= 1) return `<span class="db big">🔥 save ${usd(i.save)} · ${i.under}%</span>`;
+  if (i.under >= 20 && i.save >= 1) return `<span class="db good">DEAL save ${usd(i.save)} · ${i.under}%</span>`;
+  if (i.under <= -25) return `<span class="db bad">${-i.under}% over</span>`;
+  return `<span class="db">${i.under > 0 ? `${i.under}% under` : i.under < 0 ? `${-i.under}% over` : "fair"}</span>`;
+}
+function rowHtml(i, n) {
+  const demand = (i.extra || []).find(([k]) => /demand/i.test(k))?.[1] || (i.demand != null ? fmt(i.demand) : "");
+  return `<div class="trow" data-key="${esc(i.key)}">
+    <span class="t-rank">${n + 1}</span>
+    <div class="t-item"><img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'"><div style="min-width:0"><div class="name">${esc(i.name)}</div><div class="cat">${esc(catLabel(i.category))}${demand ? ` · demand ${esc(demand)}` : ""}</div></div></div>
+    <div class="t-num" data-l="Value"><b>${i.valueText ? esc(i.valueText) : fmt(i.value)}</b>${GAME.unit ? ` <span class="unit">${esc(GAME.unit)}</span>` : ""}</div>
+    <div class="t-num" data-l="Fair price">${i.fair ? usd(i.fair) : "—"}</div>
+    <div class="t-num" data-l="Cheapest">${i.best ? `<a class="mk" href="${esc(i.best[2])}" target="_blank" rel="noopener" style="--mc:${MARKET_COLORS[i.best[0]] || "#8b5cf6"}"><i></i>${esc(i.best[0])} <b>${usd(i.best[1])}</b></a>` : `<span class="dim">not listed</span>`}</div>
+    <div class="t-num" data-l="Deal">${dealBadge(i)}</div>
+    <div class="t-num" data-l="Sold 7d">${i.sold7d ? `${fmt(i.sold7d)}${i.soldPrice ? ` <span class="dim">· ~${usd(i.soldPrice)}</span>` : ""}` : `<span class="dim">0</span>`}</div>
+    <div class="t-num" data-l="Listings">${i.listings ? fmt(i.listings) : "—"}</div>
+  </div>`;
+}
+function showTable(list) {
+  const grid = $("grid");
+  chunkObs?.disconnect();
+  grid.classList.add("as-table");
+  if (!list.length) { grid.innerHTML = `<div class="empty">Nothing matches.</div>`; return; }
+  const head = `<div class="trow thead"><span>#</span><span>Item</span><span class="t-num">Value</span><span class="t-num">Fair price</span><span class="t-num">Cheapest anywhere</span><span class="t-num">Deal</span><span class="t-num">Sold 7d</span><span class="t-num">Listings</span></div>`;
+  showChunks(list, rowHtml);
+  grid.insertAdjacentHTML("afterbegin", head);
+}
+
 function render() {
   const q = $("q").value.toLowerCase(), c = $("cat").value, s = $("sort").value;
   // "Best deals": more value per $ than the typical item (25%+ above the median), best first.
@@ -528,13 +620,16 @@ function render() {
     && ((pmin == null && pmax == null) || (i.usd > 0 && (pmin == null || i.usd >= pmin) && (pmax == null || i.usd <= pmax)))
     // listings: how many Eldorado listings the item has right now (none listed counts as 0)
     && (lmin == null || (i.listings || 0) >= lmin) && (lmax == null || (i.listings || 0) <= lmax);
-  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && inRange(i)
+  const onlyDeals = $("only-deals").checked;
+  const list = items.filter((i) => (!q || i.name.toLowerCase().includes(q)) && inRange(i) && (!onlyDeals || (i.under >= 20 && i.save >= 1 && !i.suspect))
     && (deals ? isDeal(i) : c === "rising" ? isRising(i) : c === "tokens" ? beatsTokens(i) : !c || i.category === c));
   const v = (x) => x ?? -Infinity;
   const sorters = {
     value: (a, b) => v(b.value) - v(a.value), valueAsc: (a, b) => v(a.value) - v(b.value),
     change: (a, b) => v(chg(b)?.pct) - v(chg(a)?.pct), changeAsc: (a, b) => (chg(a)?.pct ?? 0) - (chg(b)?.pct ?? 0),
     demand: (a, b) => v(b.demand) - v(a.demand),
+    // dollars saved vs the fair price (a 70% discount on a 5-cent item isn't a deal)
+    deal: (a, b) => (b.suspect || b.save == null ? -1e9 : b.save) - (a.suspect || a.save == null ? -1e9 : a.save),
     vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
   const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
@@ -559,6 +654,8 @@ function render() {
       ${i.usd ? `<div class="c-foot tabular"><b>${usd(i.usd)}</b>${i.valuePerUsd > 0 ? `<span class="vpd ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} / $</span>` : ""}${i.listings ? `<span class="dim" title="Listings on Eldorado right now">${i.listings} listed</span>` : ""}</div>` : `<div class="c-foot dim">Not on Eldorado right now</div>`}
       ${marketLinks(i)}${flipLine(i)}
     </div>`;
+  if (view === "table") return showTable(list);
+  $("grid").classList.remove("as-table");
   showChunks(list, cardHtml);
 }
 
@@ -734,7 +831,7 @@ async function loadDepth(i) {
 
 $("grid").addEventListener("click", (e) => {
   if (e.target.closest("a")) return; // marketplace links open the listing, not the preview
-  const card = e.target.closest(".card"); if (!card) return;
+  const card = e.target.closest(".card, .trow:not(.thead)"); if (!card) return;
   openItem(card.dataset.key);
 });
 // The item preview; also opened from a link (?item=<key>) - global search, favourites, home page.
@@ -781,6 +878,15 @@ async function openItem(key) {
 let typing;
 $("q").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(render, 140); });
 ["cat", "sort"].forEach((id) => $(id).addEventListener("input", render));
+$("only-deals").addEventListener("change", render);
+const syncView = () => $("view-seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === view));
+syncView();
+if (GAME.tab === "stealabrainrot" && !(() => { try { return localStorage.getItem(VIEW_KEY); } catch { return null; } })()) $("sort").value = "deal"; // first visit: best deals first
+$("view-seg").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  view = b.dataset.v; try { localStorage.setItem(VIEW_KEY, view); } catch { /* private mode */ }
+  syncView(); render();
+});
 // ranges are remembered per game in this browser
 const RANGE_KEY = `ranges:${GAME.tab}`;
 try { const r = JSON.parse(localStorage.getItem(RANGE_KEY) || "{}"); for (const k of ["vmin", "vmax", "pmin", "pmax", "lmin", "lmax"]) if (r[k] != null) $(k).value = r[k]; } catch { /* private mode */ }
