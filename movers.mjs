@@ -3,7 +3,7 @@
 // each sale counts once (a bulk listing of 999 cheap units doesn't outweigh real sales), and with 5+
 // sales the top and bottom 10% are dropped so one odd sale can't fake a move; sales 4x away from the
 // item's median sale are ignored. Cached 5 minutes.
-import { mm2MarketData } from "./mm2-values.mjs";
+import { mm2MarketData, saleUnits } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
 import { sbMarketData } from "./sab-values.mjs";
@@ -39,8 +39,9 @@ async function build(period, port) {
       // are troll / mis-tagged listings, not the market moving
       const all = list.map((e) => e[1]).filter((u) => u > 0).sort((x, y) => x - y);
       const mid = all[all.length >> 1];
-      for (const [ts, usd] of list) {
+      for (const [ts, usd, q] of list) {
         if (ts < oldest) oldest = ts;
+        if (!saleUnits(q)) continue;
         if (!(usd > 0) || usd > mid * 4 || usd < mid / 4) continue;
         if (ts >= now - span) recent.push(usd);
         else if (ts >= now - 2 * span) before.push(usd);
@@ -73,7 +74,7 @@ export async function saleMovers(period, port) {
 // ---------- one item's confirmed sales (sell-time estimate in the item preview) ----------
 export function itemSales(game, key) {
   const list = DATA[game]?.().sales?.[key] || [];
-  return list.map(([ts, usd, qty]) => [ts, usd, qty || 1]);
+  return list.filter((e) => saleUnits(e[2])).map(([ts, usd, qty]) => [ts, usd, saleUnits(qty)]);
 }
 
 // ---------- deals measured against what items actually sell for ----------

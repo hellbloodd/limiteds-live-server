@@ -194,3 +194,47 @@
   };
   addEventListener("online", pill); addEventListener("offline", pill); addEventListener("DOMContentLoaded", pill);
 })();
+
+
+// ---------- navigation: one grouped menu for every page ----------
+// Desktop: a sectioned sidebar. Phones/tablets: a bottom tab bar (Home, Values, Deals, Search, Menu)
+// with a slide-up sheet. Built here so every page has the same, up-to-date menu.
+(() => {
+  const NAV = [
+    ["Overview", [["/", "🏠", "Home"], ["/favourites", "★", "Favourites"], ["/status", "🟢", "Status"]]],
+    ["Values", [["/mm2", "🔪", "MM2", "mm2"], ["/bladeball", "⚔️", "Blade Ball", "bladeball"], ["/adoptme", "🐉", "Adopt Me", "adoptme"], ["/stealabrainrot", "🧠", "Steal a Brainrot", "stealabrainrot"]]],
+    ["Market", [["/flips", "💸", "Flip Finder"], ["/movers", "📈", "Movers & deals"], ["/gaps", "📊", "Value gaps"], ["/compare", "🆚", "Compare"], ["/currency", "💱", "Currency"]]],
+    ["Events", [["/seasons", "🎃", "Seasons"], ["/calendar", "📅", "Calendar"]]],
+    ["My trading", [["/trade", "⚖️", "Trade calculator"], ["/alerts", "🔔", "Price alerts"], ["/watch", "🏷️", "My listings"], ["/profits", "📒", "Profits"], ["/portfolio", "💼", "Portfolio"]]],
+  ];
+  const here = location.pathname.replace(/\/$/, "") || "/";
+  const isOn = (href) => (href === "/" ? here === "/" : here === href);
+  const e = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+  const build = () => {
+    const nav = document.querySelector("nav.tabs");
+    if (nav) nav.innerHTML = NAV.map(([sec, links]) => `<div class="nav-sec"><div class="nav-h">${e(sec)}</div>${links.map(([href, ic, label, tab]) =>
+      `<a class="tab${isOn(href) ? " active" : ""}" href="${href}"${tab ? ` data-tab="${tab}"` : ""}><span class="ni">${ic}</span>${e(label)}</a>`).join("")}</div>`).join("");
+    if (document.querySelector(".av-bottom")) return;
+    const valuesOn = ["/mm2", "/bladeball", "/adoptme", "/stealabrainrot"].includes(here), dealsOn = ["/flips", "/movers", "/gaps"].includes(here);
+    const bar = document.createElement("nav");
+    bar.className = "av-bottom"; bar.setAttribute("aria-label", "Main");
+    bar.innerHTML = `<a href="/" class="${here === "/" ? "on" : ""}"><span class="bi">🏠</span>Home</a>
+      <button type="button" data-sheet="Values" class="${valuesOn ? "on" : ""}"><span class="bi">💎</span>Values</button>
+      <a href="/movers" class="${dealsOn ? "on" : ""}"><span class="bi">🔥</span>Deals</a>
+      <button type="button" data-search><span class="bi">🔍</span>Search</button>
+      <button type="button" data-sheet="all" class="${!valuesOn && !dealsOn && here !== "/" ? "on" : ""}"><span class="bi">☰</span>Menu</button>`;
+    const sheet = document.createElement("div");
+    sheet.className = "av-sheet";
+    const fill = (only) => { sheet.innerHTML = `<div class="sh"><div class="grab"></div>${NAV.filter(([sec]) => only === "all" || sec === only).map(([sec, links]) =>
+      `<h4>${e(sec)}</h4><div class="gridm">${links.map(([href, ic, label]) => `<a href="${href}" class="${isOn(href) ? "on" : ""}"><span class="ni">${ic}</span>${e(label)}</a>`).join("")}</div>`).join("")}</div>`; };
+    bar.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button"); if (!b) return;
+      if (b.hasAttribute("data-search")) { window.avOpenSearch?.(); return; }
+      fill(b.dataset.sheet); sheet.classList.add("open");
+    });
+    sheet.addEventListener("click", (ev) => { if (ev.target === sheet || ev.target.closest("a")) sheet.classList.remove("open"); });
+    addEventListener("keydown", (ev) => { if (ev.key === "Escape") sheet.classList.remove("open"); });
+    document.body.append(bar, sheet);
+  };
+  if (document.readyState === "loading") addEventListener("DOMContentLoaded", build); else build();
+})();

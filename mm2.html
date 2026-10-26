@@ -381,8 +381,8 @@
 
 <script>
 /*GAME_CONFIG*/
-const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "supremevalues.com",
-  sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
+const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "mm2values.com",
+  sourceUrl: "https://www.mm2values.com", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
 document.title = `${GAME.title} · Agony Values`;
 document.documentElement.dataset.game = GAME.tab; // per-game accent colours
 document.getElementById("hero-title").textContent = GAME.title;
@@ -454,7 +454,9 @@ function computeDeals() {
     dealX[i.key] = i.valuePerUsd / peers[peers.length >> 1];
   }
 }
-const isDeal = (i) => (dealX[i.key] || 0) >= 2.5;
+// One definition of a deal everywhere (badge, filter, hero): the cheapest listing anywhere is $1+ and
+// 20%+ under the fair price, and not so cheap that it's probably a different item or a scam.
+const isDeal = (i) => i.under >= 20 && i.save >= 1 && !i.suspect;
 // "Rising, price lagging": the value went up recently (+10% in 24h or +20% in 7 days) but the item
 // is still cheap on Eldorado compared with similar-value items - sellers haven't repriced yet.
 // Blade Ball: cheaper than buying the same value in tokens (Eldorado's recommended token price).
@@ -469,9 +471,9 @@ function fillHero(data) {
   const priced = items.filter((i) => i.usd).length;
   countUp($("t-priced"), priced);
   $("t-priced-sub").textContent = priced ? `typical ${fmtVpd(medianVpd)} value / $` : "no prices yet";
-  const best = items.filter(isDeal).sort((a, b) => dealX[b.key] - dealX[a.key])[0];
+  const best = items.filter(isDeal).sort((a, b) => b.save - a.save)[0];
   $("t-deal").textContent = best ? best.name : "None right now";
-  $("t-deal-sub").textContent = best ? `${usd(best.usd)} · ${dealX[best.key].toFixed(1)}× similar items` : "checked every 15 min";
+  $("t-deal-sub").textContent = best ? `${usd(best.best[1])} on ${best.best[0]} · save ${usd(best.save)} (${best.under}%)` : "checked every 15 min";
   $("t-updated").textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
   $("t-updated-sub").textContent = data.pricesUpdatedAt ? `prices ${ago(data.pricesUpdatedAt)}` : " ";
 }
@@ -632,7 +634,7 @@ function render() {
     deal: (a, b) => (b.suspect || b.save == null ? -1e9 : b.save) - (a.suspect || a.save == null ? -1e9 : a.save),
     vpd: (a, b) => v(b.valuePerUsd) - v(a.valuePerUsd), usdAsc: (a, b) => (a.usd ?? Infinity) - (b.usd ?? Infinity), name: (a, b) => a.name.localeCompare(b.name),
   };
-  const byDeal = (a, b) => dealX[b.key] - dealX[a.key];
+  const byDeal = (a, b) => (deals ? b.save - a.save : dealX[b.key] - dealX[a.key]);
   list.sort((deals || c === "rising") && s === "value" ? byDeal : sorters[s]);
   const cardHtml = (i, n) => `
     <div class="card" data-key="${esc(i.key)}" style="--d:${Math.min(n, 24) * 28}ms">
@@ -687,7 +689,8 @@ function showChunks(list, cardHtml) {
 // Blade Ball: the item's price per 1k tokens of value, next to what 1k tokens cost on Eldorado.
 function tags(i) {
   const out = [];
-  if (isDeal(i)) out.push(`<span class="badge" title="${dealX[i.key].toFixed(1)}× better value per $ than similar items">🔥 DEAL</span>`);
+  if (isDeal(i)) out.push(`<span class="badge" title="${usd(i.best[1])} on ${esc(i.best[0])} vs a fair price of ${usd(i.fair)}">🔥 SAVE ${usd(i.save)}</span>`);
+  else if (i.suspect) out.push(`<span class="badge token" title="Far cheaper than similar items: often a different item matched by name, or a scam listing">⚠ CHECK</span>`);
   if (beatsTokens(i)) {
     const per1k = i.usd / i.value * 1000, market = 1000 / tokenPerUsd;
     out.push(`<span class="badge token" title="This item costs $${per1k.toFixed(2)} per 1k tokens of value — 1k tokens cost $${market.toFixed(2)} on the cheapest marketplace (${(market / per1k).toFixed(1)}× more)">🪙 $${per1k < 1 ? per1k.toFixed(2) : per1k.toFixed(per1k < 10 ? 2 : 1)}/1k</span>`);

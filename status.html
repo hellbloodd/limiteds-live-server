@@ -76,8 +76,8 @@ async function load() {
     return card(l, `${g} values`, v.lastOkAt || null, `<div class="m">from ${SOURCE[g]}${s.running?.[g] ? " · updating now…" : ""}${v.ok === false && v.lastOkAt ? " · last try failed, showing the previous values" : ""}</div>`); });
 
   // Eldorado prices per game
-  const prices = GAMES.map((g) => { const p = s.prices?.[g] || {}; const l = add(light(p.okAt, 1.5 * H, 6 * H));
-    return card(l, `${g} Eldorado prices`, p.okAt || null, `<div class="m">${esc(p.message || "No price check finished yet.")}</div>`); });
+  const prices = GAMES.map((g) => { const p = s.prices?.[g] || {}; const at = p.okAt || s.pricesSaved?.[g] || null; const l = add(light(at, 1.5 * H, 6 * H));
+    return card(l, `${g} Eldorado prices`, at, `<div class="m">${esc(p.message || (at ? "Saved prices in use; the next check is running." : "No price check finished yet."))}</div>`); });
 
   // Eldorado API health
   const e = s.eldorado || {};

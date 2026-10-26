@@ -309,6 +309,12 @@ export function listingWindow(offers, full) {
 // is treated as expired, not sold.
 // pending (optional): listings that vanished are parked there instead of counted at once - see
 // confirmVanished(). A drop in stock is always a sale right away.
+// Units one sale event counts for. Bulk sellers list "9999" in stock and reset it now and then; that
+// drop isn't buyers, so an event counts as at most a few units, and older events from before this
+// rule (tens of thousands of "units") are dropped.
+export const MAX_UNITS_PER_SALE = 5;
+export const saleUnits = (qty) => (qty > 50 ? 0 : Math.min(qty || 1, MAX_UNITS_PER_SALE));
+
 export function detectSales(prevByKey, prices, now = Date.now(), pending = null) {
   const events = {};
   for (const [key, prev] of Object.entries(prevByKey)) {
@@ -319,7 +325,7 @@ export function detectSales(prevByKey, prices, now = Date.now(), pending = null)
     for (const [id, usd, qty, expires, seller] of prev.offers) {
       const c = cur.get(id);
       let sold = 0, price = usd;
-      if (c) { if (c[2] < qty) { sold = qty - c[2]; price = c[1]; } }
+      if (c) { const drop = qty - c[2]; if (drop > 0 && (qty < 50 || drop <= qty * 0.2)) { sold = Math.min(drop, MAX_UNITS_PER_SALE); price = c[1]; } }
       else if (!(expires && expires <= now + 24 * 3600 * 1000) && usd <= p.windowMax && !(seller && sellersNow.has(seller))) {
         if (pending) { (pending[key] ||= []).push({ id, seller, usd, at: now }); continue; }
         sold = 1;
@@ -356,21 +362,26 @@ export function mergeSales(sales, events, now = Date.now()) {
   const cutoff = now / 1000 - 30 * 86400;
   for (const [key, list] of Object.entries(events)) (sales[key] ||= []).push(...list);
   for (const [key, list] of Object.entries(sales)) {
-    const kept = list.filter((e) => e[0] >= cutoff);
+    const kept = list.filter((e) => e[0] >= cutoff && saleUnits(e[2]) > 0).map((e) => (e[2] > MAX_UNITS_PER_SALE ? [e[0], e[1], MAX_UNITS_PER_SALE] : e));
     if (kept.length) sales[key] = kept; else delete sales[key];
   }
   return Object.keys(events).length > 0;
 }
 
 // { sold24h, sold7d, soldPrice } - soldPrice is the median price of sales in the last 7 days.
-export function salesStats(list, now = Date.now()) {
+// refUsd: today's cheapest listing - sales more than 4x away from it are another version of the item or
+// a mis-tagged listing vanishing, so they don't count toward the typical sale price.
+export function salesStats(list, now = Date.now(), refUsd = null) {
   if (!list?.length) return { sold24h: 0, sold7d: 0, soldPrice: null };
   const t = now / 1000;
   let sold24h = 0, sold7d = 0;
   const prices = [];
   for (const [ts, usd, qty] of list) {
-    if (ts >= t - 86400) sold24h += qty;
-    if (ts >= t - 7 * 86400) { sold7d += qty; prices.push(usd); }
+    const units = saleUnits(qty);
+    if (!units) continue;
+    if (refUsd > 0 && (usd > refUsd * 4 || usd < refUsd / 4)) continue;
+    if (ts >= t - 86400) sold24h += units;
+    if (ts >= t - 7 * 86400) { sold7d += units; prices.push(usd); }
   }
   prices.sort((a, b) => a - b);
   return { sold24h, sold7d, soldPrice: prices.length ? prices[prices.length >> 1] : null };
@@ -671,7 +682,7 @@ function eldoradoOnly(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p?.usd) return {};
   return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
-    priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key]) };
+    priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key], undefined, p.usd) };
 }
 
 // History without points from before the item had a real value (fractional sort-order numbers below 1).
@@ -757,4 +768,4 @@ export async function handleMm2Request(url, res, sendJson) {
   }
   return false;
 }
-export const mm2MarketData = () => ({ priceHistory: mm2PriceHistory, sales: mm2Sales });
+export const mm2MarketData = () => ({ priceHistory: mm2PriceHistory, sales: mm2Sales, pricesAt: mm2Eldorado.updatedAt || null });

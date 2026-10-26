@@ -278,7 +278,7 @@ function eldoradoFields(it) {
 function eldoradoOnly(it) {
   const p = bbEldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key]) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key], undefined, p.usd) };
 }
 
 // Token price from Eldorado's Blade Ball Currency page, in its default "Recommended" order. The
@@ -361,4 +361,4 @@ export async function handleBbRequest(url, res, sendJson) {
   return false;
 }
 
-export const bbMarketData = () => ({ priceHistory: bbPriceHistory, sales: bbSales });
+export const bbMarketData = () => ({ priceHistory: bbPriceHistory, sales: bbSales, pricesAt: bbEldorado.updatedAt || null });

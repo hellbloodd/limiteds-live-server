@@ -37,6 +37,10 @@ import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
 import { listEvents, addEvent, deleteEvent } from "./calendar.mjs";
 import { startRobloxEvents } from "./roblox-events.mjs";
+import { mm2MarketData } from "./mm2-values.mjs";
+import { bbMarketData } from "./bb-values.mjs";
+import { amMarketData } from "./am-values.mjs";
+import { sbMarketData } from "./sab-values.mjs";
 import { saleMovers, marketDeals, itemSales, startMoverAlerts } from "./movers.mjs";
 
 
@@ -68,6 +72,10 @@ function serveShared(req, res, pathname) {
   writeCached(req, res, c);
   return true;
 }
+
+// When each game's Eldorado prices (as loaded / last saved) are from - right after a restart the
+// updater hasn't finished a check yet, but the saved prices are there and recent.
+const savedPriceTimes = () => ({ "MM2": mm2MarketData().pricesAt, "Blade Ball": bbMarketData().pricesAt, "Adopt Me": amMarketData().pricesAt, "Steal a Brainrot": sbMarketData().pricesAt });
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
@@ -137,7 +145,7 @@ const server = http.createServer(async (req, res) => {
       let results = []; try { results = JSON.parse(body).results || []; } catch { /* bad body */ }
       return sendJson(res, 200, await boosterResults(results));
     }
-    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors });
+    if (parsedUrl.pathname === "/api/status") return sendJson(res, 200, { ...updaterStatus(), eldorado: eldoradoBudget(), markets: { G2G: g2gStatus(), U7BUY: u7Status(), ...remoteMarketStatus() }, sniper: { ...sniperStatus(), recent: undefined }, recentErrors, pricesSaved: savedPriceTimes() });
     if (parsedUrl.pathname === "/ping") return sendJson(res, 200, { status: "awake", version: SERVER_VERSION });
     if (parsedUrl.pathname === "/api/currency") return sendJson(res, 200, currencyPrices());
     if (parsedUrl.pathname === "/api/seasons") {

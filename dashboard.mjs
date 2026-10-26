@@ -1,6 +1,6 @@
 // Home dashboard numbers: items tracked/listed per game, confirmed Eldorado sales per day and a
 // price change % per game (median change of a fixed basket of listed items), cached for 10 minutes.
-import { mm2MarketData } from "./mm2-values.mjs";
+import { mm2MarketData, saleUnits } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
 import { sbMarketData } from "./sab-values.mjs";
@@ -37,7 +37,9 @@ async function build(port) {
     const perDay = Array.from({ length: 14 }, (_, i) => [today - 13 + i, 0, 0]);
     let sold24h = 0, usd7d = 0;
     const now = Date.now() / 1000;
-    for (const list of Object.values(sales)) for (const [ts, usd, qty] of list) {
+    for (const list of Object.values(sales)) for (const [ts, usd, q] of list) {
+      const qty = saleUnits(q);
+      if (!qty) continue;
       const i = Math.floor(ts / 86400) - (today - 13);
       if (i >= 0 && i < 14) { perDay[i][1] += qty; perDay[i][2] += usd * qty; }
       if (ts >= now - 86400) sold24h += qty;
