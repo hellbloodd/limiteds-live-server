@@ -5,6 +5,7 @@
 // both list. Each matched item gets its second value (in our units) and how far the two disagree.
 // Refreshed every 6 hours; kept as a warm snapshot for restarts.
 import { allItems } from "./tools.mjs";
+import { curlGet } from "./mm2-values.mjs";
 import { loadWarm, saveWarm } from "./warm-store.mjs";
 
 const UA = { "user-agent": "Mozilla/5.0 (compatible; AgonyValues/1.0)", accept: "application/json,text/html" };
@@ -21,16 +22,30 @@ const norm = (s) => String(s || "").toLowerCase().replace(/^c\.\s*/, "chroma ").
   .split(/[^a-z0-9]+/).filter(Boolean).sort().join(" ");
 const num = (t) => { const m = String(t).replace(/,/g, "").match(/([\d.]+)\s*([kmb])?/i); if (!m) return null; return Number(m[1]) * ({ k: 1e3, m: 1e6, b: 1e9 }[(m[2] || "").toLowerCase()] || 1); };
 
+// fetch, one retry, then curl (a browser-like request some sites accept when they refuse plain fetch)
+async function getText(url) {
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(45000) });
+      if (r.ok) return await r.text();
+      last = new Error(`${new URL(url).hostname} ${r.status}`);
+    } catch (e) { last = e; }
+    await new Promise((res) => setTimeout(res, 5000));
+  }
+  try { return await curlGet(url, ["Accept: application/json,text/html"]); }
+  catch (e) { throw new Error(`${last?.message || "fetch failed"}; curl: ${e.message.slice(0, 80)}`); }
+}
+
 async function fetchTheirs(game) {
   const src = SOURCES[game];
-  const r = await fetch(src.api || src.url, { headers: UA, signal: AbortSignal.timeout(30000) });
-  if (!r.ok) throw new Error(`${src.name} ${r.status}`);
+  const body = await getText(src.api || src.url);
   if (src.html) { // robloxtools: cards of name + "Value" + number
-    const h = await r.text();
+    const h = body;
     return [...h.matchAll(/href="\/values\/blade-ball\/[a-z0-9-]+"[\s\S]*?alt="([^"]+)"[\s\S]*?Value<\/span><span[^>]*>([^<]+)</g)]
       .map((m) => ({ name: m[1].replace(/&amp;/g, "&").replace(/&#x27;/g, "'"), value: num(m[2]) })).filter((x) => x.value > 0);
   }
-  const j = await r.json();
+  const j = JSON.parse(body);
   return (j.items || []).map((i) => {
     if (game === "Adopt Me") { const v = i.values || {}; return { name: i.name, value: v.fr ?? v.normal ?? Object.values(v).find((x) => x > 0) ?? null, fr: v.fr ?? null }; }
     return { name: i.name, value: i.value };
