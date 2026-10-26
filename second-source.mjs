@@ -57,7 +57,7 @@ async function fetchTheirs(game) {
   const j = JSON.parse(body);
   return (j.items || []).map((i) => {
     if (game === "Adopt Me") { const v = i.values || {}; return { name: i.name, value: v.fr ?? v.normal ?? Object.values(v).find((x) => x > 0) ?? null, fr: v.fr ?? null }; }
-    return { name: i.name, value: i.value };
+    return { name: i.name, value: i.value, vm: i.variantMultipliers || null };
   }).filter((x) => x.value > 0);
 }
 
@@ -72,7 +72,7 @@ async function refreshGame(game, ours) {
     if (!t) continue;
     const mine = game === "Adopt Me" && t.fr != null && i.vals?.fr ? i.vals.fr : i.value;
     const their = game === "Adopt Me" && t.fr != null && i.vals?.fr ? t.fr : t.value;
-    if (mine > 0 && their > 0) pairs.push({ key: i.key, mine, their });
+    if (mine > 0 && their > 0) pairs.push({ key: i.key, mine, their, vm: t.vm });
   }
   if (pairs.length < 10) throw new Error(`only ${pairs.length} items matched`);
   // scale: median of log(ours / theirs)
@@ -83,9 +83,15 @@ async function refreshGame(game, ours) {
     const v2 = p.their * scale;
     items[p.key] = [Number(v2.toPrecision(4)), Math.round((v2 / p.mine - 1) * 100)];
   }
+  // Steal a Brainrot: each brainrot's trade-value multiplier per mutation (and with one trait)
+  let mutations = null;
+  if (pairs.some((p) => p.vm)) {
+    mutations = {};
+    for (const p of pairs) if (p.vm) mutations[p.key] = p.vm;
+  }
   const diffs = Object.values(items).map((x) => Math.abs(x[1])).sort((a, b) => a - b);
   return { source: SOURCES[game].name, url: SOURCES[game].url, at: new Date().toISOString(), matched: pairs.length, theirs: theirs.length, ours: ours.length,
-    scale, medianGap: diffs[diffs.length >> 1], items };
+    scale, medianGap: diffs[diffs.length >> 1], items, ...(mutations ? { mutations } : {}) };
 }
 
 async function refresh(port) {
@@ -108,7 +114,18 @@ async function refresh(port) {
 }
 
 // { source, url, at, matched, medianGap, items: { key: [valueInOurUnits, diffPct] } } or null
-export const secondValues = (game) => state.games[game] || null;
+export const secondValues = (game) => { const g = state.games[game]; if (!g) return null; const { mutations, ...rest } = g; return rest; };
+
+// Steal a Brainrot mutations for the trade calculator: per-brainrot multipliers (game.guide) and the
+// median of each one over all brainrots (used when a brainrot has no entry). "X + 1 Trait" entries give
+// what one trait adds on top of mutation X.
+export function sabMutations() {
+  const per = state.games["Steal a Brainrot"]?.mutations || {};
+  const lists = {};
+  for (const vm of Object.values(per)) for (const [k, v] of Object.entries(vm)) if (v > 0) (lists[k] ||= []).push(v);
+  const median = Object.fromEntries(Object.entries(lists).map(([k, v]) => { v.sort((a, b) => a - b); return [k, v[v.length >> 1]]; }));
+  return { source: "game.guide", items: per, median };
+}
 
 export async function startSecondValues(port) {
   const saved = await loadWarm("second_values", 3 * 864e5);

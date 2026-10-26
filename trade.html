@@ -40,6 +40,11 @@
   .verdict p { margin:6px 0 0; color:var(--muted); font-size:13px; }
   .row-btns { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:10px; }
   .warn { font-size:12px; color:#f5b400; margin-top:6px; }
+  .slot .ctl { flex-wrap:wrap; justify-content:flex-end; }
+  .traits { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 2px; }
+  .trait { display:inline-flex; align-items:center; gap:2px; padding:2px 4px 2px 8px; border-radius:999px; font-size:11px; background:rgba(139,92,246,.18); border:1px solid rgba(139,92,246,.45); color:#e9e3ff; }
+  .trait button { border:0; background:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0 3px; }
+  @media (max-width:520px) { .slot { grid-template-columns:40px 1fr; } .slot .ctl { grid-column:1 / -1; justify-content:flex-start; } }
 </style>
 <link rel="stylesheet" href="/glass.css">
 </head>
@@ -55,7 +60,7 @@
   <section class="hero">
     <div>
       <h1>Trade calculator</h1>
-      <p class="dim">Add what you give and what you get. You'll see both sides' value and what they'd cost on Eldorado right now — and whether the trade is a win.</p>
+      <p class="dim">Add what you give and what you get. You'll see both sides' value and what they'd cost on Eldorado right now — and whether the trade is a win. Brainrots can have a mutation and traits; Adopt Me pets a version.</p>
     </div>
   </section>
 
@@ -76,11 +81,74 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const money = (n) => (n == null ? "—" : "$" + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
 const num = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const AM_LABEL = { none: "No Potion", f: "Fly", r: "Ride", fr: "Fly Ride", n: "Neon", nf: "Neon Fly", nr: "Neon Ride", nfr: "Neon Fly Ride", m: "Mega", mf: "Mega Fly", mr: "Mega Ride", mfr: "Mega Fly Ride" };
-const state = { give: [], get: [] }; // [{ item, qty, code }]
+const state = { give: [], get: [] }; // [{ item, qty, code, mut, traits }]
+
+// ---------- Steal a Brainrot: mutations and traits ----------
+// Value: the brainrot's own multiplier for that mutation (game.guide; the median over all brainrots
+// when it has none), and each trait adds what game.guide's "+1 trait" figure says for that brainrot.
+// Price: the real cheapest Eldorado listing with that mutation (Eldorado can filter by mutation);
+// traits can't be filtered there, so their effect on the price is an estimate.
+const SAB = "Steal a Brainrot";
+const MUTS = [["none", "Normal"], ["gold", "Gold"], ["diamond", "Diamond"], ["bloodrot", "Bloodrot"], ["candy", "Candy"], ["lava", "Lava"], ["galaxy", "Galaxy"],
+  ["yin-yang", "Yin Yang"], ["radioactive", "Radioactive"], ["rainbow", "Rainbow"], ["cursed", "Cursed"], ["divine", "Divine"], ["cyber", "Cyber"], ["phantom", "Phantom"],
+  ["eclipse", "Eclipse"], ["crystal", "Crystal"]];
+const MUT_LABEL = Object.fromEntries(MUTS);
+// in-game income multipliers (for reference; trade value doesn't scale with them)
+const TRAITS = [["Strawberry", 8], ["Meowl", 7], ["Skibidi", 6.5], ["Brazil", 6], ["Nyan Cat", 6], ["Fireworks", 6], ["Rose", 6], ["Crab", 5], ["Halo", 5], ["26", 5],
+  ["Lucky", 5], ["Matteo Hat", 4.5], ["Witch Hat", 4.5], ["RIP", 4.5], ["Chocolate", 4.5], [":3", 4.5], ["Burger", 4.5], ["Aura Shades", 4.5], ["Galactic", 4], ["10B", 4],
+  ["Starfall", 2.5], ["Bloodmoon", 2], ["Snow", 2], ["Rain", 1.5]];
+let sabMut = { items: {}, median: {} };
+const sabVariant = {}; // "key|mutation" -> { usd, listings, url } | "loading"
+fetch("/api/sab-mutations").then((r) => r.json()).then((d) => { sabMut = d || sabMut; render(); }).catch(() => {});
+const isSab = (l) => l.item.game === SAB;
+function sabMults(l) {
+  const vm = sabMut.items?.[l.item.key] || {}, med = sabMut.median || {};
+  const label = MUT_LABEL[l.mut || "none"];
+  const base = label === "Normal" ? 1 : vm[label] ?? med[label] ?? null;
+  const withTrait = vm[`${label} + 1 Trait`] ?? med[`${label} + 1 Trait`] ?? null;
+  const perTrait = withTrait && (base || 1) ? withTrait / (base || 1) : med["Normal + 1 Trait"] || 1.09;
+  return { mut: base, perTrait, traits: Math.pow(perTrait, (l.traits || []).length) };
+}
+function sabVariantFor(l) {
+  if (!l.mut || l.mut === "none") return null;
+  const id = `${l.item.key}|${l.mut}`;
+  if (!sabVariant[id]) {
+    sabVariant[id] = "loading";
+    fetch(`/api/sab-variant?key=${encodeURIComponent(l.item.key)}&mutation=${l.mut}`).then((r) => r.json())
+      .then((d) => { sabVariant[id] = d; render(); }).catch(() => { sabVariant[id] = { usd: null }; render(); });
+  }
+  return sabVariant[id];
+}
+// { value, price, priceNote, mult } for one brainrot line
+function sabLine(l) {
+  const m = sabMults(l), v = sabVariantFor(l);
+  let mut = m.mut, mutNote = "";
+  // a mutation game.guide doesn't rate: use what Eldorado prices it at vs no mutation
+  if (mut == null && v && v !== "loading" && v.usd > 0 && l.item.usd > 0) { mut = v.usd / l.item.usd; mutNote = " (from prices)"; }
+  const value = (l.item.value || 0) * (mut ?? 1) * m.traits;
+  let price = null, priceNote = "";
+  if (!l.mut || l.mut === "none") { price = l.item.usd > 0 ? l.item.usd : null; }
+  else if (v === "loading") { priceNote = "checking Eldorado…"; }
+  else if (v?.usd > 0) { price = v.usd; priceNote = `cheapest ${MUT_LABEL[l.mut]} on Eldorado (${v.listings} listed)`; }
+  else if (l.item.usd > 0 && mut) { price = l.item.usd * mut; priceNote = `none listed — estimate`; }
+  if (price != null && (l.traits || []).length) { price *= m.traits; priceNote += `${priceNote ? " · " : ""}traits estimated`; }
+  return { value, price, priceNote, mutX: mut, mutNote, traitX: m.traits, perTrait: m.perTrait, url: v?.url };
+}
+function sabControls(l, n) {
+  return `<select data-n="${n}" data-f="mut" title="Mutation">${MUTS.map(([id, label]) => `<option value="${id}"${(l.mut || "none") === id ? " selected" : ""}>${label}</option>`).join("")}</select>
+    <select data-n="${n}" data-f="trait" title="Add a trait"><option value="">＋ Trait</option>${TRAITS.filter(([t]) => !(l.traits || []).includes(t)).map(([t, x]) => `<option value="${esc(t)}">${esc(t)} (${x}× income)</option>`).join("")}</select>`;
+}
+function sabDetails(l, n) {
+  const s = sabLine(l);
+  const chips = (l.traits || []).map((t, k) => `<span class="trait">${esc(t)}<button type="button" data-n="${n}" data-untrait="${k}" title="Remove trait">×</button></span>`).join("");
+  const mult = [l.mut && l.mut !== "none" ? `${MUT_LABEL[l.mut]} ×${s.mutX ? s.mutX.toFixed(2) : "?"}${s.mutNote}` : "", (l.traits || []).length ? `${l.traits.length} trait${l.traits.length > 1 ? "s" : ""} ×${s.traitX.toFixed(2)}` : ""].filter(Boolean).join(" · ");
+  return `${chips ? `<div class="traits">${chips}</div>` : ""}${mult ? `<div class="sub">${mult}${s.priceNote ? ` · ${esc(s.priceNote)}` : ""}${s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">listings</a>` : ""}</div>` : ""}`;
+}
+
 
 // value and price of one line (Adopt Me: the chosen version)
-function lineValue(l) { const v = l.code && l.item.vals ? l.item.vals[l.code] : l.item.value; return (v || 0) * l.qty; }
-function linePrice(l) { const p = l.code && l.item.vprices ? l.item.vprices[l.code] : l.item.usd; return p > 0 ? p * l.qty : null; }
+function lineValue(l) { if (isSab(l)) return sabLine(l).value * l.qty; const v = l.code && l.item.vals ? l.item.vals[l.code] : l.item.value; return (v || 0) * l.qty; }
+function linePrice(l) { if (isSab(l)) { const p = sabLine(l).price; return p > 0 ? p * l.qty : null; } const p = l.code && l.item.vprices ? l.item.vprices[l.code] : l.item.usd; return p > 0 ? p * l.qty : null; }
 
 function sideTotals(side) {
   const lines = state[side];
@@ -96,8 +164,8 @@ function renderSide(side) {
     const it = l.item;
     const versions = it.vals ? Object.keys(AM_LABEL).filter((c) => it.vals[c] > 0) : [];
     return `<div class="slot"><img src="${esc(it.image)}" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
-      <div style="min-width:0"><div class="nm">${esc(it.name)}</div><div class="sub">${esc(it.game)} · value ${num(lineValue(l))} · ${linePrice(l) != null ? money(linePrice(l)) : "not on Eldorado"}</div></div>
-      <div class="ctl">${versions.length ? `<select data-n="${n}" data-f="code">${versions.map((c) => `<option value="${c}"${c === l.code ? " selected" : ""}>${AM_LABEL[c]}</option>`).join("")}</select>` : ""}
+      <div style="min-width:0"><div class="nm">${esc(it.name)}</div><div class="sub">${esc(it.game)} · value ${num(lineValue(l))} · ${linePrice(l) != null ? money(linePrice(l)) : isSab(l) && l.mut && l.mut !== "none" && sabVariant[`${it.key}|${l.mut}`] === "loading" ? "checking…" : "not on Eldorado"}</div>${isSab(l) ? sabDetails(l, n) : ""}</div>
+      <div class="ctl">${isSab(l) ? sabControls(l, n) : ""}${versions.length ? `<select data-n="${n}" data-f="code">${versions.map((c) => `<option value="${c}"${c === l.code ? " selected" : ""}>${AM_LABEL[c]}</option>`).join("")}</select>` : ""}
         <input type="number" min="1" step="1" value="${l.qty}" data-n="${n}" data-f="qty" aria-label="Quantity">
         <button class="x" data-n="${n}" title="Remove" type="button">✕</button></div></div>`;
   }).join("") || `<div class="sub" style="padding:10px 0;color:var(--muted)">Nothing yet.</div>`;
@@ -133,7 +201,7 @@ function render() {
 
 // the trade lives in the link: ?give=game~key~qty~code,…&get=…
 function save() {
-  const enc = (lines) => lines.map((l) => [l.item.game, l.item.key, l.qty, l.code || ""].map(encodeURIComponent).join("~")).join(",");
+  const enc = (lines) => lines.map((l) => [l.item.game, l.item.key, l.qty, isSab(l) ? [l.mut || "none", ...(l.traits || [])].join("+") : l.code || ""].map(encodeURIComponent).join("~")).join(",");
   const q = new URLSearchParams();
   if (state.give.length) q.set("give", enc(state.give));
   if (state.get.length) q.set("get", enc(state.get));
@@ -148,7 +216,8 @@ async function restore() {
     for (const part of (q.get(side) || "").split(",").filter(Boolean)) {
       const [game, key, qty, code] = part.split("~").map(decodeURIComponent);
       const item = find(game, key);
-      if (item) state[side].push({ item, qty: Math.max(1, Number(qty) || 1), code: code || (item.vals ? "fr" : "") });
+      if (item && item.game === SAB) { const [mut, ...traits] = (code || "none").split("+"); state[side].push({ item, qty: Math.max(1, Number(qty) || 1), mut: MUT_LABEL[mut] ? mut : "none", traits: traits.filter((t) => TRAITS.some(([x]) => x === t)) }); }
+      else if (item) state[side].push({ item, qty: Math.max(1, Number(qty) || 1), code: code || (item.vals ? "fr" : "") });
     }
   }
 }
@@ -167,7 +236,7 @@ for (const side of ["give", "get"]) {
       list.onclick = (e) => {
         const d = e.target.closest("[data-n]"); if (!d) return;
         const item = items[d.dataset.n];
-        state[side].push({ item, qty: 1, code: item.vals ? "fr" : "" });
+        state[side].push(item.game === SAB ? { item, qty: 1, mut: "none", traits: [] } : { item, qty: 1, code: item.vals ? "fr" : "" });
         input.value = ""; list.hidden = true; render(); input.focus();
       };
     }, 150);
@@ -176,9 +245,14 @@ for (const side of ["give", "get"]) {
     const n = e.target.dataset.n; if (n == null) return;
     if (e.target.dataset.f === "qty") state[side][n].qty = Math.max(1, Number(e.target.value) || 1);
     if (e.target.dataset.f === "code") state[side][n].code = e.target.value;
+    if (e.target.dataset.f === "mut") state[side][n].mut = e.target.value;
+    if (e.target.dataset.f === "trait" && e.target.value) (state[side][n].traits ||= []).push(e.target.value);
     render();
   });
-  box.addEventListener("click", (e) => { const b = e.target.closest(".x"); if (b) { state[side].splice(Number(b.dataset.n), 1); render(); } });
+  box.addEventListener("click", (e) => {
+    const u = e.target.closest("[data-untrait]"); if (u) { state[side][u.dataset.n].traits.splice(Number(u.dataset.untrait), 1); render(); return; }
+    const b = e.target.closest(".x"); if (b) { state[side].splice(Number(b.dataset.n), 1); render(); }
+  });
 }
 restore().then(render);
 </script>

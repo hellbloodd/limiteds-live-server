@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // Steal a Brainrot values tracker (Secret and OG brainrots only), values from sabrvalues.com.
 //
 // sabrvalues.com disallows /api/ in robots.txt and its category pages load their lists from it, so we
@@ -94,6 +95,12 @@ const SB_SHOP = "https://www.eldorado.gg/steal-a-brainrot-brainrots/i/259-2-0";
 const ELDORADO_WORKERS = 8; // the shared limit in mm2-values.mjs caps total requests to Eldorado
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
+// The mutation the price checks ask Eldorado for: "none" for the regular checks; the trade calculator asks
+// for one brainrot with a specific mutation (withSabMutation("rainbow", ...)).
+const mutationCtx = new AsyncLocalStorage();
+export const withSabMutation = (m, fn) => mutationCtx.run(m, fn);
+const sabMutation = () => mutationCtx.getStore() || "none";
+
 export async function fetchSabEldoradoPrices(items) {
   const tree = await eldoradoJson("/api/library/259/CustomItem?locale=en-US");
   const leaves = [];
@@ -112,7 +119,7 @@ export async function fetchSabEldoradoPrices(items) {
     for (let job; (job = queue.shift());) {
       const [it, [type, rarity, name]] = job;
       const filter = `tradeEnvironmentValue0=${encodeURIComponent(type)}&tradeEnvironmentValue1=${encodeURIComponent(rarity)}`
-        + `&tradeEnvironmentValue2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=none`;
+        + `&tradeEnvironmentValue2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=${sabMutation()}`;
       try {
         const j = await eldoradoJson(`/api/v1/item-management/offers?gameId=259&category=CustomItem&pageIndex=1&pageSize=${pageSize(5)}`
           + "&useMinPurchasePrice=false&useOfferAttributeSearch=false&usePopularItems=false&offerSortingCriterion=Price&isAscending=true&" + filter);
@@ -123,7 +130,7 @@ export async function fetchSabEldoradoPrices(items) {
           ...pickPrices(list), // cheapest real listing + the next one up
           ...listingWindow(offers, (j.recordCount || 0) > offers.length),
           listings: j.recordCount || list.length,
-          url: `${SB_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=none`,
+          url: `${SB_SHOP}?te_v0=${encodeURIComponent(type)}&te_v1=${encodeURIComponent(rarity)}&te_v2=${encodeURIComponent(name)}&steal-a-brainrot-mutations=${sabMutation()}`,
         };
       } catch { /* no price this time */ }
     }

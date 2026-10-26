@@ -37,7 +37,10 @@ import { dashboard, warmDashboard, preloadDashboard } from "./dashboard.mjs";
 import { depthFor } from "./depth.mjs";
 import { listEvents, addEvent, deleteEvent } from "./calendar.mjs";
 import { startRobloxEvents } from "./roblox-events.mjs";
-import { secondValues, startSecondValues } from "./second-source.mjs";
+import { secondValues, startSecondValues, sabMutations } from "./second-source.mjs";
+import { fetchSabEldoradoPrices, withSabMutation } from "./sab-values.mjs";
+import { allItems } from "./tools.mjs";
+import { lowPriority } from "./mm2-values.mjs";
 import { mm2MarketData } from "./mm2-values.mjs";
 import { bbMarketData } from "./bb-values.mjs";
 import { amMarketData } from "./am-values.mjs";
@@ -76,6 +79,7 @@ function serveShared(req, res, pathname) {
 
 // When each game's Eldorado prices (as loaded / last saved) are from - right after a restart the
 // updater hasn't finished a check yet, but the saved prices are there and recent.
+const sabVariantCache = new Map();
 const savedPriceTimes = () => ({ "MM2": mm2MarketData().pricesAt, "Blade Ball": bbMarketData().pricesAt, "Adopt Me": amMarketData().pricesAt, "Steal a Brainrot": sbMarketData().pricesAt });
 
 function sendJson(res, status, body) {
@@ -158,6 +162,19 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === "/api/sale-movers") return sendJson(res, 200, await saleMovers(parsedUrl.searchParams.get("period") || "24h", PORT));
     if (parsedUrl.pathname === "/api/market-deals") return sendJson(res, 200, await marketDeals(PORT));
     if (parsedUrl.pathname === "/api/sales") return sendJson(res, 200, { sales: itemSales(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
+    if (parsedUrl.pathname === "/api/sab-mutations") return sendJson(res, 200, sabMutations());
+    // cheapest Eldorado listing of one brainrot with one mutation (trade calculator), cached 10 minutes
+    if (parsedUrl.pathname === "/api/sab-variant") {
+      const key = parsedUrl.searchParams.get("key") || "", m = (parsedUrl.searchParams.get("mutation") || "none").toLowerCase().replace(/[^a-z-]/g, "");
+      const id = `${key}|${m}`, hit = sabVariantCache.get(id);
+      if (hit && Date.now() - hit.t < 10 * 60e3) return sendJson(res, 200, hit.d);
+      const item = (await allItems(PORT)).find((i) => i.game === "Steal a Brainrot" && i.key === key);
+      if (!item) return sendJson(res, 404, { error: "Unknown brainrot." });
+      const p = (await withSabMutation(m, () => lowPriority(() => fetchSabEldoradoPrices([item]))).catch(() => ({})))[key];
+      const d = { key, mutation: m, usd: p?.usd ?? null, second: p?.second ?? null, listings: p?.listings ?? 0, url: p?.url || null };
+      sabVariantCache.set(id, { t: Date.now(), d });
+      return sendJson(res, 200, d);
+    }
     if (parsedUrl.pathname === "/api/second-values") return sendJson(res, 200, secondValues(parsedUrl.searchParams.get("game") || "") || { items: {} });
     if (parsedUrl.pathname === "/api/dashboard") return sendJson(res, 200, await dashboard(PORT));
     if (parsedUrl.pathname === "/api/market-history") return sendJson(res, 200, { markets: await marketHistory(parsedUrl.searchParams.get("game") || "", parsedUrl.searchParams.get("key") || "") });
