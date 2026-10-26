@@ -6,6 +6,7 @@
 // Refreshed every 6 hours; kept as a warm snapshot for restarts.
 import { allItems } from "./tools.mjs";
 import { curlGet } from "./mm2-values.mjs";
+import { delegateFull } from "./sniper.mjs";
 import { loadWarm, saveWarm } from "./warm-store.mjs";
 
 const UA = { "user-agent": "Mozilla/5.0 (compatible; AgonyValues/1.0)", accept: "application/json,text/html" };
@@ -39,7 +40,15 @@ async function getText(url) {
 
 async function fetchTheirs(game) {
   const src = SOURCES[game];
-  const body = await getText(src.api || src.url);
+  let body;
+  try { body = await getText(src.api || src.url); }
+  catch (e) {
+    // a site that refuses the server's address: ask the PC booster (home connection) to fetch the page
+    if (!src.html) throw e;
+    const got = await delegateFull(`${game} second values`, []).catch(() => null);
+    if (!got?.html) throw new Error(`${e.message}; booster: ${got === null ? "not connected or busy" : "no page"}`);
+    body = got.html;
+  }
   if (src.html) { // robloxtools: cards of name + "Value" + number
     const h = body;
     return [...h.matchAll(/href="\/values\/blade-ball\/[a-z0-9-]+"[\s\S]*?alt="([^"]+)"[\s\S]*?Value<\/span><span[^>]*>([^<]+)</g)]

@@ -34,6 +34,12 @@ GameBoost / Itemku scan failed: ${e.message}`); }
 const FULL = {
   "Adopt Me": (items) => fetchAmEldoradoPrices(items),
   "Blade Ball values": async () => (await scrapeBbValues()).items, // when bbvalues.uk blocks the server
+  // robloxtools.net (Blade Ball second value source) refuses the server's address, not a home connection
+  "Blade Ball second values": async () => {
+    const r = await fetch("https://www.robloxtools.net/values/blade-ball", { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" } });
+    if (!r.ok) throw new Error(`robloxtools ${r.status}`);
+    return { html: await r.text() };
+  },
 };
 let fullRunning = false;
 // A whole game's price refresh handed over by the server (runs alongside the item checks).
