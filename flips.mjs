@@ -26,6 +26,24 @@ export async function preloadFlips() {
 }
 export function warmFlips(port) { setInterval(() => { if (!rebuilding) rebuilding = collect(port).then((body) => { cache = { at: Date.now(), body }; saveWarm("flips", body); }).catch(() => {}).finally(() => { rebuilding = null; }); }, 60 * 1000).unref(); }
 
+// Fair price for a value in one game: value x the median $-per-value of the 15 priced items closest in
+// value (2+ listings). Used to check that a flip's relist price is realistic when the item has no sales.
+function fairCurve(items) {
+  const priced = items.filter((i) => i.value > 0 && i.usd > 0 && !i.valueText && (i.listings || 0) >= 2)
+    .map((i) => ({ lv: Math.log(i.value), r: i.usd / i.value })).sort((a, b) => a.lv - b.lv);
+  if (priced.length < 8) return () => null;
+  return (value) => {
+    if (!(value > 0)) return null;
+    const lv = Math.log(value);
+    let lo = 0, hi = priced.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (priced[m].lv < lv) lo = m + 1; else hi = m; }
+    let a = lo - 1, b = lo; const near = [];
+    while (near.length < 15 && (a >= 0 || b < priced.length)) near.push(b >= priced.length || (a >= 0 && lv - priced[a].lv <= priced[b].lv - lv) ? priced[a--].r : priced[b++].r);
+    near.sort((x, y) => x - y);
+    return Math.round(value * near[near.length >> 1] * 100) / 100;
+  };
+}
+
 async function collect(port) {
   const rows = [];
   let pricesUpdatedAt = null;
@@ -33,6 +51,7 @@ async function collect(port) {
   for (const [game, api, page] of GAMES) {
     const data = await (await fetch(`http://127.0.0.1:${port}${api}`)).json().catch(() => ({ items: [] }));
     pricesByGame[game] = data.pricesUpdatedAt || null;
+    const fairOf = fairCurve(data.items || []);
     if (data.pricesUpdatedAt && (!pricesUpdatedAt || data.pricesUpdatedAt > pricesUpdatedAt)) pricesUpdatedAt = data.pricesUpdatedAt;
     for (const i of data.items || []) {
       // Adopt Me pets: one flip row per version (No Potion, Fly Ride, Neon, Mega Neon...).
@@ -44,7 +63,7 @@ async function collect(port) {
             game, page, key: `${i.key}:${v.code}`, name: i.name, image: i.image, value: v.value, usd: v.usd, second: v.second,
             listings: v.listings, url: v.url, variant: v.label, sellers: v.sellers || null, stock: v.stock ?? null,
             sold24h: fr ? i.sold24h || 0 : 0, sold7d: fr ? i.sold7d || 0 : 0, soldPrice: fr ? i.soldPrice ?? null : null,
-            ladder: v.ladder || null, valuePerUsd: v.value ? Math.round(v.value / v.usd * 10) / 10 : null, unit: "",
+            ladder: v.ladder || null, valuePerUsd: v.value ? Math.round(v.value / v.usd * 10) / 10 : null, unit: "", fair: fairOf(v.value),
           });
         }
         continue;
@@ -54,7 +73,7 @@ async function collect(port) {
         game, page, key: i.key, name: i.name, image: i.image, value: i.value, usd: i.usd, second: i.second,
         listings: i.listings, url: i.eldoradoUrl, variant: i.priceVariant || "", sellers: i.sellers || null, stock: i.stock ?? null,
         sold24h: i.sold24h || 0, sold7d: i.sold7d || 0, soldPrice: i.soldPrice ?? null,
-        ladder: i.ladder || null, valuePerUsd: i.valuePerUsd ?? null, unit: "",
+        ladder: i.ladder || null, valuePerUsd: i.valuePerUsd ?? null, unit: "", fair: i.valueText ? null : fairOf(i.value),
       });
     }
   }

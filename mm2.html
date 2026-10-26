@@ -543,7 +543,10 @@ function flipOf(i) {
   const [market, buy, url] = offers[0];
   let sell = market === "Eldorado" ? (i.second > 0 ? i.second - 0.01 : null) : i.usd - 0.01;
   if (sell == null) return null;
-  if (i.soldPrice > 0 && (i.sold7d || 0) >= 3) sell = Math.min(sell, i.soldPrice);
+  // realistic: never above what it sold for this week (+10%) or, with too few sales, its fair price (+25%)
+  if (i.soldPrice > 0 && (i.sold7d || 0) >= 3) sell = Math.min(sell, i.soldPrice * 1.1);
+  else if (i.fair > 0) sell = Math.min(sell, i.fair * 1.25);
+  else return null;
   const profit = sell * (1 - FLIP_FEE) - buy;
   if (buy < sell * 0.3) return null; // that cheap is almost always a mis-tagged item or a scam listing
   return profit >= 0.5 && profit / buy >= 0.1 ? { market, buy, url, sell, profit } : null;

@@ -343,8 +343,16 @@ function drawTrend(d, on) {
 }
 
 // ---------- top flips ----------
+// same rule as the Flip Finder: never above what it sold for this week (+10%) or its fair price (+25%);
+// no evidence at all = not shown
+function realRelist(r) {
+  const listing = r.second - 0.01;
+  if (r.sold7d >= 3 && r.soldPrice > 0) return Math.min(listing, r.soldPrice * 1.1);
+  if (r.fair > 0) return Math.min(listing, r.fair * 1.25);
+  return r.ladder?.[2] && r.second >= r.ladder[2] * 0.95 ? listing : null;
+}
 getJson("/api/flips?fee=10&minProfit=1&minRoi=10&minListings=3&minSold=1").then((d) => {
-  const best = (d?.rows || []).filter((r) => !r.market).map((r) => ({ ...r, p: (r.second - 0.01) * 0.9 - r.usd })).filter((r) => r.p > 0)
+  const best = (d?.rows || []).filter((r) => !r.market).map((r) => ({ ...r, p: realRelist(r) == null ? -1 : realRelist(r) * 0.9 - r.usd })).filter((r) => r.p > 0)
     .sort((a, b) => b.p * Math.max(1, b.sold7d) - a.p * Math.max(1, a.sold7d)).slice(0, 6);
   const el = document.getElementById("flips");
   if (!best.length) { el.innerHTML = `<div class="empty-s">No flips right now — check back soon.</div>`; return; }

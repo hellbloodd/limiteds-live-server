@@ -112,6 +112,8 @@
   .chip { display:inline-block; font-size:10px; font-weight:800; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); margin-right:4px; }
   .num { text-align:right; }
   .profit { font-weight:800; }
+  .rl { font-size:10px; margin-top:2px; font-weight:600; }
+  .rl.ok { color:#6ee7b7; } .rl.capped { color:#fbbf24; } .rl.warn { color:#ff5c8a; }
   .up { color:var(--green); } .down { color:var(--red); }
   .roi-bar { height:4px; border-radius:4px; background:var(--surface-2); margin-top:4px; overflow:hidden; }
   .roi-bar i { display:block; height:100%; background:linear-gradient(90deg, var(--accent), var(--accent-2)); width:0; animation:grow .8s .2s var(--ease) forwards; }
@@ -234,9 +236,10 @@
     <div class="field"><label for="minListings">Min listings</label><input id="minListings" type="number" min="2" step="1"></div>
     <div class="field"><label for="minSold">Min sold (7d)</label><input id="minSold" type="number" min="0" step="1"></div>
     <div class="field"><label for="minStock" title="Units in the cheapest listing - 2 or more = bulk flips">Min stock</label><input id="minStock" type="number" min="0" step="1"></div>
+    <div class="field"><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer;white-space:nowrap"><input type="checkbox" id="showUnproven" style="width:auto;padding:0"> Show unproven flips</label></div>
     <div class="field"><label>&nbsp;</label><button class="refresh" id="refresh" type="button"><span class="ico">↻</span> Refresh now</button></div>
     <div class="msg" id="refresh-status" style="flex-basis:100%;font-size:12px"></div>
-    <div class="note">Set the seller fee to what Eldorado charges you (check your Eldorado seller settings). Profit = (next-cheapest listing − $0.01) × (1 − fee) − cheapest listing. "Sold" counts sales the site has seen on Eldorado (stock going down or listings disappearing) — tracking started recently, so it grows over the first days. "Profit / day" = profit × average sales per day: the best guess of what a flip earns. Check the listings before buying.</div>
+    <div class="note">Set the seller fee to what Eldorado charges you. Profit = realistic relist price × (1 − fee) − buy price. The realistic relist price is 1¢ under the next listing, but never above what the item sold for this week (+10%), or, with too few sales, above its fair price (+25%) — the next listing is often a troll or wishful price. Flips with no sales and no value to check against are hidden unless you tick "Show unproven".</div>
   </div>
 
   <section class="snipes" id="snipes" hidden>
@@ -284,10 +287,33 @@ let refetchTimer = null;
 let shown = [];
 let lastData = null;
 let sortKey = "profit", sortDir = -1;
+$("showUnproven").checked = !!settings.showUnproven;
+$("showUnproven").addEventListener("change", () => { settings.showUnproven = $("showUnproven").checked; try { localStorage.setItem("flipSettings", JSON.stringify(settings)); } catch { /* private mode */ } render(); });
+
+// Realistic relist price: 1¢ under the next listing, but never above what the item actually sold for
+// this week (+10%) or, with too few sales, above its fair price (+25%) - the next listing is often a
+// troll or wishful price. No sales and no value to check against = "unproven" (hidden by default).
+function realism(r) {
+  const listing = Math.max(0, r.second - 0.01);
+  if (r.sold7d >= 3 && r.soldPrice > 0) {
+    const cap = r.soldPrice * 1.10;
+    return listing <= cap ? { relist: listing, real: "sales", note: `sells around ${money(r.soldPrice)}` }
+      : { relist: cap, real: "capped-sales", listing, note: `capped at recent sales (${money(r.soldPrice)})` };
+  }
+  if (r.fair > 0) {
+    const cap = r.fair * 1.25;
+    return listing <= cap ? { relist: listing, real: "value", note: `fair price ${money(r.fair)}` }
+      : { relist: cap, real: "capped-value", listing, note: `capped at fair price (${money(r.fair)})` };
+  }
+  const third = r.ladder?.[2];
+  if (third && r.second >= third * 0.95) return { relist: listing, real: "ladder", note: "next listings agree on this price" };
+  return { relist: listing, real: "unproven", note: "no sales or value to check this price against" };
+}
 
 function compute(r) {
   const fee = settings.fee / 100;
-  const relist = Math.max(0, r.second - 0.01);
+  const rl = realism(r);
+  const relist = rl.relist;
   const feeAmt = relist * fee;
   // other marketplaces add a checkout fee on top of the listed price
   const buyCost = r.market ? r.usd * (1 + settings.buyFee / 100) : r.usd;
@@ -298,7 +324,7 @@ function compute(r) {
   const sellsEveryH = r.sold7d ? 168 / r.sold7d : null;
   // bulk: the cheapest seller has `stock` units; buy about a week of sales (at least 1), relist one by one
   const bulkUnits = r.stock > 1 ? Math.max(1, Math.min(r.stock, r.sold7d || 1)) : 1;
-  return { ...r, relist, feeAmt, profit, buyCost, rating, roi: profit / buyCost * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH,
+  return { ...r, ...rl, relist, feeAmt, profit, buyCost, rating, roi: profit / buyCost * 100, perDay: Math.max(0, profit) * (r.sold7d / 7), sellsEveryH,
     bulkUnits, bulkProfit: Math.max(0, profit) * bulkUnits };
 }
 
@@ -309,7 +335,8 @@ function render() {
     && r.profit >= settings.minProfit && r.roi >= settings.minRoi && (r.listings ?? 0) >= settings.minListings
     && r.sold7d >= settings.minSold && (r.stock || 1) >= settings.minStock
     && (!settings.market || (settings.market === "eldorado" ? !r.market : settings.market === "other" ? !!r.market : r.buyMarket === settings.market))
-    && (!settings.minRating || (r.rating != null && r.rating >= settings.minRating)));
+    && (!settings.minRating || (r.rating != null && r.rating >= settings.minRating))
+    && (settings.showUnproven || r.real !== "unproven"));
   list.sort((a, b) => (sortKey === "name" ? a.name.localeCompare(b.name) : (a[sortKey] - b[sortKey])) * (sortKey === "name" ? 1 : sortDir));
   document.querySelectorAll(".head button").forEach((b) => b.classList.toggle("on", b.dataset.sort === sortKey));
   const maxRoi = Math.max(...list.map((r) => r.roi), 1);
@@ -324,7 +351,7 @@ function render() {
         </div>
       </div>
       <div class="num tabular" data-label="Buy at">${money(r.usd)}${r.market && settings.buyFee ? `<div class="dim" style="font-size:10px">${money(r.buyCost)} with fee</div>` : ""}</div>
-      <div class="num tabular" data-label="Relist at">${money(r.relist)}</div>
+      <div class="num tabular" data-label="Relist at" title="${esc(r.note)}">${money(r.relist)}${r.listing ? `<div class="rl capped">capped · listing ${money(r.listing)}</div>` : r.real === "unproven" ? `<div class="rl warn">unproven</div>` : `<div class="rl ok">✓ ${r.real === "sales" ? "sells at this" : r.real === "value" ? "fits value" : "listings agree"}</div>`}</div>
       <div class="num tabular dim" data-label="Fee">−${money(r.feeAmt)}</div>
       <div class="num tabular profit ${r.profit >= 0 ? "up" : "down"}" data-label="Profit">${r.profit >= 0 ? "+" : ""}${money(r.profit)}</div>
       <div class="num tabular" data-label="ROI">${r.roi.toFixed(0)}%<div class="roi-bar"><i style="--w:${Math.max(4, Math.min(100, r.roi / maxRoi * 100)).toFixed(0)}%"></i></div></div>
@@ -380,6 +407,8 @@ function trustChip(t) {
 const hours = (h) => (h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(h < 10 ? 1 : 0)} h` : `${(h / 24).toFixed(0)} days`);
 
 function verdict(r) {
+  if (r.real === "unproven") return ["bad", "⛔ Unproven: no sales and no value to check the relist price against", "The next listing may be a wishful price — check the listings before buying"];
+  if (r.listing) return ["warn", `⚠️ The next listing (${money(r.listing)}) is above what this item is worth — profit is counted at ${money(r.relist)}`, r.note];
   const t = r.trust?.[0];
   if (t?.level === "risky") return ["bad", `⛔ The cheapest listing's seller has only ${t.score}% positive reviews`, `${t.ratings} ratings — high scam risk, skip this one or check the seller carefully`];
   if (t?.level === "new") return ["warn", `⚠️ The cheapest listing is from a new seller (${t.ratings} ratings)`, "New sellers are where most scams come from — check their profile before buying"];
