@@ -301,6 +301,7 @@ export function pickPrices(sorted) {
 export function cheapestOfferUrl(p) {
   const shop = String(p?.url || p?.baseUrl || "").match(/^(https:\/\/www\.eldorado\.gg\/[^/]+)\/i\//)?.[1];
   const offers = (p?.offers || []).filter((o) => o[0] && o[1] > 0);
+  if (shop && !offers.length && p?.offerId) return `${shop}/oi/${p.offerId}`;
   if (!shop || !offers.length) return p?.url || null;
   const best = offers.find((o) => Math.abs(o[1] - p.usd) < 0.005) || offers.reduce((a, b) => (b[1] < a[1] ? b : a));
   return `${shop}/oi/${best[0]}`;
