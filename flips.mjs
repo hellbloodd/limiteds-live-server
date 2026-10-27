@@ -61,7 +61,7 @@ async function collect(port) {
           const fr = v.code === "fr"; // sales are tracked for the Fly Ride listings
           rows.push({
             game, page, key: `${i.key}:${v.code}`, name: i.name, image: i.image, value: v.value, usd: v.usd, second: v.second,
-            listings: v.listings, url: v.url, variant: v.label, sellers: v.sellers || null, stock: v.stock ?? null,
+            listings: v.listings, url: v.cheapestUrl || v.url, searchUrl: v.url, variant: v.label, sellers: v.sellers || null, stock: v.stock ?? null,
             sold24h: fr ? i.sold24h || 0 : 0, sold7d: fr ? i.sold7d || 0 : 0, soldPrice: fr ? i.soldPrice ?? null : null,
             ladder: v.ladder || null, valuePerUsd: v.value ? Math.round(v.value / v.usd * 10) / 10 : null, unit: "", fair: fairOf(v.value),
           });

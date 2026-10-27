@@ -170,7 +170,9 @@ const OFFERS = "/api/v1/item-management/offers?gameId=201&category=CustomItem&pa
 function priceOf(offers, listings, url) {
   const list = offers.map((o) => o[1]).sort((a, b) => a - b);
   const bySeller = [...offers].sort((a, b) => a[1] - b[1]);
-  return { ...pickPrices(list), listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100), sellers: bySeller.slice(0, 2).map((o) => o[4] || null), stock: bySeller[0]?.[2] ?? null };
+  const picked = pickPrices(list);
+  const cheapest = bySeller.find((o) => Math.abs(o[1] - picked.usd) < 0.005) || bySeller[0];
+  return { ...picked, offerId: cheapest?.[0] || null, listings, url, ladder: list.slice(0, 5).map((v) => Math.round(v * 100) / 100), sellers: bySeller.slice(0, 2).map((o) => o[4] || null), stock: bySeller[0]?.[2] ?? null };
 }
 
 // frOnly: just the Fly Ride listings, one request per pet (the sniper's fast path).
@@ -292,7 +294,7 @@ function eldoradoFields(it) {
 }
 function eldoradoOnly(it) {
   const p = amEldorado.prices[it.key];
-  const variantRows = () => Object.entries(p.variants || {}).map(([code, v]) => ({ code, label: AM_TRAITS[code], value: it.vals?.[code] ?? null, ...v, url: `${p.baseUrl}&adopt-me-traits=${code}` }));
+  const variantRows = () => Object.entries(p.variants || {}).map(([code, v]) => ({ code, label: AM_TRAITS[code], value: it.vals?.[code] ?? null, ...v, url: `${p.baseUrl}&adopt-me-traits=${code}`, cheapestUrl: v.offerId ? `${AM_SHOP.replace(/\/i\/.*$/, "")}/oi/${v.offerId}` : null }));
   if (!p?.usd) return p?.variants ? { variants: variantRows() } : {};
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
