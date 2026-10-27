@@ -296,6 +296,16 @@ export function pickPrices(sorted) {
 // Comparing two checks: a listing whose quantity went down sold that many; a listing that vanished
 // probably sold - unless it expired, its seller relisted, or newer cheaper listings just pushed it
 // out of the window we look at. Sales are kept as { itemKey: [[unixSeconds, usd, qty], ...] }.
+// Direct link to the cheapest stored listing (Eldorado's offer page: /<shop>/oi/<offerId>), so
+// "cheapest" opens that exact listing instead of a search. Falls back to the search/filter page.
+export function cheapestOfferUrl(p) {
+  const shop = String(p?.url || p?.baseUrl || "").match(/^(https:\/\/www\.eldorado\.gg\/[^/]+)\/i\//)?.[1];
+  const offers = (p?.offers || []).filter((o) => o[0] && o[1] > 0);
+  if (!shop || !offers.length) return p?.url || null;
+  const best = offers.find((o) => Math.abs(o[1] - p.usd) < 0.005) || offers.reduce((a, b) => (b[1] < a[1] ? b : a));
+  return `${shop}/oi/${best[0]}`;
+}
+
 export const offerTuple = (r) => [r.offer?.id, r.offer?.pricePerUnitInUSD?.amount, r.offer?.quantity ?? 1,
   Date.parse(r.offer?.expireDate) || 0, r.offer?.userId || r.user?.id || ""];
 
@@ -681,7 +691,7 @@ function eldoradoFields(it) {
 function eldoradoOnly(it) {
   const p = mm2Eldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, cheapestUrl: cheapestOfferUrl(p), valuePerUsd: Math.round(it.value / p.usd * 10) / 10,
     priceChanges: priceChangesFrom(mm2PriceHistory[it.key], p.usd), ...salesStats(mm2Sales[it.key], undefined, p.usd) };
 }
 

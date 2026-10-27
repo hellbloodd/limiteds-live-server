@@ -71,7 +71,7 @@ async function collect(port) {
       if (!(i.usd > 0) || !(i.second > i.usd + 0.01)) continue; // no gap to the next listing: never a flip
       rows.push({
         game, page, key: i.key, name: i.name, image: i.image, value: i.value, usd: i.usd, second: i.second,
-        listings: i.listings, url: i.eldoradoUrl, variant: i.priceVariant || "", sellers: i.sellers || null, stock: i.stock ?? null,
+        listings: i.listings, url: i.cheapestUrl || i.eldoradoUrl, searchUrl: i.eldoradoUrl, variant: i.priceVariant || "", sellers: i.sellers || null, stock: i.stock ?? null,
         sold24h: i.sold24h || 0, sold7d: i.sold7d || 0, soldPrice: i.soldPrice ?? null,
         ladder: i.ladder || null, valuePerUsd: i.valuePerUsd ?? null, unit: "", fair: i.valueText ? null : fairOf(i.value),
       });
@@ -87,7 +87,7 @@ async function collect(port) {
     for (const o of others) {
       if (!(o.usd < r.usd - 0.01)) continue;
       rows.push({ ...r, key: `${r.key}@${o.market}`, market: `${o.market} → Eldorado`, buyMarket: o.market, usd: o.usd, second: r.usd,
-        url: o.url, sellUrl: r.url, ladder: [o.usd, ...(r.ladder || [r.usd])].slice(0, 5), sellers: null, others: null,
+        url: o.url, sellUrl: r.searchUrl || r.url, searchUrl: null, ladder: [o.usd, ...(r.ladder || [r.usd])].slice(0, 5), sellers: null, others: null,
         buyRating: o.rating ?? null, eldoradoUsd: r.usd });
     }
   }

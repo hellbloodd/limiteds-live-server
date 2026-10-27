@@ -96,7 +96,7 @@ async function fairRows(port) {
     if (priced.length < 8) continue;
     for (const i of items) {
       if (!(i.value > 0) || i.valueText) continue;
-      const offers = [...(i.usd > 0 && i.eldoradoUrl ? [["Eldorado", i.usd, i.eldoradoUrl]] : []), ...(i.others || [])].sort((a, b) => a[1] - b[1]);
+      const offers = [...(i.usd > 0 && i.eldoradoUrl ? [["Eldorado", i.usd, i.cheapestUrl || i.eldoradoUrl]] : []), ...(i.others || [])].sort((a, b) => a[1] - b[1]);
       if (!offers.length) continue;
       // 15 nearest by value: binary search, then widen both ways
       const lv = Math.log(i.value);

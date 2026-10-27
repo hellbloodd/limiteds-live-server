@@ -73,7 +73,7 @@ function embed(game, g, { item: i, times, typical }, test = false) {
     username: "Agony Values deals",
     embeds: [{
       title: `${test ? "🧪 TEST — " : "🔥 "}${i.name} — ${times.toFixed(1)}× better than similar items`,
-      url: i.eldoradoUrl,
+      url: i.cheapestUrl || i.eldoradoUrl,
       color: g.color,
       thumbnail: i.image ? { url: i.image } : undefined,
       fields: [
@@ -82,7 +82,7 @@ function embed(game, g, { item: i, times, typical }, test = false) {
         { name: "Cheapest on Eldorado", value: `$${fmt(i.usd)}${i.priceVariant ? ` (${i.priceVariant})` : ""}`, inline: true },
         { name: "Value per $", value: `${fmt(i.valuePerUsd)} (similar items: ${fmt(typical)})`, inline: true },
         { name: "Listings", value: String(i.listings ?? "?"), inline: true },
-        { name: "Links", value: `[Buy on Eldorado](${i.eldoradoUrl}) · [Agony Values](${SITE}${g.page})`, inline: false },
+        { name: "Links", value: `[Buy on Eldorado](${i.cheapestUrl || i.eldoradoUrl}) · [Agony Values](${SITE}${g.page})`, inline: false },
       ],
       footer: { text: test ? "Test alert — real alerts look like this." : "Check the listing before buying — prices change fast." },
       timestamp: new Date().toISOString(),
@@ -173,7 +173,7 @@ export async function checkFlips(game, port) {
       username: "Agony Values flips",
       embeds: [{
         title: `💸 Flip: ${i.name} — +$${fmt(f.profit)} (${f.roi.toFixed(0)}% ROI)`,
-        url: i.eldoradoUrl, color: 0xa78bfa, thumbnail: i.image ? { url: i.image } : undefined,
+        url: i.cheapestUrl || i.eldoradoUrl, color: 0xa78bfa, thumbnail: i.image ? { url: i.image } : undefined,
         fields: [
           { name: "Game", value: game, inline: true },
           valueField(i),
@@ -182,7 +182,7 @@ export async function checkFlips(game, port) {
           { name: `Profit after ${Math.round(FLIP_FEE * 100)}% fee`, value: `+$${fmt(f.profit)}`, inline: true },
           { name: "Sells", value: `${i.sold7d} in 7d (${i.sold24h} in 24h)${i.soldPrice ? ` · typical $${fmt(i.soldPrice)}` : ""}`, inline: true },
           { name: "Listings", value: String(i.listings), inline: true },
-          { name: "Links", value: `[Buy on Eldorado](${i.eldoradoUrl}) · [Flip Finder](${SITE}/flips)`, inline: false },
+          { name: "Links", value: `[Buy on Eldorado](${i.cheapestUrl || i.eldoradoUrl}) · [Flip Finder](${SITE}/flips)`, inline: false },
         ],
         footer: { text: "Check both listings before buying — the next one may not sell at that price." },
         timestamp: new Date().toISOString(),

@@ -523,14 +523,14 @@ async function load() {
 // the cheapest of all is highlighted.
 const MK_SHORT = { Eldorado: "Eldorado", G2G: "G2G", U7BUY: "U7BUY", GameBoost: "GameBoost", Itemku: "Itemku" };
 function marketOffers(i) {
-  const list = [...(i.usd && i.eldoradoUrl ? [["Eldorado", i.usd, i.eldoradoUrl]] : []), ...(i.others || [])];
+  const list = [...(i.usd && i.eldoradoUrl ? [["Eldorado", i.usd, i.cheapestUrl || i.eldoradoUrl]] : []), ...(i.others || [])];
   return list.sort((a, b) => a[1] - b[1]);
 }
 function marketLinks(i, max = 4) {
   const list = marketOffers(i);
   if (!list.length) return "";
   const shown = list.slice(0, max);
-  if (i.usd && i.eldoradoUrl && !shown.some((o) => o[0] === "Eldorado")) shown[shown.length - 1] = ["Eldorado", i.usd, i.eldoradoUrl];
+  if (i.usd && i.eldoradoUrl && !shown.some((o) => o[0] === "Eldorado")) shown[shown.length - 1] = ["Eldorado", i.usd, i.cheapestUrl || i.eldoradoUrl];
   return `<div class="mk-links">${shown.map((o) => `<a class="mk${o === list[0] && list.length > 1 ? " best" : ""}" href="${esc(o[2])}" target="_blank" rel="noopener" style="--mc:${MARKET_COLORS[o[0]] || "#8b5cf6"}" title="Cheapest on ${esc(o[0])}: ${usd(o[1])}"><i></i>${esc(MK_SHORT[o[0]] || o[0])} <b>${usd(o[1])}</b></a>`).join("")}</div>`;
 }
 
@@ -869,7 +869,7 @@ async function openItem(key) {
     ${row("Stability", esc(i.stability))}${row("Demand", i.demand != null ? fmt(i.demand) : "")}
     <dt>Rarity</dt><dd>${fmt(i.rarity)}</dd>
     ${(i.extra || []).map(([k, val]) => `<dt>${esc(k)}</dt><dd class="tabular">${esc(val)}</dd>`).join("")}
-    ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">view</a></dd>
+    ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.cheapestUrl || i.eldoradoUrl)}" target="_blank" rel="noopener">open cheapest</a> · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">all listings</a></dd>
     ${priceVsRow(i)}
     ${second && i.v2 != null ? `<dt>Second source</dt><dd class="tabular">${esc(second.source)}: <b>${fmt(i.v2)}</b> in this site's units <span class="${disputed(i) ? "down" : "dim"}">(${i.diff > 0 ? "+" : ""}${i.diff}%)</span> · <a href="${esc(second.url)}" target="_blank" rel="noopener">open</a></dd>` : ""}
     ${(i.others || []).length ? `<dt>Cheapest anywhere</dt><dd>${marketLinks(i, 9)}</dd>` : ""}

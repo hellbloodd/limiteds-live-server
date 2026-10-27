@@ -8,7 +8,7 @@ import { cheapestElsewhere } from "./markets.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
   pageSize,
-} from "./mm2-values.mjs";
+cheapestOfferUrl, } from "./mm2-values.mjs";
 
 const AM_ORIGIN = "https://www.adoptmevalues.app";
 const AM_VALUES_PAGE = `${AM_ORIGIN}/values`;
@@ -297,7 +297,7 @@ function eldoradoOnly(it) {
   // Pets are priced as Fly Ride, so compare with the Fly Ride value.
   const value = p.variant === "Fly Ride" && it.flyRide ? it.flyRide : it.value;
   const variants = p.variants ? variantRows() : null;
-  return { variants, usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key], undefined, p.usd) };
+  return { variants, usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, cheapestUrl: cheapestOfferUrl(p), priceVariant: p.variant, valuePerUsd: Math.round(value / p.usd * 10) / 10, priceChanges: priceChangesFrom(amPriceHistory[it.key], p.usd), ...salesStats(amSales[it.key], undefined, p.usd) };
 }
 
 // Returns true if the request was handled.

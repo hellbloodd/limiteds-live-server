@@ -3,7 +3,7 @@
 // cheapest listings of a "hot list" of items that matter (priced $5+, selling or well listed), and
 // when a listing we haven't seen before is well under the usual price, Discord gets pinged at once.
 // Blade Ball can't be read item by item on Eldorado, so it stays on the normal 15-minute scan.
-import { fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, readRow } from "./mm2-values.mjs";
+import { fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, readRow, cheapestOfferUrl } from "./mm2-values.mjs";
 import { fetchAmEldoradoPrices } from "./am-values.mjs";
 import { fetchSabEldoradoPrices } from "./sab-values.mjs";
 import { GAMES, gameItems, post, SITE, fmt, valueField } from "./deals.mjs";
@@ -115,7 +115,7 @@ async function processListings(game, item, p) {
     alerted.add(offerId);
     const trust = await getSellerTrust(p.offers.find((o) => o[0] === offerId)?.[4]).catch(() => null);
     const snipe = { at: Date.now(), game, key: item.key, name: item.name, image: item.image, price, usual, next, profit, offerId,
-      discount: Math.round((1 - price / usual) * 100), url: p.url || item.eldoradoUrl, suspicious, trust };
+      discount: Math.round((1 - price / usual) * 100), url: (cheapestOfferUrl({ url: p.url || item.eldoradoUrl, offers: [[offerId, price]], usd: price })) || p.url || item.eldoradoUrl, suspicious, trust };
     snipesDirty = true;
     recentSnipes.unshift(snipe);
     recentSnipes.length = Math.min(recentSnipes.length, 200);

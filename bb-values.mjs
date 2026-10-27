@@ -6,7 +6,7 @@ import { cheapestElsewhere } from "./markets.mjs";
 import { currencyPrices } from "./currency.mjs";
 import {
   curlGet, supabaseConfig, createStateReader, registerSupabaseTick, priceChangesFrom, pickPrices, offerTuple, listingWindow, salesStats, mergeMm2History, periodChanges, sparkline, eldoradoJson, sendGamePage,
-} from "./mm2-values.mjs";
+cheapestOfferUrl, } from "./mm2-values.mjs";
 
 const BB_ORIGIN = "https://bbvalues.uk";
 const BB_API_HEADERS = ["x-bbv-handshake: v1-secure-request", "Accept: application/json", `Referer: ${BB_ORIGIN}/values/`];
@@ -278,7 +278,7 @@ function eldoradoFields(it) {
 function eldoradoOnly(it) {
   const p = bbEldorado.prices[it.key];
   if (!p?.usd) return {};
-  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key], undefined, p.usd) };
+  return { usd: p.usd, second: p.second ?? null, ladder: p.ladder || null, sellers: p.sellers || null, stock: p.stock ?? null, listings: p.listings, eldoradoUrl: p.url, cheapestUrl: cheapestOfferUrl(p), valuePerUsd: Math.round(it.value / p.usd * 10) / 10, priceChanges: priceChangesFrom(bbPriceHistory[it.key], p.usd), ...salesStats(bbSales[it.key], undefined, p.usd) };
 }
 
 // Token price from Eldorado's Blade Ball Currency page, in its default "Recommended" order. The

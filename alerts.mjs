@@ -52,7 +52,7 @@ export async function removeAlert(id) {
 // The cheapest price an alert watches: Eldorado's cheapest, or the cheapest on any marketplace.
 function bestPrice(a, i) {
   if (!i) return null;
-  const list = i.usd > 0 ? [{ market: "Eldorado", usd: i.usd, url: i.eldoradoUrl }] : [];
+  const list = i.usd > 0 ? [{ market: "Eldorado", usd: i.usd, url: i.cheapestUrl || i.eldoradoUrl }] : [];
   if (a.markets === "any") {
     const code = a.game === "Adopt Me" ? "fr" : "";
     for (const o of otherMarketPrices(a.game, i.name, code)) if (o.usd >= (i.usd || o.usd) * 0.35) list.push({ market: o.market, usd: o.usd, url: o.url, rating: o.rating });

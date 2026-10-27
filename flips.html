@@ -459,7 +459,7 @@ function openCard(r) {
     ${r.market ? (r.usd < r.eldoradoUsd * 0.4
       ? `<div class="verdict bad">⛔ ${esc(r.buyMarket)} is ${Math.round((1 - r.usd / r.eldoradoUsd) * 100)}% cheaper than Eldorado — probably a different version or a mislabelled listing<small>Open it and check it's exactly this item before buying.</small></div>`
       : `<div class="verdict warn">🔁 Buy on ${esc(r.buyMarket)}, relist on Eldorado${r.buyRating ? ` · seller ${r.buyRating}%` : ""}<small>${esc(r.buyMarket)} adds its own buyer fees and delivery times — check the final price and the seller there first.</small></div>`) : ""}
-    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? `Buy on ${esc(r.buyMarket)}` : "Check listings on Eldorado"}</a>${r.market ? `<a class="ghost-link" href="${esc(r.sellUrl)}" target="_blank" rel="noopener">Eldorado listings</a>` : ""}<a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
+    <div class="c-actions"><a class="buy" href="${esc(r.url)}" target="_blank" rel="noopener">${r.market ? `Buy on ${esc(r.buyMarket)}` : `Buy the cheapest (${money(r.usd)}) on Eldorado`}</a>${r.market ? `<a class="ghost-link" href="${esc(r.sellUrl)}" target="_blank" rel="noopener">Eldorado listings</a>` : r.searchUrl ? `<a class="ghost-link" href="${esc(r.searchUrl)}" target="_blank" rel="noopener">All listings</a>` : ""}<a class="ghost-link" href="${esc(r.page)}">Open on ${esc(r.game)} values</a></div>`;
   $("card").showModal();
 }
 $("rows").addEventListener("click", (e) => {
