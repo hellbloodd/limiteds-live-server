@@ -384,8 +384,8 @@
 
 <script>
 /*GAME_CONFIG*/
-const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "mm2values.com",
-  sourceUrl: "https://www.mm2values.com", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
+const GAME = window.GAME || { api: "/api/mm2", title: "MM2 Values", tab: "mm2", noun: "MM2 weapons", sourceName: "supremevalues.com",
+  sourceUrl: "https://supremevalues.com/mm2", shopUrl: "https://www.eldorado.gg/mm2-shop/i/204-2-0" };
 document.title = `${GAME.title} · Agony Values`;
 document.documentElement.dataset.game = GAME.tab; // per-game accent colours
 document.getElementById("hero-title").textContent = GAME.title;
@@ -422,7 +422,7 @@ function changeText(c) {
   return `${c.abs > 0 ? "+" : ""}${fmt(c.abs)} (${c.pct > 0 ? "+" : ""}${c.pct}%)`;
 }
 const $ = (id) => document.getElementById(id);
-const fmt = (n) => n == null ? "N/A" : n.toLocaleString();
+const fmt = (n) => n == null ? "N/A" : n > 0 && n < 1 ? String(Number(n.toPrecision(2))) : n.toLocaleString();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const cls = (n) => n > 0 ? "up" : n < 0 ? "down" : "flat";
 
@@ -872,11 +872,12 @@ async function openItem(key) {
     ${i.usd ? `<dt>Eldorado</dt><dd class="tabular">${usd(i.usd)} cheapest${i.priceVariant ? ` (${esc(i.priceVariant)})` : ""} · ${fmt(i.listings)} listings · <a href="${esc(i.cheapestUrl || i.eldoradoUrl)}" target="_blank" rel="noopener">open cheapest</a> · <a href="${esc(i.eldoradoUrl)}" target="_blank" rel="noopener">all listings</a></dd>
     ${priceVsRow(i)}
     ${second && i.v2 != null ? `<dt>Second source</dt><dd class="tabular">${esc(second.source)}: <b>${fmt(i.v2)}</b> in this site's units <span class="${disputed(i) ? "down" : "dim"}">(${i.diff > 0 ? "+" : ""}${i.diff}%)</span> · <a href="${esc(second.url)}" target="_blank" rel="noopener">open</a></dd>` : ""}
+    ${i.tier ? `<dt>Trade ratio</dt><dd>${esc(i.tier)}</dd>` : ""}
     ${(i.others || []).length ? `<dt>Cheapest anywhere</dt><dd>${marketLinks(i, 9)}</dd>` : ""}
     <dt>Sold on Eldorado</dt><dd class="tabular">${i.sold7d ? `${fmt(i.sold24h)} in 24h · ${fmt(i.sold7d)} in 7d${i.soldPrice ? ` · typical sale ${usd(i.soldPrice)}` : ""}` : `<span class="dim">none seen yet — sales are tracked from now on</span>`}</dd>
     <dt>Value per $</dt><dd class="tabular ${vpdClass(i.valuePerUsd)}">${fmtVpd(i.valuePerUsd)} <span class="dim">(typical ${fmtVpd(medianVpd)})</span></dd>` : ""}${row("Origin", esc(i.origin))}
     </dl>
-    ${i.valueText ? `<p class="dim">${/not valued/i.test(i.valueText) ? "New item — mm2values hasn't given it a value yet. Its Eldorado price is tracked already." : "This item is valued as a trade ratio, so there's no number to chart."}</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
+    ${i.valueText ? `<p class="dim">${/not valued/i.test(i.valueText) ? "New item — Supreme Values hasn't given it a value yet. Its Eldorado price is tracked already." : "This item is valued as a trade ratio, so there's no number to chart."}</p>` : `<div class="ptable">${Object.keys(PERIOD_LABEL).map((p) => `<div><span class="dim">${p === "all" ? "All" : p}</span><b class="tabular ${cls(i.changes?.[p]?.abs)}">${i.changes?.[p] ? (i.changes[p].pct > 0 ? "+" : "") + i.changes[p].pct + "%" : "—"}</b></div>`).join("")}</div>`}
     <div id="depth"></div>
     <div id="selltime"></div>
     <div id="hist" class="dim">Loading history…</div>

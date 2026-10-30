@@ -40,7 +40,7 @@
     <a class="tab" href="/trade">⚖️ Trade</a><a class="tab" href="/gaps">📊 Gaps</a><a class="tab" href="/movers">📈 Movers</a><a class="tab active" href="/seasons">🎃 Seasons</a><a class="tab" href="/calendar">📅 Calendar</a><a class="tab" href="/compare">🆚 Compare</a><a class="tab" href="/flips">💸 Flip Finder</a><a class="tab" href="/currency">💱 Currency</a><a class="tab" href="/alerts">🔔 Alerts</a><a class="tab" href="/watch">🏷️ My Listings</a><a class="tab" href="/profits">📒 Profits</a><a class="tab" href="/portfolio">💼 Portfolio</a><a class="tab" href="/status">🟢 Status</a>
   </nav>
   <section class="hero"><div><h1>Seasons</h1>
-    <p class="dim">MM2 event items (Halloween and Christmas, as tagged by mm2values.com) and how their value and Eldorado price are moving. Event items usually rise before their event and dip once it's live and new ones flood in — use this to time buying and selling.</p></div></section>
+    <p class="dim">MM2 event items (Halloween and Christmas, as tagged by Supreme Values) and how their value and Eldorado price are moving. Event items usually rise before their event and dip once it's live and new ones flood in — use this to time buying and selling.</p></div></section>
   <div id="out"><div class="empty">Loading…</div></div>
 </div>
 <script>
@@ -49,7 +49,7 @@ const pct = (v, priceWay = false) => v == null ? `<span class="dim">—</span>` 
 let sortKey = "value";
 async function load() {
   const d = await (await fetch("/api/seasons")).json().catch(() => ({ events: [] }));
-  if (!d.events?.length) { document.getElementById("out").innerHTML = `<div class="empty">Reading the event lists from mm2values… (takes a minute after a restart)</div>`; setTimeout(load, 20000); return; }
+  if (!d.events?.length) { document.getElementById("out").innerHTML = `<div class="empty">Reading the event lists… (takes a minute after a restart)</div>`; setTimeout(load, 20000); return; }
   document.getElementById("out").innerHTML = d.events.map((e) => {
     const items = [...e.items].sort((a, b) => sortKey === "value" ? (b.value || 0) - (a.value || 0) : (b[sortKey] ?? -1e9) - (a[sortKey] ?? -1e9));
     return `<div class="ev"><h2>${e.event === "Halloween" ? "🎃" : "🎄"} ${e.event}</h2><span class="cd">${e.live ? `LIVE now${e.daysLeft != null ? ` · ends in ${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"}` : ""}` : `in ${e.daysAway} day${e.daysAway === 1 ? "" : "s"}`} · ${new Date(e.date).toLocaleDateString(undefined, { month: "long", day: "numeric" })}${e.end ? ` → ${new Date(e.end).toLocaleDateString(undefined, { month: "long", day: "numeric" })}` : ""}</span><span class="dim" style="font-size:12px">${e.source === "roblox" ? `dates from MM2's Roblox event “${esc(e.title)}”` : "usual date (no Roblox event announced yet)"}</span><span class="dim">${e.count} items</span></div>

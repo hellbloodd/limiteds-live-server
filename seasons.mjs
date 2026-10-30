@@ -40,9 +40,11 @@ const nextDate = ({ month, day }) => {
 export function seasonsReport(items) {
   const events = [];
   for (const [event, cfg] of Object.entries(EVENTS)) {
+    // Supreme Values tags each item with its event; the mm2values.com lists are the fallback
+    const tagged = items.some((i) => i.event);
     const set = tags.names[event];
-    if (!set) continue;
-    const list = items.filter((i) => set.has(i.name.toLowerCase())).map((i) => ({
+    if (!tagged && !set) continue;
+    const list = items.filter((i) => (tagged ? cfg.re.test(i.event || "") : set.has(i.name.toLowerCase()))).map((i) => ({
       key: i.key, name: i.name, image: i.image, category: i.category, value: i.value, valueText: i.valueText || "", usd: i.usd ?? null, listings: i.listings ?? null,
       v7: i.changes?.["7d"]?.pct ?? null, v30: i.changes?.["30d"]?.pct ?? null, v1y: i.changes?.["1y"]?.pct ?? null, p7: i.priceChanges?.["7d"]?.pct ?? null, p30: i.priceChanges?.["30d"]?.pct ?? null,
     })).sort((a, b) => (b.value || 0) - (a.value || 0));

@@ -1,9 +1,9 @@
-// Fetches fresh values for every game (MM2: mm2values.com, Blade Ball: bbvalues.uk,
+// Fetches fresh values for every game (MM2: supremevalues.com, Blade Ball: bbvalues.uk,
 // Adopt Me: adoptmevalues.app), records history and Eldorado prices, and saves it all to Supabase.
 // Runs inside the live server (every 15 minutes, and right away on "Refresh now"); mm2-push.mjs
 // can still run it by hand from a PC.
 import {
-  scrapeMm2Values, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
+  scrapeMm2Values, keepMm2Keys, mergeMm2History, readMm2State, writeChangedRows, rememberRows,
   fetchEldoradoItems, matchEldorado, fetchEldoradoPrice, fetchMm2BySearch, eldoradoExclusive, reloadAllTrackers, recordPriceHistory,
   detectSales, mergeSales, confirmVanished,
   readRow,
@@ -351,12 +351,35 @@ async function pushOnce() {
   return results.every(Boolean);
 }
 
+// Supreme Values sits behind Cloudflare, which can refuse the server's address: then the PC booster
+// fetches the pages and hands the values over.
+async function mm2Values() {
+  try { return await scrapeMm2Values(); }
+  catch (e) {
+    const fromPc = await delegateFull("MM2 values", []).catch(() => null);
+    if (fromPc?.items?.length) { console.log(`[${stamp()}] MM2 values fetched by the PC booster (${e.message.slice(0, 60)}).`); return fromPc; }
+    throw e;
+  }
+}
+
 async function pushMm2() {
   try {
-    const scraped = await scrapeMm2Values();
+    const scraped = await mm2Values();
     const state = await getState("");
     const { latest, history, historyFetched, eldorado } = state;
-    let items = scraped.items;
+    let items = keepMm2Keys(scraped.items, latest?.items);
+    // switching from mm2values.com: its low tiers were trade ratios ("3" = x3 T1 Commons), so each
+    // item's chart is rescaled once to line up with Supreme's value (percent moves are kept)
+    if (latest?.source !== "supremevalues.com") {
+      let rescaled = 0;
+      for (const it of items) {
+        const pts = history[it.key];
+        if (!(it.value > 0) || it.valueText || !pts?.length || !(pts[pts.length - 1][1] > 0)) { if (pts && !(it.value > 0)) delete history[it.key]; continue; }
+        const scale = it.value / pts[pts.length - 1][1];
+        if (Math.abs(scale - 1) > 0.001) { history[it.key] = pts.map(([t, v]) => [t, Number((v * scale).toPrecision(4))]); rescaled++; }
+      }
+      console.log(`[${stamp()}] MM2 values now from supremevalues.com: ${items.length} items, ${items.filter((it) => (latest?.items || []).some((p) => p.key === it.key)).length} kept their history (${rescaled} charts rescaled).`);
+    }
     lastItems[""] = items;
     if (scraped.errors.length) {
       // Keep the last good values for categories that failed this time, instead of dropping them.
@@ -367,10 +390,9 @@ async function pushMm2() {
       console.warn(`[${stamp()}] ${failed.size} categories failed (kept their last values): ${scraped.errors.join("; ")}`);
     }
     const now = Date.now();
-    // mm2values.com has no history pages, so MM2 history is recorded from our own updates
-    // (on top of the older history carried over from Supreme Values - see mm2-migrate-mv.mjs).
+    // MM2 history is recorded from our own updates (on top of the older history kept by key).
     mergeMm2History(history, items, now);
-    state.latest = { items };
+    state.latest = { items, source: "supremevalues.com" };
     await writeChangedRows("", { latest: state.latest, history, heartbeat: { updatedAt: new Date(now).toISOString() } });
     console.log(`[${stamp()}] Pushed ${items.length} MM2 values.`);
     refreshPricesInBackground("MM2", eldorado?.updatedAt, async () => {

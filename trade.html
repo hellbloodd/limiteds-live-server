@@ -79,7 +79,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (n) => (n == null ? "—" : "$" + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
-const num = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+const num = (n) => (n == null ? "—" : Math.abs(n) > 0 && Math.abs(n) < 1 ? String(Number(Number(n).toPrecision(2))) : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const AM_LABEL = { none: "No Potion", f: "Fly", r: "Ride", fr: "Fly Ride", n: "Neon", nf: "Neon Fly", nr: "Neon Ride", nfr: "Neon Fly Ride", m: "Mega", mf: "Mega Fly", mr: "Mega Ride", mfr: "Mega Fly Ride" };
 const state = { give: [], get: [] }; // [{ item, qty, code, mut, traits }]
 

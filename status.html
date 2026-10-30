@@ -60,7 +60,7 @@ const H = 3600e3, MIN = 60e3;
 const worst = (ls) => (ls.includes("r") ? "r" : ls.includes("y") ? "y" : "g");
 const card = (l, title, t, body) => `<div class="card lt"><div class="h"><i class="dot ${l}"></i>${esc(title)}<span class="age">${t === null ? "" : ago(t)}</span></div>${body || ""}</div>`;
 const GAMES = ["MM2", "Blade Ball", "Adopt Me", "Steal a Brainrot"];
-const SOURCE = { "MM2": "mm2values.com", "Blade Ball": "bbvalues.uk", "Adopt Me": "adoptmevalues.app", "Steal a Brainrot": "sabrvalues.com" };
+const SOURCE = { "MM2": "supremevalues.com", "Blade Ball": "bbvalues.uk", "Adopt Me": "adoptmevalues.app", "Steal a Brainrot": "sabrvalues.com" };
 
 async function load() {
   const [s, cur] = await Promise.all([

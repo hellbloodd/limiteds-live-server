@@ -62,7 +62,7 @@
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const $m = (n) => n == null ? "—" : "$" + Number(n).toFixed(n >= 1000 ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const num = (n) => n == null ? "—" : Number(n).toLocaleString();
+const num = (n) => n == null ? "—" : n > 0 && n < 1 ? String(Number(Number(n).toPrecision(2))) : Number(n).toLocaleString();
 const COLORS = ["#8b5cf6", "#22d3ee", "#e879f9", "#34f5a6"];
 const PAGE = { "MM2": "/mm2", "Blade Ball": "/bladeball", "Adopt Me": "/adoptme", "Steal a Brainrot": "/stealabrainrot" };
 const API = { "MM2": "/api/mm2", "Blade Ball": "/api/bladeball", "Adopt Me": "/api/adoptme", "Steal a Brainrot": "/api/stealabrainrot" };
